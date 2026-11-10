@@ -74,6 +74,16 @@ const (
 	// param present). The provider validates parameter format and expiry; the
 	// cryptographic signature itself is deliberately not verified.
 	SignedURLKey = "jaiscloud:signedURL"
+	// MergePatchKey carries a bool in NormalizedRequest.Params (codec → provider)
+	// marking a JSON API PATCH, whose body is applied as a JSON merge patch
+	// (RFC 7386): a member absent from the request is left unchanged, an
+	// explicit null removes it, and an object member is merged key-by-key
+	// rather than replaced. Cloud Storage's buckets.patch uses it for the
+	// labels map, where the official clients delete a label by sending its
+	// value as null; the map is the field the Discovery document's patch
+	// semantics are pinned to (see README-GCP's Cloud Storage section for the
+	// fields that deliberately keep whole-block replacement).
+	MergePatchKey = "jaiscloud:mergePatch"
 	// XMLAPIKey carries a bool in NormalizedRequest.Params (codec → provider and
 	// codec → codec) marking a request that arrived on the XML API raw path
 	// /{bucket}/{object} rather than the JSON API. The storage provider uses it to

@@ -321,6 +321,128 @@ func TestUpdateWorkflowMaskAcceptsProtoAndJSONPaths(t *testing.T) {
 	}
 }
 
+// TestWorkflowExecutionHistoryLevel covers the published
+// workflows.v1.Workflow.executionHistoryLevel field: a supplied enum value is
+// stored and echoed by Get/List and the revision renderer, an omitted (or
+// explicitly UNSPECIFIED) value is omitted on read exactly as real GCP omits
+// the proto3 zero enum, a masked update applies it without touching other
+// fields, an unmasked update replaces it, and a value outside the documented
+// enum is INVALID_ARGUMENT (the proto3 JSON parser rejects it and gRPC cannot
+// carry it).
+func TestWorkflowExecutionHistoryLevel(t *testing.T) {
+	ctx := context.Background()
+	s := NewService(workflowsstore.NewMemoryStore())
+
+	if _, _, err := s.CreateWorkflow(ctx, "proj", "us-central1", CreateInput{
+		ID: "wf1", SourceContents: simpleSource,
+		ExecutionHistoryLevel: "EXECUTION_HISTORY_DETAILED",
+	}); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if _, _, err := s.CreateWorkflow(ctx, "proj", "us-central1", CreateInput{
+		ID: "wf2", SourceContents: simpleSource,
+	}); err != nil {
+		t.Fatalf("create omitted: %v", err)
+	}
+
+	got, err := s.GetWorkflow(ctx, "proj", "us-central1", "wf1")
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if got.ExecutionHistoryLevel != "EXECUTION_HISTORY_DETAILED" {
+		t.Fatalf("stored executionHistoryLevel = %q", got.ExecutionHistoryLevel)
+	}
+	if v := WorkflowJSON(got, "proj")["executionHistoryLevel"]; v != "EXECUTION_HISTORY_DETAILED" {
+		t.Fatalf("rendered executionHistoryLevel = %v", v)
+	}
+	// The field is workflow-wide: the revision renderer reports the live value.
+	if v := RevisionJSON(liveRevisionView(got), "proj")["executionHistoryLevel"]; v != "EXECUTION_HISTORY_DETAILED" {
+		t.Fatalf("revision executionHistoryLevel = %v", v)
+	}
+
+	// Omitted on create → omitted on read (no fabricated default).
+	unset, err := s.GetWorkflow(ctx, "proj", "us-central1", "wf2")
+	if err != nil {
+		t.Fatalf("get omitted: %v", err)
+	}
+	if _, ok := WorkflowJSON(unset, "proj")["executionHistoryLevel"]; ok {
+		t.Fatalf("executionHistoryLevel should be omitted when unset: %v", WorkflowJSON(unset, "proj"))
+	}
+
+	page, _, err := s.ListWorkflows(ctx, "proj", "us-central1", "", "", 0, "")
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	seen := map[string]any{}
+	for _, w := range page {
+		seen[w.ID] = WorkflowJSON(w, "proj")["executionHistoryLevel"]
+	}
+	if seen["wf1"] != "EXECUTION_HISTORY_DETAILED" {
+		t.Fatalf("list lost executionHistoryLevel: %v", seen["wf1"])
+	}
+	if seen["wf2"] != nil {
+		t.Fatalf("list should omit the unset executionHistoryLevel: %v", seen["wf2"])
+	}
+
+	// A masked update applies the field and leaves the other fields alone.
+	w, _, err := s.UpdateWorkflow(ctx, "proj", "us-central1", UpdateInput{
+		ID: "wf1", UpdateMask: "execution_history_level", ExecutionHistoryLevel: "EXECUTION_HISTORY_BASIC",
+	})
+	if err != nil {
+		t.Fatalf("masked update: %v", err)
+	}
+	if w.ExecutionHistoryLevel != "EXECUTION_HISTORY_BASIC" {
+		t.Fatalf("masked update executionHistoryLevel = %q", w.ExecutionHistoryLevel)
+	}
+	if w.SourceContents != simpleSource {
+		t.Fatalf("masked update cleared sourceContents: %q", w.SourceContents)
+	}
+	// A mask that does not name the field preserves it.
+	w, _, err = s.UpdateWorkflow(ctx, "proj", "us-central1", UpdateInput{
+		ID: "wf1", UpdateMask: "description", Description: "d",
+	})
+	if err != nil {
+		t.Fatalf("description update: %v", err)
+	}
+	if w.ExecutionHistoryLevel != "EXECUTION_HISTORY_BASIC" {
+		t.Fatalf("description-only update reverted executionHistoryLevel: %q", w.ExecutionHistoryLevel)
+	}
+
+	// An unmasked update is a full replacement: omitting the field clears it,
+	// and explicitly supplying the proto default name renders as unset.
+	w, _, err = s.UpdateWorkflow(ctx, "proj", "us-central1", UpdateInput{
+		ID: "wf1", SourceContents: simpleSource, Description: "d",
+	})
+	if err != nil {
+		t.Fatalf("full update: %v", err)
+	}
+	if w.ExecutionHistoryLevel != "" {
+		t.Fatalf("full replacement kept executionHistoryLevel = %q", w.ExecutionHistoryLevel)
+	}
+	w, _, err = s.UpdateWorkflow(ctx, "proj", "us-central1", UpdateInput{
+		ID: "wf1", SourceContents: simpleSource,
+		ExecutionHistoryLevel: "EXECUTION_HISTORY_LEVEL_UNSPECIFIED",
+	})
+	if err != nil {
+		t.Fatalf("unspecified update: %v", err)
+	}
+	if w.ExecutionHistoryLevel != "" {
+		t.Fatalf("EXECUTION_HISTORY_LEVEL_UNSPECIFIED should normalize to unset, got %q", w.ExecutionHistoryLevel)
+	}
+
+	// A value outside the documented enum fails loud on create and update.
+	if _, _, err := s.CreateWorkflow(ctx, "proj", "us-central1", CreateInput{
+		ID: "wf3", SourceContents: simpleSource, ExecutionHistoryLevel: "EXECUTION_HISTORY_VERBOSE",
+	}); err == nil {
+		t.Fatalf("expected InvalidArgument for an unknown executionHistoryLevel on create")
+	}
+	if _, _, err := s.UpdateWorkflow(ctx, "proj", "us-central1", UpdateInput{
+		ID: "wf1", UpdateMask: "executionHistoryLevel", ExecutionHistoryLevel: "BASIC",
+	}); err == nil {
+		t.Fatalf("expected InvalidArgument for an unknown executionHistoryLevel on update")
+	}
+}
+
 func TestListWorkflowsByProjectAggregatesLocations(t *testing.T) {
 	ctx := context.Background()
 	s := NewService(workflowsstore.NewMemoryStore())

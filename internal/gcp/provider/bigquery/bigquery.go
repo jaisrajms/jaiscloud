@@ -81,6 +81,7 @@ import (
 	"jaiscloud/internal/gcp/paging"
 	"jaiscloud/internal/gcp/provider/bigquery/discoverydoc"
 	"jaiscloud/internal/gcp/queryengine"
+	"jaiscloud/internal/gcp/resource"
 	bqstore "jaiscloud/internal/gcp/store/bigquery"
 	"jaiscloud/internal/gcp/wire"
 	"jaiscloud/internal/model"
@@ -89,6 +90,11 @@ import (
 )
 
 const kindPrefix = "bigquery#"
+
+// bqBasePath is the public BigQuery v2 REST root. Like Cloud SQL and Compute,
+// the selfLink is an absolute URL rooted at the service's public origin (the
+// origin real GCP returns), not the origin the caller happened to address.
+const bqBasePath = "https://bigquery.googleapis.com/bigquery/v2/"
 
 // Provider handles BigQuery datasets, tables, jobs, and tabledata.
 type Provider struct {
@@ -314,6 +320,9 @@ func (p *Provider) datasetMap(projectID string, d bqstore.Dataset) map[string]an
 	out["kind"] = kindPrefix + "dataset"
 	out["datasetReference"] = map[string]any{"projectId": projectID, "datasetId": d.DatasetID}
 	out["id"] = projectID + ":" + d.DatasetID
+	// selfLink is output-only (Discovery: Dataset.selfLink is readOnly), so it
+	// is always rendered and a caller-supplied value stored in Config loses.
+	out["selfLink"] = datasetSelfLink(projectID, d.DatasetID)
 	out["creationTime"] = millis(d.CreateTime)
 	out["lastModifiedTime"] = millis(d.UpdateTime)
 	out["etag"] = millis(d.UpdateTime)
@@ -329,6 +338,15 @@ func (p *Provider) datasetMap(projectID string, d bqstore.Dataset) map[string]an
 	}
 	out["labels"] = labels
 	return out
+}
+
+// datasetSelfLink is the URL real BigQuery returns in Dataset.selfLink ("A URL
+// that can be used to access the resource again"): the public v2 dataset path
+// for the project. The recorded real-GCP golden
+// (tests/gcpdifferential/testdata/golden/046-bigquery-dataset_get.json) carries
+// this field on create and get; the datasets.list summary does not.
+func datasetSelfLink(projectID, datasetID string) string {
+	return bqBasePath + resource.ResourceID(projectID)("bigquery-dataset", datasetID)
 }
 
 // datasetSummaryMap renders the DatasetList summary subset the Discovery

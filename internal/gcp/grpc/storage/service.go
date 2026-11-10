@@ -1246,6 +1246,13 @@ func protoIamConfigPatch(ic *storagepb.Bucket_IamConfig) map[string]any {
 // "labels" (or "*") replaces the whole label map; per-key paths of the form
 // "labels.<key>" — the shape the official GCS clients send — merge an
 // individual label, or delete it when the request omits the key.
+//
+// This is the documented AIP-134 field-mask contract, and it is deliberately
+// *not* the REST buckets.patch JSON-merge-patch rule: over gRPC a mask naming
+// "labels" means "the request's map is the new map", so tags removed from the
+// request are dropped even though they are not sent as nulls. The REST path
+// (BucketsUpdate with wire.MergePatchKey) merges instead; a client that wants
+// per-key merge semantics over gRPC names labels.<key> explicitly.
 func applyBucketLabelsMask(meta map[string]any, pb *storagepb.Bucket, mask *fieldmaskpb.FieldMask) {
 	whole := false
 	var keys []string

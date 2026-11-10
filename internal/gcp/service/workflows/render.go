@@ -56,6 +56,13 @@ func WorkflowJSON(w workflowsstore.Workflow, project string) map[string]any {
 	if w.CallLogLevel != "" {
 		out["callLogLevel"] = w.CallLogLevel
 	}
+	// executionHistoryLevel is Optional and defaults to
+	// EXECUTION_HISTORY_LEVEL_UNSPECIFIED; real GCP omits it on read while it
+	// is unset (proto3 drops the zero enum), so only a supplied value is
+	// rendered.
+	if w.ExecutionHistoryLevel != "" {
+		out["executionHistoryLevel"] = w.ExecutionHistoryLevel
+	}
 	return out
 }
 
@@ -70,9 +77,9 @@ func liveRevisionCreateTime(w workflowsstore.Workflow) time.Time {
 
 // RevisionJSON renders a workflow revision as the workflows.v1.Workflow wire
 // map: the workflow-wide fields (name, description, labels, create/update time,
-// tags) come from the live workflow, while state, revisionId,
-// revisionCreateTime, sourceContents, serviceAccount, userEnvVars and
-// callLogLevel come from the revision. For the live revision the output is
+// tags, executionHistoryLevel) come from the live workflow, while state,
+// revisionId, revisionCreateTime, sourceContents, serviceAccount, userEnvVars
+// and callLogLevel come from the revision. For the live revision the output is
 // byte-for-byte WorkflowJSON.
 func RevisionJSON(r Revision, project string) map[string]any {
 	out := WorkflowJSON(r.Workflow, project)

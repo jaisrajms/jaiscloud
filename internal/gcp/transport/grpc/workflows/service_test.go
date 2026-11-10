@@ -300,3 +300,88 @@ func TestListWorkflowRevisionsMissingWorkflow(t *testing.T) {
 		t.Fatalf("ListWorkflowRevisions code = %v, want NotFound", status.Code(err))
 	}
 }
+
+// TestExecutionHistoryLevelProto covers workflows.v1.Workflow's
+// executionHistoryLevel over the proto surface: the caller-supplied enum is
+// round-tripped by the create LRO, get and list; an omitted value reads back as
+// the enum's zero value (EXECUTION_HISTORY_LEVEL_UNSPECIFIED), matching the
+// REST transport, which omits the field; and a masked update applies it.
+func TestExecutionHistoryLevelProto(t *testing.T) {
+	ctx := context.Background()
+	s := newService()
+	parent := "projects/proj/locations/us-central1"
+
+	op, err := s.CreateWorkflow(ctx, &workflowspb.CreateWorkflowRequest{
+		Parent:     parent,
+		WorkflowId: "wf1",
+		Workflow: &workflowspb.Workflow{
+			SourceCode:            &workflowspb.Workflow_SourceContents{SourceContents: source},
+			ExecutionHistoryLevel: workflowspb.ExecutionHistoryLevel_EXECUTION_HISTORY_DETAILED,
+		},
+	})
+	if err != nil {
+		t.Fatalf("CreateWorkflow: %v", err)
+	}
+	created := &workflowspb.Workflow{}
+	if err := op.GetResponse().UnmarshalTo(created); err != nil {
+		t.Fatalf("unmarshal created Workflow: %v", err)
+	}
+	if created.GetExecutionHistoryLevel() != workflowspb.ExecutionHistoryLevel_EXECUTION_HISTORY_DETAILED {
+		t.Fatalf("created executionHistoryLevel = %v", created.GetExecutionHistoryLevel())
+	}
+
+	got, err := s.GetWorkflow(ctx, &workflowspb.GetWorkflowRequest{Name: workflowName})
+	if err != nil {
+		t.Fatalf("GetWorkflow: %v", err)
+	}
+	if got.GetExecutionHistoryLevel() != workflowspb.ExecutionHistoryLevel_EXECUTION_HISTORY_DETAILED {
+		t.Fatalf("get executionHistoryLevel = %v", got.GetExecutionHistoryLevel())
+	}
+
+	list, err := s.ListWorkflows(ctx, &workflowspb.ListWorkflowsRequest{Parent: parent})
+	if err != nil {
+		t.Fatalf("ListWorkflows: %v", err)
+	}
+	if len(list.GetWorkflows()) != 1 ||
+		list.GetWorkflows()[0].GetExecutionHistoryLevel() != workflowspb.ExecutionHistoryLevel_EXECUTION_HISTORY_DETAILED {
+		t.Fatalf("list executionHistoryLevel = %v", list.GetWorkflows())
+	}
+
+	// An omitted value stays the proto default.
+	if _, err := s.CreateWorkflow(ctx, &workflowspb.CreateWorkflowRequest{
+		Parent:     parent,
+		WorkflowId: "wf2",
+		Workflow:   &workflowspb.Workflow{SourceCode: &workflowspb.Workflow_SourceContents{SourceContents: source}},
+	}); err != nil {
+		t.Fatalf("CreateWorkflow wf2: %v", err)
+	}
+	unset, err := s.GetWorkflow(ctx, &workflowspb.GetWorkflowRequest{Name: parent + "/workflows/wf2"})
+	if err != nil {
+		t.Fatalf("GetWorkflow wf2: %v", err)
+	}
+	if unset.GetExecutionHistoryLevel() != workflowspb.ExecutionHistoryLevel_EXECUTION_HISTORY_LEVEL_UNSPECIFIED {
+		t.Fatalf("unset executionHistoryLevel = %v", unset.GetExecutionHistoryLevel())
+	}
+
+	// A masked update applies the new level and preserves the source.
+	uop, err := s.UpdateWorkflow(ctx, &workflowspb.UpdateWorkflowRequest{
+		Workflow: &workflowspb.Workflow{
+			Name:                  workflowName,
+			ExecutionHistoryLevel: workflowspb.ExecutionHistoryLevel_EXECUTION_HISTORY_BASIC,
+		},
+		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"execution_history_level"}},
+	})
+	if err != nil {
+		t.Fatalf("UpdateWorkflow: %v", err)
+	}
+	updated := &workflowspb.Workflow{}
+	if err := uop.GetResponse().UnmarshalTo(updated); err != nil {
+		t.Fatalf("unmarshal updated Workflow: %v", err)
+	}
+	if updated.GetExecutionHistoryLevel() != workflowspb.ExecutionHistoryLevel_EXECUTION_HISTORY_BASIC {
+		t.Fatalf("updated executionHistoryLevel = %v", updated.GetExecutionHistoryLevel())
+	}
+	if updated.GetSourceContents() != source {
+		t.Fatalf("masked update cleared sourceContents: %q", updated.GetSourceContents())
+	}
+}

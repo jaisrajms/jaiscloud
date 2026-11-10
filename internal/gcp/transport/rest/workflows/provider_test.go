@@ -401,3 +401,95 @@ func TestListNonIntegerPageSize(t *testing.T) {
 		}
 	}
 }
+
+// TestProviderExecutionHistoryLevel covers the REST wire shape of
+// workflows.v1.Workflow.executionHistoryLevel: a supplied value (the
+// camelCase member the Terraform provider sends) is echoed by create's LRO
+// response, get and list; an omitted value is absent from get/list (real GCP
+// omits the proto3 zero enum); a masked update applies it; a value outside the
+// documented enum is InvalidArgument/400.
+func TestProviderExecutionHistoryLevel(t *testing.T) {
+	ctx := context.Background()
+	p := newProvider(t)
+
+	create := func(id, level string) *model.ProviderResponse {
+		body := map[string]any{"sourceContents": source}
+		if level != "" {
+			body["executionHistoryLevel"] = level
+		}
+		resp, err := p.CreateWorkflow(ctx, nr(map[string]any{
+			"project": "proj", "location": "us-central1", "workflowId": id, "body": body,
+		}))
+		if err != nil {
+			t.Fatalf("create %s: %v", id, err)
+		}
+		return resp
+	}
+	get := func(id string) map[string]any {
+		resp, err := p.GetWorkflow(ctx, nr(map[string]any{
+			"project": "proj", "location": "us-central1", "name": "locations/us-central1/workflows/" + id,
+		}))
+		if err != nil {
+			t.Fatalf("get %s: %v", id, err)
+		}
+		return resp.Data
+	}
+
+	cresp := create("wf1", "EXECUTION_HISTORY_DETAILED")
+	response, _ := cresp.Data["response"].(map[string]any)
+	if response["executionHistoryLevel"] != "EXECUTION_HISTORY_DETAILED" {
+		t.Fatalf("create response executionHistoryLevel = %v", response["executionHistoryLevel"])
+	}
+	if got := get("wf1")["executionHistoryLevel"]; got != "EXECUTION_HISTORY_DETAILED" {
+		t.Fatalf("get executionHistoryLevel = %v", got)
+	}
+
+	create("wf2", "")
+	if _, ok := get("wf2")["executionHistoryLevel"]; ok {
+		t.Fatalf("get should omit an unset executionHistoryLevel: %v", get("wf2"))
+	}
+
+	lresp, err := p.ListWorkflows(ctx, nr(map[string]any{"project": "proj", "location": "us-central1"}))
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	items, _ := lresp.Data["workflows"].([]any)
+	if len(items) != 2 {
+		t.Fatalf("list len = %d, want 2", len(items))
+	}
+	byID := map[string]map[string]any{}
+	for _, it := range items {
+		m, _ := it.(map[string]any)
+		id := core.WorkflowIDFromName(m["name"].(string))
+		byID[id] = m
+	}
+	if byID["wf1"]["executionHistoryLevel"] != "EXECUTION_HISTORY_DETAILED" {
+		t.Fatalf("list lost executionHistoryLevel: %v", byID["wf1"]["executionHistoryLevel"])
+	}
+	if _, ok := byID["wf2"]["executionHistoryLevel"]; ok {
+		t.Fatalf("list should omit the unset executionHistoryLevel: %v", byID["wf2"])
+	}
+
+	uresp, err := p.UpdateWorkflow(ctx, nr(map[string]any{
+		"project": "proj", "location": "us-central1", "name": "locations/us-central1/workflows/wf1",
+		"updateMask": "executionHistoryLevel",
+		"body":       map[string]any{"executionHistoryLevel": "EXECUTION_HISTORY_BASIC"},
+	}))
+	if err != nil {
+		t.Fatalf("masked update: %v", err)
+	}
+	updResp, _ := uresp.Data["response"].(map[string]any)
+	if updResp["executionHistoryLevel"] != "EXECUTION_HISTORY_BASIC" || updResp["sourceContents"] != source {
+		t.Fatalf("masked update response = %v", updResp)
+	}
+
+	// An unknown enum name is rejected the way proto3 JSON rejects it.
+	_, err = p.CreateWorkflow(ctx, nr(map[string]any{
+		"project": "proj", "location": "us-central1", "workflowId": "wf3",
+		"body": map[string]any{"sourceContents": source, "executionHistoryLevel": "EXECUTION_HISTORY_VERBOSE"},
+	}))
+	perr, ok := err.(*model.ProviderError)
+	if !ok || perr.Code != "InvalidArgument" || perr.HTTPStatus != 400 {
+		t.Fatalf("invalid executionHistoryLevel err = %v, want InvalidArgument/400", err)
+	}
+}

@@ -625,8 +625,15 @@ func objectSelfLink(base, bucket, name string) string {
 	return base + "/storage/v1/b/" + bucket + "/o/" + url.PathEscape(name)
 }
 
-func objectMediaLink(base, bucket, name string) string {
-	return base + "/download/storage/v1/b/" + bucket + "/o/" + url.PathEscape(name) + "?alt=media"
+// objectMediaLink is the Object.mediaLink real GCS returns for one object
+// generation: the download URL for that exact generation, with the generation
+// query parameter ahead of alt=media
+// (`.../o/<name>?generation=<n>&alt=media`, the recorded real-GCP order in
+// tests/integration/gcp/terraform/differential/golden/foundation.json). Each
+// Object resource describes a single generation, so a get/list of a non-live
+// generation links to that generation too.
+func objectMediaLink(base, bucket, name, generation string) string {
+	return base + "/download/storage/v1/b/" + bucket + "/o/" + url.PathEscape(name) + "?generation=" + generation + "&alt=media"
 }
 
 func bucketSelfLink(base, name string) string {
@@ -700,7 +707,7 @@ func fromStoreObject(nr *model.NormalizedRequest, m gcs.ObjectMeta) objectMeta {
 	o.ID = m.Bucket + "/" + m.Name + "/" + m.Generation
 	base := baseURL(nr)
 	o.SelfLink = objectSelfLink(base, m.Bucket, m.Name)
-	o.MediaLink = objectMediaLink(base, m.Bucket, m.Name)
+	o.MediaLink = objectMediaLink(base, m.Bucket, m.Name, m.Generation)
 	return o
 }
 
@@ -1494,6 +1501,14 @@ func (p *Provider) BucketsUpdate(ctx context.Context, nr *model.NormalizedReques
 	}
 	name, _ := nr.Params["bucket"].(string)
 	body, _ := nr.Params["body"].(map[string]any)
+	// buckets.patch (PATCH) is a JSON merge patch, buckets.update (PUT) a
+	// replacement; the codec marks the former with wire.MergePatchKey. The two
+	// differ for the labels map: PATCH sets the keys it carries and deletes the
+	// ones sent as null while leaving absent keys alone, PUT replaces the whole
+	// map. Every other field below is only written when the request carries it
+	// and a present block replaces the stored one (see the block comment on
+	// website/logging).
+	mergePatch, _ := nr.Params[wire.MergePatchKey].(bool)
 	pre, err := bucketPrecondition(nr)
 	if err != nil {
 		return nil, err
@@ -1569,13 +1584,18 @@ func (p *Provider) BucketsUpdate(ctx context.Context, nr *model.NormalizedReques
 			b.SoftDeletePolicy = normalizeSoftDeletePolicyInput(bodyMap(body, "softDeletePolicy"), clock.Now().Format(time.RFC3339Nano))
 		}
 		if _, ok := body["labels"]; ok {
-			b.Labels = bodyStringMap(body, "labels")
+			if mergePatch {
+				b.Labels = mergeBucketLabels(b.Labels, body["labels"])
+			} else {
+				b.Labels = bodyStringMap(body, "labels")
+			}
 		}
-		// The provider PATCHes these as whole blocks: a present block replaces
-		// the stored one, and an explicit JSON null (its NullFields clearing
-		// path for website/logging) clears it. hierarchicalNamespace and
-		// customPlacementConfig are immutable after create, so an update never
-		// touches them.
+		// These blocks are written as a whole: a present block replaces the
+		// stored one (clients always send the complete block, and Discovery
+		// documents no per-member patch rule for them), and an explicit JSON
+		// null (the provider's NullFields clearing path for website/logging)
+		// clears it. hierarchicalNamespace and customPlacementConfig are
+		// immutable after create, so an update never touches them.
 		if _, ok := body["autoclass"]; ok {
 			b.Autoclass = bodyMap(body, "autoclass")
 		}
@@ -2540,7 +2560,7 @@ func (p *Provider) ObjectsInsert(ctx context.Context, nr *model.NormalizedReques
 	o.Etag = ObjectEtag(o.Generation, o.Metageneration)
 	base := baseURL(nr)
 	o.SelfLink = objectSelfLink(base, bucket, object)
-	o.MediaLink = objectMediaLink(base, bucket, object)
+	o.MediaLink = objectMediaLink(base, bucket, object, o.Generation)
 
 	// Capture the prior live generation's blob key so a non-versioned overwrite
 	// can clean it up after the new generation is durably stored.
@@ -3246,7 +3266,7 @@ func (p *Provider) copyObject(ctx context.Context, nr *model.NormalizedRequest) 
 	o.Etag = ObjectEtag(o.Generation, o.Metageneration)
 	base := baseURL(nr)
 	o.SelfLink = objectSelfLink(base, dstBucket, dstObject)
-	o.MediaLink = objectMediaLink(base, dstBucket, dstObject)
+	o.MediaLink = objectMediaLink(base, dstBucket, dstObject, o.Generation)
 
 	final, err := p.writeObjectRaw(ctx, nr, dstBucket, dstObject, o, raw, p.bucketVersioned(ctx, dstBucket), "", true)
 	if err != nil {
@@ -3392,7 +3412,7 @@ func (p *Provider) ObjectsMove(ctx context.Context, nr *model.NormalizedRequest)
 	o.Etag = ObjectEtag(o.Generation, o.Metageneration)
 	base := baseURL(nr)
 	o.SelfLink = objectSelfLink(base, dstBucket, dstObject)
-	o.MediaLink = objectMediaLink(base, dstBucket, dstObject)
+	o.MediaLink = objectMediaLink(base, dstBucket, dstObject, o.Generation)
 
 	final, err := p.writeObjectRaw(ctx, nr, dstBucket, dstObject, o, raw, p.bucketVersioned(ctx, dstBucket), "", true)
 	if err != nil {
@@ -3529,7 +3549,7 @@ func (p *Provider) ObjectsCompose(ctx context.Context, nr *model.NormalizedReque
 	o.Etag = ObjectEtag(o.Generation, o.Metageneration)
 	base := baseURL(nr)
 	o.SelfLink = objectSelfLink(base, bucket, object)
-	o.MediaLink = objectMediaLink(base, bucket, object)
+	o.MediaLink = objectMediaLink(base, bucket, object, o.Generation)
 
 	final, err := p.writeObjectRaw(ctx, nr, bucket, object, o, buf.Bytes(), p.bucketVersioned(ctx, bucket), "", false)
 	if err != nil {
@@ -4647,6 +4667,37 @@ func bodyStringMap(body map[string]any, key string) map[string]string {
 		if s, ok := v.(string); ok {
 			out[k] = s
 		}
+	}
+	return out
+}
+
+// mergeBucketLabels applies RFC 7386 JSON merge-patch semantics to a bucket's
+// labels map: a key present in the patch with a string value is set, a key
+// present with an explicit JSON null is removed, and a key absent from the
+// patch is preserved. A null `labels` member (which hashicorp/google sends via
+// Bucket.NullFields["Labels"] when the last label is removed) empties the map.
+// A non-string, non-null value is ignored rather than stored. An empty result
+// returns nil so the read omits the labels field, as real GCS does.
+func mergeBucketLabels(current map[string]string, patch any) map[string]string {
+	pm, ok := patch.(map[string]any)
+	if !ok {
+		// Explicit JSON null: the whole labels member is removed.
+		return nil
+	}
+	out := make(map[string]string, len(current)+len(pm))
+	for k, v := range current {
+		out[k] = v
+	}
+	for k, v := range pm {
+		switch val := v.(type) {
+		case nil:
+			delete(out, k)
+		case string:
+			out[k] = val
+		}
+	}
+	if len(out) == 0 {
+		return nil
 	}
 	return out
 }
