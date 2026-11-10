@@ -434,7 +434,14 @@ the non-Discovery `recordsPerRrset` field. The gate still fails on any high-seve
   response deletes the task, a failure retries until the attempt's effective
   `retryConfig.maxAttempts`/`maxRetryDuration` is exhausted — a task-level `retryConfig` overrides
   the queue's wholesale (never a field merge), and a zero `maxAttempts` means "unspecified" (the
-  documented default of 100), not "inherit the queue". A task is deleted once it has been retained
+  documented default of 100), not "inherit the queue". Queue `rateLimits` behaves the same way
+  per field: `RateLimits` is proto3 without field presence, so an omitted `maxDispatchesPerSecond`,
+  `maxBurstSize` or `maxConcurrentDispatches` resolves to the documented default (500/s, 100, 1000 —
+  `maxBurstSize` is output-only on the wire and the Discovery document states no numeric default, so
+  the emulator uses the value real Cloud Tasks answers) instead of being stored as 0; a supplied
+  value is echoed, and a `rateLimits` update-mask entry replaces the whole message (its unset
+  subfields take the defaults) while any other mask leaves the stored message alone. A task is
+  deleted once it has been retained
   for 31 days past its `scheduleTime` (the maximum task retention), on the dispatch tick and before
   the due check; reads never delete. `RunTask` / REST `:run` forces a synchronous attempt that
   bypasses pause and rate limits. `appEngineHttpRequest` is never delivered (no App Engine router) —

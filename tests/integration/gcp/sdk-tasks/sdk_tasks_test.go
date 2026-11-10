@@ -486,6 +486,78 @@ func TestSDKTasksRunDeliversHTTPAndRetries(t *testing.T) {
 	require.Equal(t, 404, apiErr(t, err).Code, "a successfully dispatched task is deleted")
 }
 
+// TestSDKTasksQueueRateLimitDefaults pins the documented RateLimits defaults on
+// the raw REST surface (TF3-4-3). RateLimits is proto3 without field presence,
+// so an omitted field cannot be sent as "0": real Cloud Tasks resolves it to its
+// documented default, and a queue created with only maxDispatchesPerSecond must
+// read back maxBurstSize 100 (output-only, set from the rate) and
+// maxConcurrentDispatches 1000, not 0. Caller-supplied values are echoed, a
+// rateLimits-mask patch replaces the whole message (defaulting its unset
+// subfields), and any other mask leaves the stored message alone.
+func TestSDKTasksQueueRateLimitDefaults(t *testing.T) {
+	resetState(t)
+	svc := newService(t)
+	project := projectID()
+	parent := "projects/" + project + "/locations/" + locationID()
+
+	assertLimits := func(t *testing.T, q *cloudtasks.Queue, rate float64, burst, conc int64) {
+		t.Helper()
+		require.NotNil(t, q.RateLimits)
+		require.Equal(t, rate, q.RateLimits.MaxDispatchesPerSecond)
+		require.EqualValues(t, burst, q.RateLimits.MaxBurstSize)
+		require.EqualValues(t, conc, q.RateLimits.MaxConcurrentDispatches)
+	}
+
+	// Partial create: only the rate is supplied, so the omitted fields take the
+	// defaults on the create response and on a subsequent GET.
+	qid := unique("queue-limits")
+	name := parent + "/queues/" + qid
+	created := mustCreateQueue(t, svc, parent, &cloudtasks.Queue{
+		Name:       name,
+		RateLimits: &cloudtasks.RateLimits{MaxDispatchesPerSecond: 12},
+	})
+	assertLimits(t, created, 12, 100, 1000)
+	got, err := svc.Projects.Locations.Queues.Get(name).Do()
+	require.NoError(t, err)
+	assertLimits(t, got, 12, 100, 1000)
+
+	// Every supplied value is echoed unchanged.
+	bare := unique("queue-limits-full")
+	bareName := parent + "/queues/" + bare
+	created = mustCreateQueue(t, svc, parent, &cloudtasks.Queue{
+		Name:       bareName,
+		RateLimits: &cloudtasks.RateLimits{MaxDispatchesPerSecond: 20, MaxBurstSize: 7, MaxConcurrentDispatches: 9},
+	})
+	assertLimits(t, created, 20, 7, 9)
+
+	// A queue with no rateLimits block at all gets the whole default message.
+	none := unique("queue-limits-none")
+	noneName := parent + "/queues/" + none
+	created = mustCreateQueue(t, svc, parent, &cloudtasks.Queue{Name: noneName})
+	assertLimits(t, created, 500, 100, 1000)
+
+	// A patch that names rateLimits replaces the message: the unset subfields
+	// take the defaults, they are not carried over from the stored queue.
+	patched, err := svc.Projects.Locations.Queues.Patch(name, &cloudtasks.Queue{
+		RateLimits: &cloudtasks.RateLimits{MaxDispatchesPerSecond: 30},
+	}).UpdateMask("rateLimits").Do()
+	require.NoError(t, err)
+	assertLimits(t, patched, 30, 100, 1000)
+
+	// A patch that does not name rateLimits leaves the stored message untouched.
+	patched, err = svc.Projects.Locations.Queues.Patch(name, &cloudtasks.Queue{
+		RetryConfig: &cloudtasks.RetryConfig{MaxAttempts: 7, MinBackoff: "2s", MaxBackoff: "20s", MaxDoublings: 3},
+	}).UpdateMask("retryConfig").Do()
+	require.NoError(t, err)
+	require.EqualValues(t, 7, patched.RetryConfig.MaxAttempts)
+	assertLimits(t, patched, 30, 100, 1000)
+
+	for _, n := range []string{name, bareName, noneName} {
+		_, err := svc.Projects.Locations.Queues.Delete(n).Do()
+		require.NoError(t, err)
+	}
+}
+
 // TestSDKTasksRateLimits pins the two documented per-queue dispatch throttles:
 // the concurrent-dispatch cap (deterministic with a blocking target) and the
 // token-bucket rate (a lower bound on elapsed time for N dispatches).

@@ -205,10 +205,12 @@ Three boundaries are recorded, not worked around:
   documented RetryConfig defaults, so that input re-plans
   `+ retry_config { retry_count = 0 }` forever; the case creates a non-default
   retry config and default synthesis is TF3-4-2
-  (`fix/gcp-scheduler-retry-config-defaults`). The task queue's omitted
-  `maxBurstSize` reads back 0 where real Cloud Tasks defaults 100 (TF3-4-3,
-  `fix/gcp-tasks-queue-rate-limit-defaults`); it is computed-only in the
-  provider, so it cannot permadiff, but a raw reader sees the wrong value.
+  (`fix/gcp-scheduler-retry-config-defaults`). The task queue's `maxBurstSize`
+  is computed-only in the provider (so it cannot permadiff) and the create body
+  omits it; the emulator now applies the documented Cloud Tasks default and
+  reads back 100 (with `maxConcurrentDispatches` defaulting to 1000 when
+  omitted), which the case asserts (TF3-4-3,
+  `fix/gcp-tasks-queue-rate-limit-defaults`).
 
 The paused create also keeps the case off TF2-12 (the provider always issues
 `:resume` after an enabled create, and the emulator's resume is not idempotent

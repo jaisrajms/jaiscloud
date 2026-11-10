@@ -673,7 +673,7 @@ One boundary is recorded, not worked around:
 3. change a rate limit, a retry limit and the IAM member; `apply`; assert the new values, that the replaced member is gone, and `plan` → **no changes**
 4. `destroy`; the queue is `404`
 
-`rate_limits.max_burst_size` is computed-only in the provider's 6.x schema (7.x made it Optional+Computed), so the module input stays null; the emulator reports `maxBurstSize` 0 when the create body omits it while real Cloud Tasks defaults it to 100 — a recorded reader gap (TF3-4-3, `fix/gcp-tasks-queue-rate-limit-defaults`). `app_engine_routing_override` and the queue-level `http_target` are left null: they are defaults for App Engine/HTTP tasks, and the case creates no task.
+`rate_limits.max_burst_size` is computed-only in the provider's 6.x schema (7.x made it Optional+Computed), so the module input stays null; the create body therefore omits it and the emulator applies the documented Cloud Tasks default, reading back `maxBurstSize` 100 (and `maxConcurrentDispatches` 1000 when that is omitted too) instead of 0. The case asserts the defaulted burst on read-back (TF3-4-3). `app_engine_routing_override` and the queue-level `http_target` are left null: they are defaults for App Engine/HTTP tasks, and the case creates no task.
 
 **dataproc** — the CFT `terraform-google-dataproc` root module is applied with a GCE-shaped `cluster_config` (one master, two workers, `n1-standard-4`, image `2.2-debian12`, labels), and the generated root module submits a pyspark job into the module's cluster. The gate:
 
