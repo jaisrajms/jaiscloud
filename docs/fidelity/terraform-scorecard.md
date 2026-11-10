@@ -262,12 +262,12 @@ Boundaries, recorded rather than worked around:
   GKE-shaped cluster and its NodePool reconciliation.
 - `service-accounts` passes the module's documented `"project=>role"` format;
   a bare `"roles/viewer"` makes the module parse the role as both the project
-  and the role. `display_name` is set explicitly because the provider's
-  attribute is Optional (not Computed) while the emulator defaults an omitted
-  `serviceAccount.displayName` to the account id — TF2-14
-  (`fix/gcp-iam-serviceaccount-display-name`); the module's own default is a
-  non-empty display name, so a real consumer does not hit it. Billing/org IAM
-  and key generation are disabled (outside the project-scoped surface).
+  and the role. `display_name` is set explicitly by the case; the emulator no
+  longer defaults an omitted `serviceAccount.displayName` to the account id
+  (TF2-14). The fixture's `google_service_account.nodesc` and its second plan
+  gate that an absent value stays absent; the module's own default is a
+  non-empty display name, so a real consumer does not hit that path. Billing/org
+  IAM and key generation are disabled (outside the project-scoped surface).
 - The IAM repo's submodules reference `../helper`; a plain local-path module
   source makes Terraform treat the submodule directory as the package root and
   rejects the relative helper path. The case uses an offline
