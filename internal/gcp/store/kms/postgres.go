@@ -692,6 +692,40 @@ func (s *PostgresStore) DeleteCryptoKey(ctx context.Context, projectID, location
 	return tx.Commit(ctx)
 }
 
+func (s *PostgresStore) DeleteKeyRing(ctx context.Context, projectID, location, id string) error {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	// Callers only delete an empty ring; dropping any orphaned child rows in the
+	// same transaction keeps a re-created ring of the same name from inheriting
+	// a previous ring's records.
+	if _, err := tx.Exec(ctx, `
+		DELETE FROM jc_kms_cryptokey_versions
+		WHERE project_id=$1 AND location=$2 AND keyring_id=$3
+	`, projectID, location, id); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx, `
+		DELETE FROM jc_kms_cryptokeys
+		WHERE project_id=$1 AND location=$2 AND keyring_id=$3
+	`, projectID, location, id); err != nil {
+		return err
+	}
+	tag, err := tx.Exec(ctx, `
+		DELETE FROM jc_kms_keyrings
+		WHERE project_id=$1 AND location=$2 AND keyring_id=$3
+	`, projectID, location, id)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNoSuchKeyRing
+	}
+	return tx.Commit(ctx)
+}
+
 func (s *PostgresStore) KeyMaterial(ctx context.Context, projectID, location, keyringID, keyID, version string) ([]byte, error) {
 	dek, err := s.dek(ctx)
 	if err != nil {

@@ -1,9 +1,9 @@
 {
   "version": 1,
   "summary": {
-    "total": 1255,
+    "total": 1256,
     "by_state": {
-      "ga": 1042,
+      "ga": 1043,
       "limited": 160,
       "preview": 14,
       "unsupported": 39
@@ -15,7 +15,7 @@
         "unsupported": 28
       },
       "rest": {
-        "ga": 592,
+        "ga": 593,
         "limited": 137,
         "preview": 14,
         "unsupported": 11
@@ -75,7 +75,7 @@
         "preview": 14
       },
       "kms": {
-        "ga": 77
+        "ga": 78
       },
       "logging": {
         "ga": 91,
@@ -134,7 +134,7 @@
     "evidence": {
       "verified": {
         "grpc": 455,
-        "rest": 708
+        "rest": 709
       },
       "unverified": {
         "grpc": 46,
@@ -719,8 +719,8 @@
       "source": "discovery",
       "source_ref": "cloudkms.v1",
       "published": 87,
-      "served": 42,
-      "graded": 42,
+      "served": 43,
+      "graded": 43,
       "unserved": [
         "cloudkms.folders.getAutokeyConfig",
         "cloudkms.folders.getKajPolicyConfig",
@@ -747,7 +747,6 @@
         "cloudkms.projects.locations.keyHandles.create",
         "cloudkms.projects.locations.keyHandles.get",
         "cloudkms.projects.locations.keyHandles.list",
-        "cloudkms.projects.locations.keyRings.delete",
         "cloudkms.projects.locations.list",
         "cloudkms.projects.locations.operations.get",
         "cloudkms.projects.locations.retiredResources.get",
@@ -10100,7 +10099,21 @@
         "discovery=cloudkms.projects.locations.keyRings.create",
         "mutating",
         "postgres=yes",
-        "verified=true (rest, 42 transcript entries)"
+        "verified=true (rest, 43 transcript entries)"
+      ]
+    },
+    {
+      "service": "kms",
+      "operation": "KMS.KeyRingDelete",
+      "transport": "rest",
+      "state": "ga",
+      "discovery": "cloudkms.projects.locations.keyRings.delete",
+      "verified": true,
+      "evidence": [
+        "discovery=cloudkms.projects.locations.keyRings.delete",
+        "mutating",
+        "postgres=yes",
+        "verified=true (rest, 1 transcript entries)"
       ]
     },
     {

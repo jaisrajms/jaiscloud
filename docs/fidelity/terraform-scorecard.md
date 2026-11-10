@@ -363,7 +363,7 @@ What each case proves:
 |---|---|
 | `storage` | import → clean plan; `-replace` re-creates the bucket (new `timeCreated`, `metageneration=1`); a ForceNew rename leaves the old bucket 404; an out-of-band label PATCH is detected and the managed key converges; duplicate create 409, invalid name 400 and a provider-surfaced 409; destroy leaves 404 |
 | `pubsub` | topic and subscription import → clean plan; `refresh-only` clean (labels normalization classified); `-replace` the subscription; ForceNew rename leaves the old subscription 404; `updateMask=labels` drift converges; duplicate 409, unsupported mask 400, invalid duration 400 and a provider-surfaced 409 |
-| `kms` | key ring and key import → clean plan; label drift; crypto-key `-replace` is an expected 409 (the provider never calls the documented delete; re-import and rotation repair); duplicate 409, invalid algorithm 400, unsupported mask 400 and the live-version `cryptoKeys.delete` 400; after destroy the key ring/key are still readable and the version is `DESTROY_SCHEDULED` |
+| `kms` | key ring and key import → clean plan; label drift; crypto-key `-replace` is an expected 409 (the provider never calls the documented delete; re-import and rotation repair); duplicate 409, invalid algorithm 400, unsupported mask 400, the live-version `cryptoKeys.delete` 400 and the ring-with-a-key `keyRings.delete` 400 (an empty ring deletes and a follow-up GET is 404); after destroy the key ring/key are still readable and the version is `DESTROY_SCHEDULED` |
 | `iam-parallel` | 10 accounts + 10 project bindings at `-parallelism=10`; the policy holds all 10 (a lost update fails); destroy at parallelism 10 leaves no member |
 | `tftest` | `terraform test` conditions on computed ids, `self_link`, `url`, `time_created`, topic/subscription ids, crypto-key `primary.state` and `version_template` |
 
@@ -396,7 +396,7 @@ and an import starts empty), not an emulator gap.
 | TF5-1 | `fix` — `fix/gcp-storage-bucket-validation` | `storage.buckets.insert` accepts `storageClass=BOGUS`, `publicAccessPrevention=BOGUS` and `location=NOT-A-LOCATION` with HTTP 200; real GCS rejects each with 400. The case records the measurement and uses the invalid-bucket-name 400 that the emulator does validate. |
 | TF5-2 | `fix` — `fix/gcp-storage-bucket-labels-merge` | `storage.buckets.patch` replaces the whole `labels` object instead of merging it: patching `{"a":"9"}` on `{a,b}` drops `b`, where real GCS keeps it (null deletes one key). Low impact through Terraform (the provider sends the effective map), wrong for a raw client. |
 | TF5-3 | `no fix` (upstream provider) | The provider's crypto-key delete destroys the versions and drops the key from state without calling the documented `cryptoKeys.delete`, so `-replace` re-creates the same name → 409. The Cloud KMS Discovery does define the delete methods; this is the behavior a real-GCP user sees with provider 7.46.2. The gate asserts the failure, re-imports and repairs the rotation schedule. |
-| TF5-4 | `fix` — `fix/gcp-kms-keyring-delete` | `projects.locations.keyRings.delete` is documented in the Cloud KMS Discovery (`DELETE v1/{+name}`, an LRO) but the emulator answers 501 `UNIMPLEMENTED`; real KMS deletes an empty ring and rejects one with children with 400 `FAILED_PRECONDITION`. `cryptoKeys.delete` is served and enforces that child precondition. |
+| TF5-4 | fixed — `fix/gcp-kms-keyring-delete` | `projects.locations.keyRings.delete` is documented in the Cloud KMS Discovery (`DELETE v1/{+name}`, an LRO) but the emulator answered 501 `UNIMPLEMENTED`; real KMS deletes an empty ring and rejects one with children with 400 `FAILED_PRECONDITION`. `cryptoKeys.delete` was already served and enforces that child precondition. The method is now served over REST (the Cloud KMS proto declares no `DeleteKeyRing` RPC, so there is no gRPC surface): an empty ring is deleted, a ring holding a `CryptoKey` is `400 FAILED_PRECONDITION`, and the ring's name stays reusable while its retired crypto-key names do not. |
 | TF5-5 | `no fix` (provider artifact) | A `refresh-only` plan reports `labels = {}` for a resource with no managed labels (`SetLabels` normalizes an absent map). `refresh_phase labels-artifact` accepts exactly that attribute. |
 | TF5-6 | `no fix` (provider artifact) | An unmanaged extra label key is filtered out of `labels` by `SetLabels` and preserved by the update; the gate asserts the managed key converges and records the extra key. |
 
@@ -439,9 +439,10 @@ Recorded gap and boundaries:
 | TF4-1-2 | `out of scope` | The bootstrap project keeps `auto_create_network = true`; the default Compute network it implies, and the network-deletion path `false` would take, are outside this stack's measured surface (wave-plan §6). `compute.projects.get` itself is served (TF2-1). |
 | TF4-1-3 | `no fix` (provider schema) | `google_secret_manager_secret.replication` is ForceNew, so the CMEK pattern rotates the bucket/dataset key in place but creates the secret's key once. The emulator's replication PATCH path is covered by the service/REST tests. |
 
-The KMS objects that survive each destroy are the TF5-3/TF5-4 boundary (the
-provider never calls the documented delete methods and `keyRings.delete` is a
-`501`), not a separate gap.
+The KMS objects that survive each destroy are the TF5-3 boundary (the provider
+never calls the documented delete methods), not a separate gap: `keyRings.delete`
+is now served over REST (TF5-4), so the objects outlive destroy only because the
+provider does not use it.
 
 ## TF4-2 — Composition pattern: event-driven chain (2026-11-07)
 

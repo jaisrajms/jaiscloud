@@ -877,6 +877,11 @@ func deriveAction(resourceType string, isCollection bool, name, method, custom, 
 			return "KeyRingList"
 		case method == http.MethodGet:
 			return "KeyRingGet"
+		case method == http.MethodDelete:
+			// keyRings.delete (DELETE v1/{+name}, LRO) — REST only: the Cloud
+			// KMS proto declares no DeleteKeyRing RPC, so the gRPC surface has
+			// no such method.
+			return "KeyRingDelete"
 		}
 	case "cryptoKeys":
 		switch {

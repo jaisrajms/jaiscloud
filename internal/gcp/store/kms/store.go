@@ -160,6 +160,10 @@ type Store interface {
 	// versions remain (Cloud KMS requires deleting every version first).
 	// Returns ErrNoSuchCryptoKey if it does not exist.
 	DeleteCryptoKey(ctx context.Context, projectID, location, keyringID, id string) error
+	// DeleteKeyRing permanently removes a key ring. Callers must ensure no
+	// crypto keys remain (Cloud KMS requires deleting every child first).
+	// Returns ErrNoSuchKeyRing if it does not exist.
+	DeleteKeyRing(ctx context.Context, projectID, location, id string) error
 
 	// KeyMaterial returns the raw AES-256 key material for a version,
 	// unwrapping the DEK-encrypted blob stored at rest.

@@ -320,7 +320,12 @@ the non-Discovery `recordsPerRrset` field. The gate still fails on any high-seve
   the documented 30-day default applies. As with
   rotation, promotion runs on access (no background scheduler); KMS rotation schedules
   execute lazily on read (a due key rotates on its next `GetCryptoKey`/`ListCryptoKeys`/`Encrypt`,
-  creating a new primary and advancing the schedule — there is no background scheduler); Logging
+  creating a new primary and advancing the schedule — there is no background scheduler); KMS
+  `keyRings.delete` is **REST-only** — the Discovery declares `DELETE v1/{+name}` (an LRO) but
+  the `google.cloud.kms.v1.KeyManagementService` proto declares no `DeleteKeyRing` RPC, so the
+  gRPC surface has no such method — and it deletes only an **empty** ring (a ring that still holds
+  a `CryptoKey` is `400 FAILED_PRECONDITION`), leaving the ring's name reusable because
+  `RetiredResource` models deleted `CryptoKeys` only; Logging
   `TailLogEntries` is a bounded, at-most-once poll;
   Eventarc delivers Pub/Sub- and Cloud Storage-sourced events to `cloudFunction`, `cloudRun` and
   `httpEndpoint` destinations (fire-and-forget binary-mode CloudEvents POST, no retries; a `cloudRun`

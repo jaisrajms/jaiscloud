@@ -895,12 +895,11 @@ Recorded boundaries, not worked around:
   TF4-1-1 (`fix/gcp-serviceusage-unknown-project`); Compute networking is
   outside this stack's scope either way.
 - **KMS objects survive destroy.** The provider never calls the documented
-  `keyRings.delete`/`cryptoKeys.delete` (TF5-3), and
-  `projects.locations.keyRings.delete` is a `501` in the emulator (TF5-4), so
-  the patterns assert the rings are still readable after destroy while every
-  resource the provider does delete is `404`. Neither pattern uses a fixed key
-  ring name for that reason: names carry a per-run suffix (the bootstrap
-  project id is unique per run too).
+  `keyRings.delete`/`cryptoKeys.delete` (TF5-3); both methods are served over REST
+  (TF5-4 added `projects.locations.keyRings.delete`), so the patterns assert the
+  rings are still readable after destroy while every resource the provider does
+  delete is `404`. Neither pattern uses a fixed key ring name for that reason:
+  names carry a per-run suffix (the bootstrap project id is unique per run too).
 - **Secret Manager replication key rotation** is not driven: the provider models
   the `replication` block as ForceNew, so a Terraform change would replace the
   secret. The emulator's PATCH path for that field is covered by the
