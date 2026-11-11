@@ -100,8 +100,11 @@ func TestCreateGetListDeleteRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetIndex: %v", err)
 	}
-	if got.GetName() != created.GetName() || len(got.GetFields()) != 2 {
-		t.Fatalf("GetIndex = %+v, want the created index", got)
+	if got.GetName() != created.GetName() || len(got.GetFields()) != 3 {
+		t.Fatalf("GetIndex = %+v, want the created index plus the appended __name__", got)
+	}
+	if last := got.GetFields()[2]; last.GetFieldPath() != "__name__" || last.GetOrder() != adminpb.Index_IndexField_ASCENDING {
+		t.Fatalf("trailing field = %+v, want __name__ ASCENDING (the last declared field's direction)", last)
 	}
 
 	list, err := client.ListIndexes(ctx, &adminpb.ListIndexesRequest{Parent: testParent})

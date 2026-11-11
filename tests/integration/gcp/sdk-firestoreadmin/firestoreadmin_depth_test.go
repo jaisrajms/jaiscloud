@@ -363,7 +363,8 @@ func TestSDKFirestoreAdminLifecycle(t *testing.T) {
 		parent := collectionGroupParent("(default)", cg)
 		created := createIndex(t, c, parent, "a", "b")
 		require.Equal(t, adminpb.Index_READY, created.GetState())
-		require.Len(t, created.GetFields(), 2)
+		require.Len(t, created.GetFields(), 3, "Standard edition appends the trailing __name__ field")
+		require.Equal(t, "__name__", created.GetFields()[2].GetFieldPath())
 
 		got, err := c.GetIndex(ctx, &adminpb.GetIndexRequest{Name: created.GetName()})
 		require.NoError(t, err)

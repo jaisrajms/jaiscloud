@@ -331,6 +331,12 @@ EOF
 #   Standard default SPARSE_ALL and no apiScope -> No changes
 #   destroy
 #
+# FE3 extends the Standard half: the composite index GET must also carry the
+# server-appended trailing `__name__` field (Discovery: the last field entry is
+# always `__name__`, added with the last field's direction), and the phase's
+# re-plan must stay clean because provider 7.46.2 suppresses the server-generated
+# field (upstream #9820).
+#
 # The query planner is deliberately not part of this phase: Enterprise edition
 # makes indexes optional for queries (a missing index is a full collection scan,
 # not a query error), which is what the plan's docs check corrected.
@@ -476,6 +482,8 @@ index_phase() {
     "$(indexes_url "$INDEX_STANDARD_DB" orders)" '"density":"SPARSE_ALL"'
   check_db_absent "Standard index carries no apiScope" \
     "$(indexes_url "$INDEX_STANDARD_DB" orders)" '"apiScope"'
+  check "Standard composite index carries the server-appended trailing __name__ field" \
+    "$(indexes_url "$INDEX_STANDARD_DB" orders)" '"fieldPath":"__name__"' '"order":"DESCENDING"'
 
   plan_no_changes "re-plan reports no changes (index options round-trip)"
 

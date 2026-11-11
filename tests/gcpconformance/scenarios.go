@@ -1822,6 +1822,15 @@ func Scenarios(suffix string) []Scenario {
 		Scenario{Service: "firestore", Method: "POST",
 			Path: fsBase + "/collectionGroups/conf-orders/indexes",
 			Body: `{"queryScope":"COLLECTION","fields":[{"fieldPath":"status","order":"ASCENDING"}]}`},
+		// FE3: a Standard composite index is served with the server-appended
+		// trailing __name__ field. Here the last declared field is in
+		// array-contains mode (not directional), so __name__ is ASCENDING.
+		Scenario{Service: "firestore", Method: "POST",
+			Path: fsBase + "/collectionGroups/conf-tagged/indexes",
+			Body: `{"queryScope":"COLLECTION","fields":[{"fieldPath":"status","order":"ASCENDING"},{"fieldPath":"tags","arrayConfig":"CONTAINS"}]}`,
+			Save: map[string]string{"fsStdArrayIndex": "response.name"}},
+		Scenario{Service: "firestore", Method: "GET", Path: "/v1/${fsStdArrayIndex}"},
+		Scenario{Service: "firestore", Method: "DELETE", Path: "/v1/${fsStdArrayIndex}"},
 	)
 
 	// ─── Firestore unique index enforcement (FE2) ─────────────────────────────

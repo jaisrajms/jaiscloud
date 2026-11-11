@@ -97,12 +97,65 @@ func resolveIndexDensity(requested, edition string) string {
 
 // normalizeIndex fills the INPUT_ONLY members of a stored index record so a
 // read serves the effective values real GCP reports — including for a record
-// written by a build that did not store the index options (FE1).
+// written by a build that did not store the index options (FE1) or the Standard
+// edition's server-appended __name__ field (FE3).
 func normalizeIndex(edition string, idx indexDef) indexDef {
 	idx.Density = resolveIndexDensity(idx.Density, edition)
 	if idx.APIScope == indexAPIScopeAny {
 		idx.APIScope = ""
 	}
+	if edition != databaseEditionEnterprise {
+		idx = appendStandardNameField(idx)
+	}
+	return idx
+}
+
+// appendStandardNameField makes a Standard edition composite index definition
+// match the server shape the Discovery document documents on Index.fields:
+//
+//	"In Standard edition databases only: ... The last field entry is always for
+//	the field path `__name__`. If, on creation, `__name__` was not specified as
+//	the last field, it will be added automatically with the same direction as
+//	that of the last field defined. If the final field in the index is not
+//	directional, the `__name__` will be ordered ASCENDING (unless explicitly
+//	specified)."
+//
+// Enterprise edition appends nothing (its index is exactly what the client
+// declared), and single-field definitions are left alone: Standard edition keeps
+// single-field indexes on the Field resource (Field.index_config), so a
+// one-field Index record is not a composite index this rule applies to.
+//
+// An explicitly supplied __name__ that is not last is moved to the end instead
+// of being duplicated, keeping its explicit direction when it has one.
+func appendStandardNameField(idx indexDef) indexDef {
+	if len(idx.Fields) < 2 {
+		return idx
+	}
+	if idx.Fields[len(idx.Fields)-1].FieldPath == "__name__" {
+		return idx
+	}
+	fields := make([]indexField, 0, len(idx.Fields)+1)
+	var explicit *indexField
+	for _, f := range idx.Fields {
+		if f.FieldPath == "__name__" && explicit == nil {
+			moved := f
+			explicit = &moved
+			continue
+		}
+		fields = append(fields, f)
+	}
+	order := "ASCENDING"
+	if len(fields) > 0 {
+		// "the same direction as that of the last field defined"; a field with
+		// no direction (array-contains) leaves the default ASCENDING.
+		if o := fields[len(fields)-1].Order; o != "" {
+			order = o
+		}
+	}
+	if explicit != nil && explicit.Order != "" {
+		order = explicit.Order
+	}
+	idx.Fields = append(fields, indexField{FieldPath: "__name__", Order: order})
 	return idx
 }
 
