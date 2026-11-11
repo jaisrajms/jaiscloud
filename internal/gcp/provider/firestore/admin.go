@@ -1,7 +1,7 @@
 package firestore
 
 // Firestore Admin control-plane domain logic (google.firestore.admin.v1) beyond
-// the composite-index CRUD in indexes.go: databases, collection-group fields,
+// the index CRUD in indexes.go/service.go: databases, collection-group fields,
 // backup schedules, backups and user creds. Every method here is
 // transport-agnostic — the gRPC FirestoreAdmin service
 // (internal/gcp/grpc/firestoreadmin) is the only caller today — and stores its
@@ -1271,7 +1271,7 @@ func applyDatabaseField(cur *databaseDef, path string, patch databaseDef) {
 // DeleteDatabaseOperation.Wait resolves.
 //
 // The delete also removes everything the database owns — its documents,
-// composite indexes, collection-group fields (including TTL policies), user
+// indexes, collection-group fields (including TTL policies), user
 // creds, change streams and backup schedules — because those are database-scoped
 // resources, and a re-created database must not inherit them. Backups are
 // deliberately retained: Firestore documents that "Deleting the source database

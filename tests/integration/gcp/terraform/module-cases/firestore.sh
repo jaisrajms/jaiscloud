@@ -1,6 +1,6 @@
 # shellcheck shell=bash
 #
-# Case: terraform-google-firestore (TGM11, TGM12)
+# Case: terraform-google-firestore (TGM11, TGM12, FE1)
 #
 # The pinned consumer is GoogleCloudPlatform/terraform-google-firestore
 # (commit 50d170b). Its root module creates one `google_firestore_database` and
@@ -85,6 +85,8 @@ PLAIN_DB="jc-plain"
 RECREATE_DB="jc-recreate"
 DAM_STANDARD_DB="jc-dam-standard"
 DAM_ENTERPRISE_DB="jc-dam-enterprise"
+INDEX_ENTERPRISE_DB="jc-idx-ent"
+INDEX_STANDARD_DB="jc-idx-std"
 KEYRING="jc-firestore-ring"
 KEY="jc-firestore-key"
 
@@ -313,6 +315,180 @@ resource "google_firestore_database" "enterprise" {
 EOF
 }
 
+# FE1 adds a raw `google_firestore_index` phase (the pinned module creates no
+# indexes), in its own workdir/state. Provider 7.46.2 exposes the Enterprise
+# index options (api_scope, density, multikey, unique — its
+# firestore_index.html.markdown declares all four, and CHANGELOG entries #16085 /
+# #22287 / #24163 added them), and its Read flattens every one of them back into
+# state, so an emulator that drops a member re-plans a diff forever:
+#
+#   ENTERPRISE database + composite index (api_scope MONGODB_COMPATIBLE_API,
+#   density SPARSE_ANY, multikey, unique) -> GET carries all four -> No changes
+#   ENTERPRISE single-field index in its own collection group (Enterprise
+#   manages single-field indexes through the Index resource, and its default
+#   density is DENSE) -> GET carries density DENSE -> No changes
+#   STANDARD database + composite index without a density -> GET carries the
+#   Standard default SPARSE_ALL and no apiScope -> No changes
+#   destroy
+#
+# The query planner is deliberately not part of this phase: Enterprise edition
+# makes indexes optional for queries (a missing index is a full collection scan,
+# not a query error), which is what the plan's docs check corrected.
+write_index_module() {
+  cat >"$INDEX_WORK/main.tf" <<EOF
+terraform {
+  required_version = ">= 1.3"
+
+  required_providers {
+    google = {
+      source  = "hashicorp/google"
+      version = "= 7.46.2"
+    }
+  }
+}
+
+variable "endpoint" {
+  type    = string
+  default = "$ENDPOINT"
+}
+
+variable "project" {
+  type    = string
+  default = "$PROJECT"
+}
+
+provider "google" {
+  project = var.project
+  region  = "us-central1"
+
+  user_project_override = false
+
+  # Versioned API base URL: exactly one trailing slash.
+  firestore_custom_endpoint = "\${var.endpoint}/v1/"
+}
+
+# An Enterprise edition database: it creates no indexes by default, and manages
+# both single-field and composite indexes through the Index resource.
+resource "google_firestore_database" "enterprise" {
+  project     = var.project
+  name        = "$INDEX_ENTERPRISE_DB"
+  location_id = "nam5"
+  type        = "FIRESTORE_NATIVE"
+
+  database_edition = "ENTERPRISE"
+
+  delete_protection_state = "DELETE_PROTECTION_DISABLED"
+  deletion_policy         = "DELETE"
+}
+
+# The FE1 measurement: every Enterprise index option the provider sends.
+resource "google_firestore_index" "enterprise_composite" {
+  project     = var.project
+  database    = google_firestore_database.enterprise.name
+  collection  = "orders"
+  query_scope = "COLLECTION_GROUP"
+  api_scope   = "MONGODB_COMPATIBLE_API"
+  density     = "SPARSE_ANY"
+  multikey    = true
+  unique      = true
+
+  fields {
+    field_path = "status"
+    order      = "ASCENDING"
+  }
+
+  fields {
+    field_path = "createdAt"
+    order      = "DESCENDING"
+  }
+}
+
+# A single-field index is a first-class Index resource on Enterprise edition. It
+# lives in its own collection group so its read-back is unambiguous.
+resource "google_firestore_index" "enterprise_single" {
+  project    = var.project
+  database   = google_firestore_database.enterprise.name
+  collection = "single_orders"
+
+  fields {
+    field_path = "priority"
+    order      = "ASCENDING"
+  }
+}
+
+# A Standard edition database keeps the composite-only Index contract, with
+# SPARSE_ALL as its density.
+resource "google_firestore_database" "standard" {
+  project     = var.project
+  name        = "$INDEX_STANDARD_DB"
+  location_id = "nam5"
+  type        = "FIRESTORE_NATIVE"
+
+  delete_protection_state = "DELETE_PROTECTION_DISABLED"
+  deletion_policy         = "DELETE"
+}
+
+resource "google_firestore_index" "standard_composite" {
+  project    = var.project
+  database   = google_firestore_database.standard.name
+  collection = "orders"
+
+  fields {
+    field_path = "status"
+    order      = "ASCENDING"
+  }
+
+  fields {
+    field_path = "total"
+    order      = "DESCENDING"
+  }
+}
+EOF
+}
+
+indexes_url() {
+  echo "$ENDPOINT/v1/projects/$PROJECT/databases/$1/collectionGroups/$2/indexes"
+}
+
+# index_phase drives the FE1 resources in their own working directory and state,
+# so the CMEK key ring and the other phases' databases are untouched. It runs
+# with the data-access phase, before the main init_phase, which restores
+# TF_LOG_PATH to the main work dir for the FC6 capture.
+index_phase() {
+  local saved="$WORK"
+  WORK="$INDEX_WORK"
+  mkdir -p "$INDEX_WORK"
+  write_index_module
+
+  init_phase
+  plan_phase "plan (Enterprise + Standard edition indexes)"
+  apply_phase "apply (Enterprise + Standard edition indexes)"
+  assert_no_api_errors
+
+  echo "== spot checks (index options)"
+  check "Enterprise index echoes density/apiScope/multikey/unique" \
+    "$(indexes_url "$INDEX_ENTERPRISE_DB" orders)" \
+    '"density":"SPARSE_ANY"' '"apiScope":"MONGODB_COMPATIBLE_API"' '"multikey":true' '"unique":true'
+  check "Enterprise single-field index is an Index resource with the DENSE default" \
+    "$(indexes_url "$INDEX_ENTERPRISE_DB" single_orders)" \
+    '"density":"DENSE"' '"fieldPath":"priority"'
+  check "Standard index echoes the SPARSE_ALL density default" \
+    "$(indexes_url "$INDEX_STANDARD_DB" orders)" '"density":"SPARSE_ALL"'
+  check_db_absent "Standard index carries no apiScope" \
+    "$(indexes_url "$INDEX_STANDARD_DB" orders)" '"apiScope"'
+
+  plan_no_changes "re-plan reports no changes (index options round-trip)"
+
+  echo "== destroy (index phase)"
+  if "$TF" -chdir="$INDEX_WORK" destroy -input=false -auto-approve -no-color >"$INDEX_WORK/destroy.log" 2>&1; then
+    pass "destroy (index phase)"
+  else
+    cat "$INDEX_WORK/destroy.log"
+    fail "destroy (index phase) (see the log above)"
+  fi
+  WORK="$saved"
+}
+
 # data_access_phase drives the TF6-6 resources in their own working directory and
 # state, so the CMEK key ring and the (default) database of the other phases are
 # untouched. It runs after default_phase and before the main init_phase, which
@@ -532,6 +708,11 @@ case_main() {
   # work dir's provider log.
   DAM_WORK="$WORK/data-access"
   data_access_phase
+
+  # FE1: the raw Enterprise/Standard index resources, also before the main
+  # init_phase for the same reason.
+  INDEX_WORK="$WORK/indexes"
+  index_phase
 
   write_module '"POINT_IN_TIME_RECOVERY_ENABLED"'
   init_phase

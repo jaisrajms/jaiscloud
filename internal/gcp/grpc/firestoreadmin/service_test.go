@@ -287,3 +287,102 @@ func TestInvalidResourceNames(t *testing.T) {
 		t.Fatalf("DeleteIndex bad name = %v, want InvalidArgument", err)
 	}
 }
+
+// TestEnterpriseIndexOptionsRoundTrip covers the Enterprise edition index
+// surface over gRPC (FE1): a single-field index is accepted on an Enterprise
+// database, and the index options (api_scope, density, multikey, unique,
+// shard_count) survive create -> get -> list. A Standard database keeps the
+// documented composite-only contract.
+func TestEnterpriseIndexOptionsRoundTrip(t *testing.T) {
+	client, cleanup := newAdminClient(t, store.NewMemoryResourceStore())
+	defer cleanup()
+	ctx := context.Background()
+
+	op, err := client.CreateDatabase(ctx, &adminpb.CreateDatabaseRequest{
+		Parent:     testDBParent,
+		DatabaseId: "ent-db",
+		Database:   &adminpb.Database{LocationId: "nam5", DatabaseEdition: adminpb.Database_ENTERPRISE},
+	})
+	if err != nil {
+		t.Fatalf("CreateDatabase: %v", err)
+	}
+	created := &adminpb.Database{}
+	if err := op.GetResponse().UnmarshalTo(created); err != nil {
+		t.Fatalf("CreateDatabase response unmarshal: %v", err)
+	}
+	if created.GetDatabaseEdition() != adminpb.Database_ENTERPRISE {
+		t.Fatalf("database edition = %v, want ENTERPRISE", created.GetDatabaseEdition())
+	}
+	parent := "projects/proj/databases/ent-db/collectionGroups/orders"
+
+	createOp, err := client.CreateIndex(ctx, &adminpb.CreateIndexRequest{
+		Parent: parent,
+		Index: &adminpb.Index{
+			QueryScope: adminpb.Index_COLLECTION_GROUP,
+			ApiScope:   adminpb.Index_MONGODB_COMPATIBLE_API,
+			Density:    adminpb.Index_SPARSE_ANY,
+			Multikey:   true,
+			Unique:     true,
+			ShardCount: 4,
+			Fields:     []*adminpb.Index_IndexField{asc("status")},
+		},
+	})
+	if err != nil {
+		t.Fatalf("CreateIndex: %v", err)
+	}
+	single := &adminpb.Index{}
+	if err := createOp.GetResponse().UnmarshalTo(single); err != nil {
+		t.Fatalf("CreateIndex response unmarshal: %v", err)
+	}
+	if len(single.GetFields()) != 1 || single.GetFields()[0].GetFieldPath() != "status" {
+		t.Fatalf("single-field index fields = %+v", single.GetFields())
+	}
+	for _, tc := range []struct {
+		name string
+		got  any
+		want any
+	}{
+		{"api_scope", single.GetApiScope(), adminpb.Index_MONGODB_COMPATIBLE_API},
+		{"density", single.GetDensity(), adminpb.Index_SPARSE_ANY},
+		{"multikey", single.GetMultikey(), true},
+		{"unique", single.GetUnique(), true},
+		{"shard_count", single.GetShardCount(), int32(4)},
+	} {
+		if tc.got != tc.want {
+			t.Errorf("created %s = %v, want %v", tc.name, tc.got, tc.want)
+		}
+	}
+
+	got, err := client.GetIndex(ctx, &adminpb.GetIndexRequest{Name: single.GetName()})
+	if err != nil {
+		t.Fatalf("GetIndex: %v", err)
+	}
+	if got.GetDensity() != adminpb.Index_SPARSE_ANY || got.GetApiScope() != adminpb.Index_MONGODB_COMPATIBLE_API ||
+		!got.GetMultikey() || !got.GetUnique() || got.GetShardCount() != 4 {
+		t.Fatalf("GetIndex = %+v, want the Enterprise options echoed", got)
+	}
+	list, err := client.ListIndexes(ctx, &adminpb.ListIndexesRequest{Parent: parent})
+	if err != nil {
+		t.Fatalf("ListIndexes: %v", err)
+	}
+	if len(list.GetIndexes()) != 1 || list.GetIndexes()[0].GetDensity() != adminpb.Index_SPARSE_ANY {
+		t.Fatalf("ListIndexes = %+v, want the stored index with its density", list.GetIndexes())
+	}
+
+	// A create that omits density serves the ENTERPRISE default, DENSE.
+	defaulted := createIndex(t, client, parent, asc("a"), desc("b"))
+	if defaulted.GetDensity() != adminpb.Index_DENSE {
+		t.Errorf("default density = %v, want DENSE", defaulted.GetDensity())
+	}
+	if defaulted.GetApiScope() != adminpb.Index_ANY_API {
+		t.Errorf("default api_scope = %v, want ANY_API", defaulted.GetApiScope())
+	}
+
+	// The STANDARD database (default) still requires two fields.
+	if _, err := client.CreateIndex(ctx, &adminpb.CreateIndexRequest{
+		Parent: testParent,
+		Index:  &adminpb.Index{QueryScope: adminpb.Index_COLLECTION, Fields: []*adminpb.Index_IndexField{asc("status")}},
+	}); status.Code(err) != codes.InvalidArgument {
+		t.Errorf("Standard single-field index error = %v, want InvalidArgument", err)
+	}
+}

@@ -1787,6 +1787,43 @@ func Scenarios(suffix string) []Scenario {
 		Scenario{Service: "firestore", Method: "DELETE", Path: "/v1/${fsChangeStream}"},
 	)
 
+	// ─── Firestore Enterprise edition index surface (FE1) ─────────────────────
+	// Enterprise edition manages single-field and composite indexes through the
+	// Index resource and makes the index options available (Discovery:
+	// GoogleFirestoreAdminV1Index). The chain is the FE1 measurement: an
+	// Enterprise database, one composite index carrying density/apiScope/
+	// multikey/unique, one single-field index, and the Standard edition
+	// rejection a single-field Index create gets on the (Standard) database
+	// above.
+	fsEntDB := "conf-ent-db-" + suffix
+	fsEntBase := "/v1/projects/" + p + "/databases/" + fsEntDB
+	sc = append(sc,
+		Scenario{Service: "firestore", Method: "POST",
+			Path: "/v1/projects/" + p + "/databases?databaseId=" + fsEntDB,
+			Body: `{"type":"FIRESTORE_NATIVE","locationId":"nam5","databaseEdition":"ENTERPRISE"}`},
+		Scenario{Service: "firestore", Method: "POST",
+			Path: fsEntBase + "/collectionGroups/conf-orders/indexes",
+			Body: `{"queryScope":"COLLECTION_GROUP","apiScope":"MONGODB_COMPATIBLE_API","density":"SPARSE_ANY","multikey":true,"unique":true,"fields":[{"fieldPath":"status","order":"ASCENDING"},{"fieldPath":"createdAt","order":"DESCENDING"}]}`,
+			Save: map[string]string{"fsEntIndex": "response.name"}},
+		Scenario{Service: "firestore", Method: "GET", Path: "/v1/${fsEntIndex}"},
+		Scenario{Service: "firestore", Method: "GET",
+			Path: fsEntBase + "/collectionGroups/conf-orders/indexes"},
+		Scenario{Service: "firestore", Method: "DELETE", Path: "/v1/${fsEntIndex}"},
+		// A single-field index is a first-class Index resource on Enterprise
+		// edition; density is resolved to the Enterprise default (DENSE).
+		Scenario{Service: "firestore", Method: "POST",
+			Path: fsEntBase + "/collectionGroups/conf-orders/indexes",
+			Body: `{"queryScope":"COLLECTION","fields":[{"fieldPath":"status","order":"ASCENDING"}]}`,
+			Save: map[string]string{"fsEntSingleIndex": "response.name"}},
+		Scenario{Service: "firestore", Method: "GET", Path: "/v1/${fsEntSingleIndex}"},
+		Scenario{Service: "firestore", Method: "DELETE", Path: "/v1/${fsEntSingleIndex}"},
+		// Standard edition keeps single-field indexes on the Field resource, so
+		// the same single-field Index create is rejected.
+		Scenario{Service: "firestore", Method: "POST",
+			Path: fsBase + "/collectionGroups/conf-orders/indexes",
+			Body: `{"queryScope":"COLLECTION","fields":[{"fieldPath":"status","order":"ASCENDING"}]}`},
+	)
+
 	// ─── Cloud Logging: folder-scoped views and their IAM policy ──────────────
 	// The view IAM trio exists on the folders scope as well as projects; a
 	// folder-scoped bucket + view drives get/set/test on the same core.

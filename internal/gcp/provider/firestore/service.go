@@ -1023,15 +1023,55 @@ func (s *Service) hasIndex(ctx context.Context, project, database string, requir
 	return false, nil
 }
 
-// CreateIndexDef registers a composite index and returns the stored definition
-// together with its long-running operation name. It is the shared core behind
-// both the REST CreateIndex wrapper and the FirestoreAdmin gRPC transport.
+// CreateIndexDef registers an index and returns the stored definition together
+// with its long-running operation name. It is the shared core behind both the
+// REST CreateIndex wrapper and the FirestoreAdmin gRPC transport, so the
+// edition rules below are enforced identically on both transports.
+//
+// The edition changes the contract (Discovery, GoogleFirestoreAdminV1Index):
+// "In Standard edition databases, single-field indexes are managed using the
+// google.firestore.admin.v1.Field resource, and composite indexes are managed
+// using the google.firestore.admin.v1.Index resource. In Enterprise edition
+// databases, both single-field and composite indexes are managed using the
+// google.firestore.admin.v1.Index resource." The count rule follows the same
+// description: "In Standard edition databases only: At least 2 fields must be
+// specified", and the density rule follows Index.Density: SPARSE_ALL "is both
+// the default and only allowed value for Standard edition databases".
+//
+// A create never alters the query planner: Enterprise edition makes indexes
+// optional for queries (a missing index means a full collection scan, not a
+// failure), so the planner rule that a query over one non-__name__ field needs
+// no index stands for both editions.
 func (s *Service) CreateIndexDef(ctx context.Context, project, database, cg string, idx IndexDef) (IndexDef, string, error) {
-	if err := s.requireDatabase(ctx, project, database); err != nil {
+	db, err := s.GetDatabase(ctx, project, database)
+	if err != nil {
 		return IndexDef{}, "", err
 	}
-	if len(idx.Fields) < 2 {
-		return IndexDef{}, "", model.NewProviderError("InvalidArgument", "a composite index requires at least 2 fields", 400)
+	if err := validateIndexEnums(idx); err != nil {
+		return IndexDef{}, "", err
+	}
+	enterprise := db.DatabaseEdition == databaseEditionEnterprise
+	switch {
+	case len(idx.Fields) == 0:
+		return IndexDef{}, "", model.NewProviderError("InvalidArgument", "an index requires at least one field", 400)
+	case len(idx.Fields) > 100:
+		// Index.fields: "At most 100 fields may be specified."
+		return IndexDef{}, "", model.NewProviderError("InvalidArgument", "an index supports at most 100 fields", 400)
+	case !enterprise && len(idx.Fields) < 2:
+		return IndexDef{}, "", model.NewProviderError("InvalidArgument",
+			"a Standard edition index requires at least 2 fields: single-field indexes are managed through the Field resource", 400)
+	}
+	// density is INPUT_ONLY when unspecified ("it will use database default
+	// setting"), so the record carries the effective value the edition serves.
+	idx.Density = resolveIndexDensity(idx.Density, db.DatabaseEdition)
+	if !enterprise && idx.Density != indexDensitySparseAll {
+		return IndexDef{}, "", model.NewProviderError("InvalidArgument",
+			"SPARSE_ALL is the only density allowed on a Standard edition database", 400)
+	}
+	if idx.APIScope == indexAPIScopeAny {
+		// ANY_API is the proto3 zero value: keep the record canonical so the
+		// renderer omits it.
+		idx.APIScope = ""
 	}
 
 	id := randomHex(12)
@@ -1055,7 +1095,7 @@ func (s *Service) CreateIndexDef(ctx context.Context, project, database, cg stri
 	return idx, opName, nil
 }
 
-// CreateIndex registers a composite index and returns its operation wrapper.
+// CreateIndex registers an index and returns its operation wrapper.
 func (s *Service) CreateIndex(ctx context.Context, project, database, cg string, idx IndexDef) (map[string]any, error) {
 	created, opName, err := s.CreateIndexDef(ctx, project, database, cg, idx)
 	if err != nil {
@@ -1070,12 +1110,13 @@ func (s *Service) CreateIndex(ctx context.Context, project, database, cg string,
 	}, nil
 }
 
-// ListIndexes returns composite indexes, paginated. A specific collection group
-// (cg) lists only that group's indexes; cg == "-" is the AIP-123 wildcard that
-// lists every collection group's indexes, matching the real API behavior used by
+// ListIndexes returns indexes, paginated. A specific collection group (cg)
+// lists only that group's indexes; cg == "-" is the AIP-123 wildcard that lists
+// every collection group's indexes, matching the real API behavior used by
 // `gcloud firestore indexes composite list` and the Firestore console.
 func (s *Service) ListIndexes(ctx context.Context, project, database, cg, filter string, page pageParams) ([]indexDef, string, error) {
-	if err := s.requireDatabase(ctx, project, database); err != nil {
+	db, err := s.GetDatabase(ctx, project, database)
+	if err != nil {
 		return nil, "", err
 	}
 	// The trailing slash is significant: for a concrete group the prefix is
@@ -1094,7 +1135,7 @@ func (s *Service) ListIndexes(ctx context.Context, project, database, cg, filter
 		for _, e := range entries {
 			var idx indexDef
 			if json.Unmarshal(e.Data, &idx) == nil {
-				idxs = append(idxs, idx)
+				idxs = append(idxs, normalizeIndex(db.DatabaseEdition, idx))
 			}
 		}
 	}
@@ -1116,8 +1157,14 @@ func (s *Service) ListIndexes(ctx context.Context, project, database, cg, filter
 	return pageIdxs, nextToken, nil
 }
 
-// GetIndex returns a single composite index.
+// GetIndex returns a single index. Like every database-child resource it is
+// parented by the database, so a missing (or deleted) database is NOT_FOUND
+// rather than a record served from under a dead parent.
 func (s *Service) GetIndex(ctx context.Context, project, database, cg, id string) (indexDef, error) {
+	db, err := s.GetDatabase(ctx, project, database)
+	if err != nil {
+		return indexDef{}, err
+	}
 	rel := indexRelName(database, cg, id)
 	if s.resources == nil {
 		return indexDef{}, model.NewProviderError("NotFound", "index not found", 404)
@@ -1131,11 +1178,14 @@ func (s *Service) GetIndex(ctx context.Context, project, database, cg, id string
 	}
 	var idx indexDef
 	_ = json.Unmarshal(e.Data, &idx)
-	return idx, nil
+	return normalizeIndex(db.DatabaseEdition, idx), nil
 }
 
-// DeleteIndex removes a composite index.
+// DeleteIndex removes an index.
 func (s *Service) DeleteIndex(ctx context.Context, project, database, cg, id string) error {
+	if err := s.requireDatabase(ctx, project, database); err != nil {
+		return err
+	}
 	if s.resources == nil {
 		return nil
 	}
