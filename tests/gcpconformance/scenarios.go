@@ -1824,6 +1824,50 @@ func Scenarios(suffix string) []Scenario {
 			Body: `{"queryScope":"COLLECTION","fields":[{"fieldPath":"status","order":"ASCENDING"}]}`},
 	)
 
+	// ─── Firestore unique index enforcement (FE2) ─────────────────────────────
+	// A unique Enterprise index rejects a write that would create a duplicate
+	// entry with ALREADY_EXISTS (409), and the exclusion is per collection group
+	// and per combination of indexed values. The chain records the rejected
+	// create/update, the legal "swap" commit that frees the value and reuses it
+	// in one batch, and the atomic rejection of a batch that creates the same
+	// entry twice (neither write lands).
+	fsUniqDB := "conf-uniq-db-" + suffix
+	fsUniqBase := "/v1/projects/" + p + "/databases/" + fsUniqDB
+	fsUniqDoc := func(id string) string {
+		return "projects/" + p + "/databases/" + fsUniqDB + "/documents/conf-users/" + id
+	}
+	fsUniqUser := func(id, email string) string {
+		return fmt.Sprintf(`{"update":{"name":%q,"fields":{"email":{"stringValue":%q}}}}`, fsUniqDoc(id), email)
+	}
+	sc = append(sc,
+		Scenario{Service: "firestore", Method: "POST",
+			Path: "/v1/projects/" + p + "/databases?databaseId=" + fsUniqDB,
+			Body: `{"type":"FIRESTORE_NATIVE","locationId":"nam5","databaseEdition":"ENTERPRISE"}`},
+		Scenario{Service: "firestore", Method: "POST",
+			Path: fsUniqBase + "/collectionGroups/conf-users/indexes",
+			Body: `{"queryScope":"COLLECTION_GROUP","density":"DENSE","unique":true,"fields":[{"fieldPath":"email","order":"ASCENDING"}]}`,
+			Save: map[string]string{"fsUniqIndex": "response.name"}},
+		Scenario{Service: "firestore", Method: "POST", Path: fsUniqBase + "/documents:commit",
+			Body: `{"writes":[` + fsUniqUser("alice", "alice@example.com") + `]}`},
+		// The duplicate entry is rejected, and alice keeps the value.
+		Scenario{Service: "firestore", Method: "POST", Path: fsUniqBase + "/documents:commit",
+			Body: `{"writes":[` + fsUniqUser("bob", "alice@example.com") + `]}`},
+		Scenario{Service: "firestore", Method: "POST", Path: fsUniqBase + "/documents:commit",
+			Body: `{"writes":[` + fsUniqUser("carol", "carol@example.com") + `]}`},
+		// An update onto the occupied value is the same duplicate.
+		Scenario{Service: "firestore", Method: "POST", Path: fsUniqBase + "/documents:commit",
+			Body: `{"writes":[` + fsUniqUser("carol", "alice@example.com") + `]}`},
+		// Deleting the holder and reusing the value in one commit is legal.
+		Scenario{Service: "firestore", Method: "POST", Path: fsUniqBase + "/documents:commit",
+			Body: fmt.Sprintf(`{"writes":[{"delete":%q},%s]}`, fsUniqDoc("alice"), fsUniqUser("dave", "alice@example.com"))},
+		// Two identical entries in one commit: rejected atomically.
+		Scenario{Service: "firestore", Method: "POST", Path: fsUniqBase + "/documents:commit",
+			Body: `{"writes":[` + fsUniqUser("erin", "erin@example.com") + `,` + fsUniqUser("frank", "erin@example.com") + `]}`},
+		// Nothing from the rejected commit was applied.
+		Scenario{Service: "firestore", Method: "GET", Path: fsUniqBase + "/documents/conf-users/erin"},
+		Scenario{Service: "firestore", Method: "DELETE", Path: "/v1/${fsUniqIndex}"},
+	)
+
 	// ─── Cloud Logging: folder-scoped views and their IAM policy ──────────────
 	// The view IAM trio exists on the folders scope as well as projects; a
 	// folder-scoped bucket + view drives get/set/test on the same core.
