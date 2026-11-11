@@ -67,6 +67,14 @@ func parseCryptoKeyName(name string) (project, loc, kr, key string) {
 // (GCS, Pub/Sub) has always received.
 var errKeyNotEnabled = errors.New("kms: key version not enabled")
 
+// kmsKeyState* classify an unusable CMEK in ProviderError.Data so a consumer
+// whose API documents distinct wording (Cloud Storage) can render it without
+// changing the generic message every other consumer sees.
+const (
+	kmsKeyStateNotFound   = "notFound"
+	kmsKeyStateNotEnabled = "notEnabled"
+)
+
 // keyNotEnabled is the FAILED_PRECONDITION answer for a CMEK whose primary
 // CryptoKeyVersion cannot encrypt: real GCP refuses the write/version instead
 // of silently falling back to Google-managed encryption.
@@ -75,9 +83,15 @@ func keyNotEnabled(kmsKeyName string) error {
 }
 
 // kmsKeyInvalid is the INVALID_ARGUMENT answer Wrap/Unwrap have always given
-// for a key they cannot use for any reason.
-func kmsKeyInvalid() error {
-	return model.NewProviderError("InvalidArgument", "KMS key invalid or missing", 400)
+// for a key they cannot use for any reason. Data["kmsKeyState"] classifies it
+// (notFound / notEnabled) and Data["kmsKeyName"] carries the name, for
+// consumers with their own error contract.
+func kmsKeyInvalid(kmsKeyName, state string) error {
+	data := map[string]any{"kmsKeyState": state}
+	if kmsKeyName != "" {
+		data["kmsKeyName"] = kmsKeyName
+	}
+	return model.NewProviderError("InvalidArgument", "KMS key invalid or missing", 400).WithData(data)
 }
 
 // resolveKey looks up the CryptoKey a CMEK name names and checks that its
@@ -87,13 +101,13 @@ func kmsKeyInvalid() error {
 func (e *encryptor) resolveKey(ctx context.Context, kmsKeyName string) (kms.CryptoKey, error) {
 	project, loc, kr, key := parseCryptoKeyName(kmsKeyName)
 	if project == "" {
-		return kms.CryptoKey{}, model.NewProviderError("InvalidArgument", "KMS key invalid or missing", 400)
+		return kms.CryptoKey{}, kmsKeyInvalid(kmsKeyName, kmsKeyStateNotFound)
 	}
 
 	cryptoKey, err := e.kmsStore.GetCryptoKey(ctx, project, loc, kr, key)
 	if err != nil {
-		if err == kms.ErrNoSuchCryptoKey {
-			return kms.CryptoKey{}, model.NewProviderError("InvalidArgument", "KMS key invalid or missing", 400)
+		if errors.Is(err, kms.ErrNoSuchCryptoKey) {
+			return kms.CryptoKey{}, kmsKeyInvalid(kmsKeyName, kmsKeyStateNotFound)
 		}
 		return kms.CryptoKey{}, err
 	}
@@ -152,7 +166,7 @@ func (e *encryptor) Wrap(ctx context.Context, accountID, kmsKeyName string) ([]b
 	cryptoKey, err := e.resolveKey(ctx, kmsKeyName)
 	if err != nil {
 		if errors.Is(err, errKeyNotEnabled) {
-			return nil, nil, kmsKeyInvalid()
+			return nil, nil, kmsKeyInvalid(kmsKeyName, kmsKeyStateNotEnabled)
 		}
 		return nil, nil, err
 	}
@@ -183,7 +197,7 @@ func (e *encryptor) WrapKeys(ctx context.Context, accountID string, kmsKeyNames 
 		cryptoKey, err := e.resolveKey(ctx, name)
 		if err != nil {
 			if errors.Is(err, errKeyNotEnabled) {
-				return nil, nil, kmsKeyInvalid()
+				return nil, nil, kmsKeyInvalid(name, kmsKeyStateNotEnabled)
 			}
 			return nil, nil, err
 		}
@@ -245,7 +259,7 @@ func (e *encryptor) Unwrap(ctx context.Context, accountID, kmsKeyName string, wr
 	}
 
 	if version.State != "ENABLED" {
-		return nil, kmsKeyInvalid()
+		return nil, kmsKeyInvalid(kmsKeyName, kmsKeyStateNotEnabled)
 	}
 
 	rawKMSDEK, err := e.kmsStore.KeyMaterial(ctx, project, loc, kr, key, wrapVersion)

@@ -458,7 +458,7 @@ The console is a single React app embedded in the binary (no separate server or 
 - **Cloud Run** — services and revisions over `/api/ui/v1/gcp/run`: services aggregated across regions, service/revision detail, and delete.
 - **BigQuery** — datasets, tables and jobs over `/api/ui/v1/gcp/bigquery`: list/create/delete datasets and tables, view a table's schema and a read-only row preview, and list/inspect/cancel/delete jobs.
 - **IAM** — service accounts over `/api/ui/v1/gcp/iam`: list/create/delete, detail (enable/disable/update), service-account keys (create with one-time private key, disable/enable/delete) and the service-account IAM policy.
-- **Cloud KMS** — key rings, crypto keys and versions over `/api/ui/v1/gcp/kms`: list/create key rings per location, list/create crypto keys, list/rotate/destroy/disable/enable versions, set the primary version, and edit key-ring/crypto-key IAM policies (cryptoKey policies are enforced default-permissively).
+- **Cloud KMS** — key rings, crypto keys and versions over `/api/ui/v1/gcp/kms`: list/create key rings per location, list/create crypto keys, list/rotate/destroy/restore/disable/enable versions, set the primary version, and edit key-ring/crypto-key IAM policies (cryptoKey policies are enforced default-permissively).
 - **Secret Manager** — secrets and versions over `/api/ui/v1/gcp/secretmanager`: list/create/update/delete secrets, add/reveal/destroy/disable/enable versions, and edit the secret IAM policy.
 - **Admin** — emulator status, clock control (real/fixed/offset), state reset, export, and named snapshots (create/revert/delete). Backed by the cloud-neutral `/api/ui/v1/admin` plane, which the shared UI core mounts for every cloud.
 
@@ -502,6 +502,12 @@ A topic's whole mutable surface round-trips through both transports: `labels`, `
 - **CMEK is store-and-serve.** `kmsKeyName` is format-validated only: the emulator has no Pub/Sub service agent, so it does not check the key's existence or grants. Envelope encryption does use the key on publish, and a rotation affects only later publishes — an old message keeps its per-message DEK and still decrypts. See [Cloud Pub/Sub: ordering, exactly-once and redelivery deviations](#cloud-pubsub-ordering-exactly-once-and-redelivery-deviations).
 - **Message transforms and ingestion sources are not executed.** JavaScript UDFs, AI inference and the GCS/Kinesis/MSK/Event Hubs/Confluent ingestion pollers are validated, stored and echoed, but no transform runs on publish and no source is polled.
 - **There is no `projects.schemas` API.** `schemaSettings.schema` is format-checked and served verbatim, but the emulator cannot create or resolve a schema (the Terraform module's `schema` input, which needs a `google_pubsub_schema`, therefore cannot run; the update gate exercises `schemaSettings` on a raw `google_pubsub_topic`). No publish is validated against a schema. That surface belongs to a future schemas service, not this one.
+
+### Cloud Storage: CMEK contract
+
+Cloud Storage resolves the CMEK of every write: a bucket `encryption.defaultKmsKeyName` (at create/update) and a per-object `kmsKeyName` (at upload, copy and rewrite) must name a `CryptoKey` that exists, lives in the bucket's location and has purpose `ENCRYPT_DECRYPT`, and the key's **primary** version must be usable — the documented rule, so a disabled/destroyed primary refuses the write rather than silently falling back to Google-managed encryption; naming a different, valid key on the operation is the documented escape hatch. A refused CMEK answers the real GCS contract: HTTP 400 with `errors[].reason` `invalid` and the documented message (`Cannot find the requested Cloud KMS encryption key.`, `Cloud KMS region 'global' not available for use with GCS region 'US'.`, `Malformed Cloud KMS crypto key: …/cryptoKeyVersions/1`), instead of the generic `internalError` shape.
+
+`Object.kmsKeyName` reports the **CryptoKeyVersion** that encrypted the object (`projects/…/cryptoKeys/{key}/cryptoKeyVersions/{n}`), as real GCS does — that is how objects still protected by a version being retired are found, and clients read it back and strip the version before re-using it as a write key, which the emulator also enforces (a version-qualified write key is the `Malformed Cloud KMS crypto key` 400).
 
 ### Cloud Storage: range reads are served from a whole-object decrypt
 

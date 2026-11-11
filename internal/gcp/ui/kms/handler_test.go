@@ -66,6 +66,9 @@ func (m *mockProvider) CryptoKeyVersionGet(_ context.Context, nr *model.Normaliz
 func (m *mockProvider) CryptoKeyVersionDestroy(_ context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	return m.reply(nr)
 }
+func (m *mockProvider) CryptoKeyVersionRestore(_ context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	return m.reply(nr)
+}
 func (m *mockProvider) CryptoKeyVersionUpdate(_ context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	return m.reply(nr)
 }
@@ -226,6 +229,25 @@ func TestSetVersionState_Disable(t *testing.T) {
 	}
 	if got := mock.lastNR.Params["body"].(map[string]any)["state"]; got != "DISABLED" {
 		t.Fatalf("state = %v", got)
+	}
+}
+
+func TestRestoreVersion_ReversesScheduledDestruction(t *testing.T) {
+	mock := &mockProvider{resp: &model.ProviderResponse{HTTPStatus: 200, Data: map[string]any{
+		"name": "projects/p/locations/global/keyRings/kr1/cryptoKeys/ck1/cryptoKeyVersions/2", "state": "DISABLED",
+	}}}
+	w := do(t, mock, http.MethodPost, "/locations/global/keyRings/kr1/cryptoKeys/ck1/versions/2/restore", "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", w.Code, w.Body.String())
+	}
+	if got := mock.lastNR.Action; got != "KMS.CryptoKeyVersionRestore" {
+		t.Fatalf("action = %v, want KMS.CryptoKeyVersionRestore", got)
+	}
+	if got := mock.lastNR.Params["name"]; got != "locations/global/keyRings/kr1/cryptoKeys/ck1/cryptoKeyVersions/2" {
+		t.Fatalf("name = %v", got)
+	}
+	if !strings.Contains(w.Body.String(), `"state":"DISABLED"`) {
+		t.Fatalf("body = %s, want the restored version", w.Body.String())
 	}
 }
 

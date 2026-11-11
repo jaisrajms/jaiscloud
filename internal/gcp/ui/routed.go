@@ -722,6 +722,12 @@ func (p routedKMS) CryptoKeyVersionDestroy(ctx context.Context, nr *model.Normal
 	}, nr)
 }
 
+func (p routedKMS) CryptoKeyVersionRestore(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+	return p.c.call(ctx, "KMS.CryptoKeyVersionRestore", func(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
+		return p.ProviderInterface.CryptoKeyVersionRestore(ctx, nr)
+	}, nr)
+}
+
 func (p routedKMS) CryptoKeyVersionUpdate(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 	return p.c.call(ctx, "KMS.CryptoKeyVersionUpdate", func(ctx context.Context, nr *model.NormalizedRequest) (*model.ProviderResponse, error) {
 		return p.ProviderInterface.CryptoKeyVersionUpdate(ctx, nr)

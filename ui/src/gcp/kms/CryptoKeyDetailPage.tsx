@@ -31,6 +31,7 @@ import {
   getCryptoKeyIam,
   listCryptoKeyVersions,
   putCryptoKeyIam,
+  restoreCryptoKeyVersion,
   setPrimaryVersion,
   type CryptoKeyVersion,
 } from '../../api/gcp/kms'
@@ -111,6 +112,12 @@ export function CryptoKeyDetailPage() {
   const destroy = useMutation({
     mutationFn: (version: CryptoKeyVersion) =>
       destroyCryptoKeyVersion(location, keyRing, key, version.versionId || ''),
+    onSuccess: invalidate,
+  })
+
+  const restore = useMutation({
+    mutationFn: (version: CryptoKeyVersion) =>
+      restoreCryptoKeyVersion(location, keyRing, key, version.versionId || ''),
     onSuccess: invalidate,
   })
 
@@ -196,7 +203,7 @@ export function CryptoKeyDetailPage() {
         </Box>
       )}
 
-      {(toggle.isError || destroy.isError || promote.isError || create.isError) && (
+      {(toggle.isError || destroy.isError || restore.isError || promote.isError || create.isError) && (
         <Alert severity="error" sx={{ mb: 2 }}>
           The version operation failed.
         </Alert>
@@ -264,6 +271,11 @@ export function CryptoKeyDetailPage() {
                           </IconButton>
                         </span>
                       </Tooltip>
+                    )}
+                    {version.state === 'DESTROY_SCHEDULED' && (
+                      <Button size="small" disabled={restore.isPending} onClick={() => restore.mutate(version)}>
+                        Restore
+                      </Button>
                     )}
                     {enabled && isSignAlgorithm(version.algorithm) && (
                       <Button size="small" onClick={() => setSignVersion(version)}>

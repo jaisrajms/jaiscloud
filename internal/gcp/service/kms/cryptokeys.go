@@ -499,12 +499,24 @@ func (s *Service) UpdateCryptoKey(ctx context.Context, project, location, kr, id
 }
 
 // SetPrimaryVersion makes a version the crypto key's primary.
+//
+// Only ENCRYPT_DECRYPT keys have a primary version. Real Cloud KMS answers
+// 400 FAILED_PRECONDITION ("Keys with purpose ASYMMETRIC_SIGN do not have a
+// primary version.") for any other purpose — verified against real GCP — and
+// the refusal happens before the store is touched so a rejected call cannot
+// leave a primary pointer behind.
 func (s *Service) SetPrimaryVersion(ctx context.Context, project, location, kr, id, version string) (kmsstore.CryptoKey, error) {
+	ck, err := s.keys.GetCryptoKey(ctx, project, location, kr, id)
+	if err != nil {
+		return kmsstore.CryptoKey{}, keyErr(err)
+	}
+	if ck.Purpose != "" && ck.Purpose != "ENCRYPT_DECRYPT" {
+		return kmsstore.CryptoKey{}, failedPrecondition("Keys with purpose " + ck.Purpose + " do not have a primary version.")
+	}
 	if err := s.keys.UpdatePrimaryVersion(ctx, project, location, kr, id, version); err != nil {
 		return kmsstore.CryptoKey{}, versionErr(err)
 	}
-	ck, err := s.keys.GetCryptoKey(ctx, project, location, kr, id)
-	if err != nil {
+	if ck, err = s.keys.GetCryptoKey(ctx, project, location, kr, id); err != nil {
 		return kmsstore.CryptoKey{}, keyErr(err)
 	}
 	return ck, nil

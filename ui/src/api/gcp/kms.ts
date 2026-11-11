@@ -209,6 +209,16 @@ export const destroyCryptoKeyVersion = (
     `${cryptoKeyPath(location, keyRing, key)}/versions/${encodeURIComponent(version)}/destroy`,
   )
 
+export const restoreCryptoKeyVersion = (
+  location: string,
+  keyRing: string,
+  key: string,
+  version: string,
+) =>
+  api.post<CryptoKeyVersion>(
+    `${cryptoKeyPath(location, keyRing, key)}/versions/${encodeURIComponent(version)}/restore`,
+  )
+
 export const disableCryptoKeyVersion = (
   location: string,
   keyRing: string,
