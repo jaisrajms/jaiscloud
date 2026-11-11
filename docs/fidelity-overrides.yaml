@@ -88,6 +88,70 @@ operations:
     operation: CloudDNS.Unimplemented
     state: unsupported
     reason: "explicit Unimplemented stub"
+
+  # Cloud Billing v1 (plan CB4). The project↔billing-account association is the
+  # only billing resource the emulator models; the billing-account catalog, the
+  # organization-scoped catalog and the service/SKU pricing catalog are refused
+  # by design (plan CB5) as explicit Unimplemented 501 stubs that name the
+  # Discovery method, and billingAccounts.get can only answer NotFound because no
+  # account exists to return.
+  - service: cloudbilling
+    operation: CloudBilling.BillingAccountsGet
+    state: limited
+    reason: "no billing-account catalog exists (plan CB5), so get answers NotFound 404 for every id — it never fabricates an account; the empty list is the whole catalog surface"
+  - service: cloudbilling
+    operation: CloudBilling.BillingAccountsCreate
+    state: unsupported
+    reason: "the billing-account catalog is not modelled (plan CB5); explicit Unimplemented 501 stub naming billingAccounts.create"
+  - service: cloudbilling
+    operation: CloudBilling.BillingAccountsPatch
+    state: unsupported
+    reason: "the billing-account catalog is not modelled (plan CB5); explicit Unimplemented 501 stub naming billingAccounts.patch"
+  - service: cloudbilling
+    operation: CloudBilling.BillingAccountsMove
+    state: unsupported
+    reason: "the billing-account catalog is not modelled (plan CB5); explicit Unimplemented 501 stub naming billingAccounts.move"
+  - service: cloudbilling
+    operation: CloudBilling.BillingAccountsGetIamPolicy
+    state: unsupported
+    reason: "billing-account IAM policy is not modelled (plan CB5); explicit Unimplemented 501 stub (only the permissive testIamPermissions echo is served)"
+  - service: cloudbilling
+    operation: CloudBilling.BillingAccountsSetIamPolicy
+    state: unsupported
+    reason: "billing-account IAM policy is not modelled (plan CB5); explicit Unimplemented 501 stub — returning a fabricated policy would be worse than failing loud"
+  - service: cloudbilling
+    operation: CloudBilling.BillingAccountsProjectsList
+    state: unsupported
+    reason: "no billing-account catalog exists to list projects for (plan CB5); explicit Unimplemented 501 stub"
+  - service: cloudbilling
+    operation: CloudBilling.BillingAccountsSubAccountsCreate
+    state: unsupported
+    reason: "billing sub-accounts are not modelled (plan CB5); explicit Unimplemented 501 stub"
+  - service: cloudbilling
+    operation: CloudBilling.BillingAccountsSubAccountsList
+    state: unsupported
+    reason: "billing sub-accounts are not modelled (plan CB5); explicit Unimplemented 501 stub"
+  - service: cloudbilling
+    operation: CloudBilling.OrganizationsBillingAccountsCreate
+    state: unsupported
+    reason: "the organization-scoped billing-account catalog is not modelled (plan CB5); explicit Unimplemented 501 stub"
+  - service: cloudbilling
+    operation: CloudBilling.OrganizationsBillingAccountsList
+    state: unsupported
+    reason: "the organization-scoped billing-account catalog is not modelled (plan CB5); explicit Unimplemented 501 stub"
+  - service: cloudbilling
+    operation: CloudBilling.OrganizationsBillingAccountsMove
+    state: unsupported
+    reason: "the organization-scoped billing-account catalog is not modelled (plan CB5); explicit Unimplemented 501 stub"
+  - service: cloudbilling
+    operation: CloudBilling.ServicesList
+    state: unsupported
+    reason: "no service/SKU pricing catalog exists in the emulator (plan CB5); explicit Unimplemented 501 stub"
+  - service: cloudbilling
+    operation: CloudBilling.ServicesSkusList
+    state: unsupported
+    reason: "no SKU catalog or pricing data exists in the emulator (plan CB5); explicit Unimplemented 501 stub"
+
   - service: cloudsql
     operation: CloudSQL.Unimplemented
     state: unsupported

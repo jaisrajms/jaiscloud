@@ -1,12 +1,12 @@
 {
   "version": 1,
   "summary": {
-    "total": 1259,
+    "total": 1277,
     "by_state": {
-      "ga": 1044,
-      "limited": 162,
+      "ga": 1048,
+      "limited": 163,
       "preview": 14,
-      "unsupported": 39
+      "unsupported": 52
     },
     "by_transport": {
       "grpc": {
@@ -15,10 +15,10 @@
         "unsupported": 28
       },
       "rest": {
-        "ga": 594,
-        "limited": 139,
+        "ga": 598,
+        "limited": 140,
         "preview": 14,
-        "unsupported": 11
+        "unsupported": 24
       }
     },
     "by_service": {
@@ -26,6 +26,11 @@
         "ga": 1,
         "limited": 36,
         "unsupported": 3
+      },
+      "cloudbilling": {
+        "ga": 4,
+        "limited": 1,
+        "unsupported": 13
       },
       "clouddns": {
         "limited": 20,
@@ -135,11 +140,11 @@
     "evidence": {
       "verified": {
         "grpc": 455,
-        "rest": 710
+        "rest": 714
       },
       "unverified": {
         "grpc": 46,
-        "rest": 48
+        "rest": 62
       }
     },
     "grpc_only_services": [
@@ -166,6 +171,36 @@
     },
     {
       "service": "bigquery",
+      "transport": "grpc",
+      "source": "unavailable",
+      "published": 0,
+      "served": 0,
+      "graded": 0,
+      "note": "no gRPC service is registered for this service, so its published RPC surface cannot be derived; its surface is REST-only in the matrix"
+    },
+    {
+      "service": "cloudbilling",
+      "transport": "rest",
+      "source": "discovery",
+      "source_ref": "cloudbilling.v1",
+      "published": 28,
+      "served": 18,
+      "graded": 18,
+      "unserved": [
+        "cloudbilling.getCard",
+        "cloudbilling.message.send",
+        "cloudbilling.message.stream",
+        "cloudbilling.tasks.cancel",
+        "cloudbilling.tasks.get",
+        "cloudbilling.tasks.pushNotificationConfigs.create",
+        "cloudbilling.tasks.pushNotificationConfigs.delete",
+        "cloudbilling.tasks.pushNotificationConfigs.get",
+        "cloudbilling.tasks.pushNotificationConfigs.list",
+        "cloudbilling.tasks.subscribe"
+      ]
+    },
+    {
+      "service": "cloudbilling",
       "transport": "grpc",
       "source": "unavailable",
       "published": 0,
@@ -2012,6 +2047,262 @@
       "evidence": [
         "discovery=bigquery.tables.update",
         "mutating",
+        "postgres=yes",
+        "verified=false (rest, no validated transcript response)"
+      ]
+    },
+    {
+      "service": "cloudbilling",
+      "operation": "CloudBilling.BillingAccountTestIamPermissions",
+      "transport": "rest",
+      "state": "ga",
+      "discovery": "cloudbilling.billingAccounts.testIamPermissions",
+      "verified": true,
+      "evidence": [
+        "discovery=cloudbilling.billingAccounts.testIamPermissions",
+        "postgres=yes",
+        "verified=true (rest, 1 transcript entries)"
+      ]
+    },
+    {
+      "service": "cloudbilling",
+      "operation": "CloudBilling.BillingAccountsCreate",
+      "transport": "rest",
+      "state": "unsupported",
+      "reason": "the billing-account catalog is not modelled (plan CB5); explicit Unimplemented 501 stub naming billingAccounts.create",
+      "discovery": "cloudbilling.billingAccounts.create",
+      "verified": false,
+      "evidence": [
+        "discovery=cloudbilling.billingAccounts.create",
+        "mutating",
+        "postgres=yes",
+        "verified=false (rest, no validated transcript response)"
+      ]
+    },
+    {
+      "service": "cloudbilling",
+      "operation": "CloudBilling.BillingAccountsGet",
+      "transport": "rest",
+      "state": "limited",
+      "reason": "no billing-account catalog exists (plan CB5), so get answers NotFound 404 for every id — it never fabricates an account; the empty list is the whole catalog surface",
+      "discovery": "cloudbilling.billingAccounts.get",
+      "verified": false,
+      "evidence": [
+        "discovery=cloudbilling.billingAccounts.get",
+        "postgres=yes",
+        "verified=false (rest, no validated transcript response)"
+      ]
+    },
+    {
+      "service": "cloudbilling",
+      "operation": "CloudBilling.BillingAccountsGetIamPolicy",
+      "transport": "rest",
+      "state": "unsupported",
+      "reason": "billing-account IAM policy is not modelled (plan CB5); explicit Unimplemented 501 stub (only the permissive testIamPermissions echo is served)",
+      "discovery": "cloudbilling.billingAccounts.getIamPolicy",
+      "verified": false,
+      "evidence": [
+        "discovery=cloudbilling.billingAccounts.getIamPolicy",
+        "postgres=yes",
+        "verified=false (rest, no validated transcript response)"
+      ]
+    },
+    {
+      "service": "cloudbilling",
+      "operation": "CloudBilling.BillingAccountsList",
+      "transport": "rest",
+      "state": "ga",
+      "discovery": "cloudbilling.billingAccounts.list",
+      "verified": true,
+      "evidence": [
+        "discovery=cloudbilling.billingAccounts.list",
+        "postgres=yes",
+        "verified=true (rest, 1 transcript entries)"
+      ]
+    },
+    {
+      "service": "cloudbilling",
+      "operation": "CloudBilling.BillingAccountsMove",
+      "transport": "rest",
+      "state": "unsupported",
+      "reason": "the billing-account catalog is not modelled (plan CB5); explicit Unimplemented 501 stub naming billingAccounts.move",
+      "discovery": "cloudbilling.billingAccounts.move",
+      "verified": false,
+      "evidence": [
+        "discovery=cloudbilling.billingAccounts.move",
+        "mutating",
+        "postgres=yes",
+        "verified=false (rest, no validated transcript response)"
+      ]
+    },
+    {
+      "service": "cloudbilling",
+      "operation": "CloudBilling.BillingAccountsPatch",
+      "transport": "rest",
+      "state": "unsupported",
+      "reason": "the billing-account catalog is not modelled (plan CB5); explicit Unimplemented 501 stub naming billingAccounts.patch",
+      "discovery": "cloudbilling.billingAccounts.patch",
+      "verified": false,
+      "evidence": [
+        "discovery=cloudbilling.billingAccounts.patch",
+        "mutating",
+        "postgres=yes",
+        "verified=false (rest, no validated transcript response)"
+      ]
+    },
+    {
+      "service": "cloudbilling",
+      "operation": "CloudBilling.BillingAccountsProjectsList",
+      "transport": "rest",
+      "state": "unsupported",
+      "reason": "no billing-account catalog exists to list projects for (plan CB5); explicit Unimplemented 501 stub",
+      "discovery": "cloudbilling.billingAccounts.projects.list",
+      "verified": false,
+      "evidence": [
+        "discovery=cloudbilling.billingAccounts.projects.list",
+        "postgres=yes",
+        "verified=false (rest, no validated transcript response)"
+      ]
+    },
+    {
+      "service": "cloudbilling",
+      "operation": "CloudBilling.BillingAccountsSetIamPolicy",
+      "transport": "rest",
+      "state": "unsupported",
+      "reason": "billing-account IAM policy is not modelled (plan CB5); explicit Unimplemented 501 stub — returning a fabricated policy would be worse than failing loud",
+      "discovery": "cloudbilling.billingAccounts.setIamPolicy",
+      "verified": false,
+      "evidence": [
+        "discovery=cloudbilling.billingAccounts.setIamPolicy",
+        "mutating",
+        "postgres=yes",
+        "verified=false (rest, no validated transcript response)"
+      ]
+    },
+    {
+      "service": "cloudbilling",
+      "operation": "CloudBilling.BillingAccountsSubAccountsCreate",
+      "transport": "rest",
+      "state": "unsupported",
+      "reason": "billing sub-accounts are not modelled (plan CB5); explicit Unimplemented 501 stub",
+      "discovery": "cloudbilling.billingAccounts.subAccounts.create",
+      "verified": false,
+      "evidence": [
+        "discovery=cloudbilling.billingAccounts.subAccounts.create",
+        "mutating",
+        "postgres=yes",
+        "verified=false (rest, no validated transcript response)"
+      ]
+    },
+    {
+      "service": "cloudbilling",
+      "operation": "CloudBilling.BillingAccountsSubAccountsList",
+      "transport": "rest",
+      "state": "unsupported",
+      "reason": "billing sub-accounts are not modelled (plan CB5); explicit Unimplemented 501 stub",
+      "discovery": "cloudbilling.billingAccounts.subAccounts.list",
+      "verified": false,
+      "evidence": [
+        "discovery=cloudbilling.billingAccounts.subAccounts.list",
+        "postgres=yes",
+        "verified=false (rest, no validated transcript response)"
+      ]
+    },
+    {
+      "service": "cloudbilling",
+      "operation": "CloudBilling.OrganizationsBillingAccountsCreate",
+      "transport": "rest",
+      "state": "unsupported",
+      "reason": "the organization-scoped billing-account catalog is not modelled (plan CB5); explicit Unimplemented 501 stub",
+      "discovery": "cloudbilling.organizations.billingAccounts.create",
+      "verified": false,
+      "evidence": [
+        "discovery=cloudbilling.organizations.billingAccounts.create",
+        "mutating",
+        "postgres=yes",
+        "verified=false (rest, no validated transcript response)"
+      ]
+    },
+    {
+      "service": "cloudbilling",
+      "operation": "CloudBilling.OrganizationsBillingAccountsList",
+      "transport": "rest",
+      "state": "unsupported",
+      "reason": "the organization-scoped billing-account catalog is not modelled (plan CB5); explicit Unimplemented 501 stub",
+      "discovery": "cloudbilling.organizations.billingAccounts.list",
+      "verified": false,
+      "evidence": [
+        "discovery=cloudbilling.organizations.billingAccounts.list",
+        "postgres=yes",
+        "verified=false (rest, no validated transcript response)"
+      ]
+    },
+    {
+      "service": "cloudbilling",
+      "operation": "CloudBilling.OrganizationsBillingAccountsMove",
+      "transport": "rest",
+      "state": "unsupported",
+      "reason": "the organization-scoped billing-account catalog is not modelled (plan CB5); explicit Unimplemented 501 stub",
+      "discovery": "cloudbilling.organizations.billingAccounts.move",
+      "verified": false,
+      "evidence": [
+        "discovery=cloudbilling.organizations.billingAccounts.move",
+        "mutating",
+        "postgres=yes",
+        "verified=false (rest, no validated transcript response)"
+      ]
+    },
+    {
+      "service": "cloudbilling",
+      "operation": "CloudBilling.ProjectGetBillingInfo",
+      "transport": "rest",
+      "state": "ga",
+      "discovery": "cloudbilling.projects.getBillingInfo",
+      "verified": true,
+      "evidence": [
+        "discovery=cloudbilling.projects.getBillingInfo",
+        "postgres=yes",
+        "verified=true (rest, 1 transcript entries)"
+      ]
+    },
+    {
+      "service": "cloudbilling",
+      "operation": "CloudBilling.ProjectUpdateBillingInfo",
+      "transport": "rest",
+      "state": "ga",
+      "discovery": "cloudbilling.projects.updateBillingInfo",
+      "verified": true,
+      "evidence": [
+        "discovery=cloudbilling.projects.updateBillingInfo",
+        "mutating",
+        "postgres=yes",
+        "verified=true (rest, 1 transcript entries)"
+      ]
+    },
+    {
+      "service": "cloudbilling",
+      "operation": "CloudBilling.ServicesList",
+      "transport": "rest",
+      "state": "unsupported",
+      "reason": "no service/SKU pricing catalog exists in the emulator (plan CB5); explicit Unimplemented 501 stub",
+      "discovery": "cloudbilling.services.list",
+      "verified": false,
+      "evidence": [
+        "discovery=cloudbilling.services.list",
+        "postgres=yes",
+        "verified=false (rest, no validated transcript response)"
+      ]
+    },
+    {
+      "service": "cloudbilling",
+      "operation": "CloudBilling.ServicesSkusList",
+      "transport": "rest",
+      "state": "unsupported",
+      "reason": "no SKU catalog or pricing data exists in the emulator (plan CB5); explicit Unimplemented 501 stub",
+      "discovery": "cloudbilling.services.skus.list",
+      "verified": false,
+      "evidence": [
+        "discovery=cloudbilling.services.skus.list",
         "postgres=yes",
         "verified=false (rest, no validated transcript response)"
       ]

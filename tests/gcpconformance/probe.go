@@ -104,6 +104,16 @@ var bodyOverrides = map[string]map[string]any{
 		},
 	},
 
+	// Cloud Billing: the ProjectBillingInfo body carries billingAccountName (the
+	// full resource name; billingEnabled is output-only), and the permissive
+	// testIamPermissions echo returns exactly the requested set.
+	"cloudbilling.projects.updateBillingInfo": {
+		"billingAccountName": "billingAccounts/0X0X0X-0X0X0X-0X0X0X",
+	},
+	"cloudbilling.billingAccounts.testIamPermissions": {
+		"permissions": []any{"billing.resourceAssociations.list"},
+	},
+
 	"logging.billingAccounts.sinks.create": {
 		"name":        "$ID",
 		"destination": "logging.googleapis.com/projects/" + defaultProject,

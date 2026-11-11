@@ -12,22 +12,22 @@ emulator registers a route for and how many the cells grade, so a service can ne
 read as complete while most of its published surface is missing. A method with no
 registered route is listed there as **not served**; it is never counted as `ga`.
 
-Cells: **1259**
+Cells: **1277**
 
 ## Rollup
 
 | state | count |
 | --- | --- |
-| ga | 1044 |
-| limited | 162 |
+| ga | 1048 |
+| limited | 163 |
 | preview | 14 |
-| unsupported | 39 |
+| unsupported | 52 |
 
 ### By transport
 
 | transport | ga | limited | preview | unsupported |
 | --- | --- | --- | --- | --- |
-| rest | 594 | 139 | 14 | 11 |
+| rest | 598 | 140 | 14 | 24 |
 | grpc | 450 | 23 | 0 | 28 |
 
 gRPC-only services (no REST transport): firestoreadmin, operations.
@@ -38,7 +38,7 @@ Cells backed by **real recorded evidence** (`verified`): a schema-validated tran
 
 | transport | verified | unverified |
 | --- | --- | --- |
-| rest | 710 | 48 |
+| rest | 714 | 62 |
 | grpc | 455 | 46 |
 
 ## Coverage
@@ -49,6 +49,8 @@ Cells backed by **real recorded evidence** (`verified`): a schema-validated tran
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | bigquery | rest | 47 | 45 | 34 | 2 | 11 | bigquery.v2 |
 | bigquery | grpc | — | — | — | — | — | unavailable |
+| cloudbilling | rest | 28 | 18 | 18 | 10 | 0 | cloudbilling.v1 |
+| cloudbilling | grpc | — | — | — | — | — | unavailable |
 | clouddns | rest | 40 | 40 | 20 | 0 | 20 | dns.v1 |
 | clouddns | grpc | — | — | — | — | — | unavailable |
 | cloudsql | rest | 80 | 69 | 27 | 11 | 42 | sqladmin.v1 |
@@ -114,6 +116,7 @@ Cells backed by **real recorded evidence** (`verified`): a schema-validated tran
 
 - `bigquery` REST: 11 served method(s) have no graded cell; 9 of them are served only by a documented UNIMPLEMENTED stub (served/unsupported, never absent)
 - `bigquery` GRPC: no gRPC service is registered for this service, so its published RPC surface cannot be derived; its surface is REST-only in the matrix
+- `cloudbilling` GRPC: no gRPC service is registered for this service, so its published RPC surface cannot be derived; its surface is REST-only in the matrix
 - `clouddns` REST: 20 served method(s) have no graded cell; 20 of them are served only by a documented UNIMPLEMENTED stub (served/unsupported, never absent)
 - `clouddns` GRPC: no gRPC service is registered for this service, so its published RPC surface cannot be derived; its surface is REST-only in the matrix
 - `cloudsql` REST: 42 served method(s) have no graded cell; 42 of them are served only by a documented UNIMPLEMENTED stub (served/unsupported, never absent)
@@ -138,6 +141,7 @@ Cells backed by **real recorded evidence** (`verified`): a schema-validated tran
 ### Published methods with no registered route
 
 - **bigquery** REST (2): bigquery.datasets.undelete, bigquery.projects.list
+- **cloudbilling** REST (10): cloudbilling.getCard, cloudbilling.message.send, cloudbilling.message.stream, cloudbilling.tasks.cancel, cloudbilling.tasks.get, cloudbilling.tasks.pushNotificationConfigs.create, cloudbilling.tasks.pushNotificationConfigs.delete, cloudbilling.tasks.pushNotificationConfigs.get, cloudbilling.tasks.pushNotificationConfigs.list, cloudbilling.tasks.subscribe
 - **cloudsql** REST (11): sql.Backups.CreateBackup, sql.Backups.DeleteBackup, sql.Backups.GetBackup, sql.Backups.ListBackups, sql.Backups.UpdateBackup, sql.blueGreenDeployments.create, sql.blueGreenDeployments.delete, sql.blueGreenDeployments.get, sql.blueGreenDeployments.list, sql.connect.resolve, sql.instances.pointInTimeRestore
 - **compute** REST (37): compute.firewallPolicies.addAssociation, compute.firewallPolicies.addRule, compute.firewallPolicies.cloneRules, compute.firewallPolicies.delete, compute.firewallPolicies.get, compute.firewallPolicies.getAssociation, compute.firewallPolicies.getIamPolicy, compute.firewallPolicies.getRule, compute.firewallPolicies.insert, compute.firewallPolicies.list, compute.firewallPolicies.listAssociations, compute.firewallPolicies.move, compute.firewallPolicies.patch, compute.firewallPolicies.patchRule, compute.firewallPolicies.removeAssociation, compute.firewallPolicies.removeRule, compute.firewallPolicies.setIamPolicy, compute.firewallPolicies.testIamPermissions, compute.globalOrganizationOperations.delete, compute.globalOrganizationOperations.get, compute.globalOrganizationOperations.list, compute.organizationSecurityPolicies.addAssociation, compute.organizationSecurityPolicies.addRule, compute.organizationSecurityPolicies.copyRules, compute.organizationSecurityPolicies.delete, compute.organizationSecurityPolicies.get, compute.organizationSecurityPolicies.getAssociation, compute.organizationSecurityPolicies.getRule, compute.organizationSecurityPolicies.insert, compute.organizationSecurityPolicies.list, compute.organizationSecurityPolicies.listAssociations, compute.organizationSecurityPolicies.listPreconfiguredExpressionSets, compute.organizationSecurityPolicies.move, compute.organizationSecurityPolicies.patch, compute.organizationSecurityPolicies.patchRule, compute.organizationSecurityPolicies.removeAssociation, compute.organizationSecurityPolicies.removeRule
 - **container** REST (40): container.projects.aggregated.usableSubnetworks.list, container.projects.locations.clusters.checkAutopilotCompatibility, container.projects.locations.clusters.completeControlPlaneUpgrade, container.projects.locations.clusters.fetchClusterUpgradeInfo, container.projects.locations.clusters.getJwks, container.projects.locations.clusters.nodePools.completeUpgrade, container.projects.locations.clusters.nodePools.fetchNodePoolUpgradeInfo, container.projects.locations.clusters.well-known.getOpenid-configuration, container.projects.zones.clusters.addons, container.projects.zones.clusters.completeControlPlaneUpgrade, container.projects.zones.clusters.completeIpRotation, container.projects.zones.clusters.create, container.projects.zones.clusters.delete, container.projects.zones.clusters.fetchClusterUpgradeInfo, container.projects.zones.clusters.get, container.projects.zones.clusters.legacyAbac, container.projects.zones.clusters.list, container.projects.zones.clusters.locations, container.projects.zones.clusters.logging, container.projects.zones.clusters.master, container.projects.zones.clusters.monitoring, container.projects.zones.clusters.nodePools.autoscaling, container.projects.zones.clusters.nodePools.create, container.projects.zones.clusters.nodePools.delete, container.projects.zones.clusters.nodePools.fetchNodePoolUpgradeInfo, container.projects.zones.clusters.nodePools.get, container.projects.zones.clusters.nodePools.list, container.projects.zones.clusters.nodePools.rollback, container.projects.zones.clusters.nodePools.setManagement, container.projects.zones.clusters.nodePools.setSize, container.projects.zones.clusters.nodePools.update, container.projects.zones.clusters.resourceLabels, container.projects.zones.clusters.setMaintenancePolicy, container.projects.zones.clusters.setMasterAuth, container.projects.zones.clusters.setNetworkPolicy, container.projects.zones.clusters.startIpRotation, container.projects.zones.clusters.update, container.projects.zones.operations.cancel, container.projects.zones.operations.get, container.projects.zones.operations.list
@@ -214,6 +218,35 @@ _40 cell(s): ga=1 limited=36 preview=0 unsupported=3_
 | BigQuery.UpdateRoutine | rest | limited | yes | PUT replace or updateMask merge over the stored Routine, with the etag precondition (412 conditionNotMet); the body is stored, not executed |
 | BigQuery.UpdateRowAccessPolicy | rest | limited | yes | PUT replace or updateMask merge over the stored policy, with the etag precondition (412 conditionNotMet); the predicate is stored, not enforced |
 | BigQuery.UpdateTable | rest | limited | no | documented Standard SQL subset (one pure-Go SQLite engine in both memory and --dsn modes, docs/gcp/bigquery-sql-engine.md §5); DDL/DML jobs complete synchronously and paging/getQueryResults snapshot semantics are simplified; load jobs cover one or more gs:// objects (including a single-'*' wildcard) or an uploaded file (multipart / resumable media session) of NEWLINE_DELIMITED_JSON, CSV, Parquet or Avro, with a supplied schema, an embedded file schema, or autodetect; gzip-compressed CSV/JSON is auto-detected; useAvroLogicalTypes selects logical vs raw Avro types; Parquet/Avro DECIMAL loads exactly through decimalTargetTypes (NUMERIC/BIGNUMERIC/STRING), Parquet MAP follows parquetOptions.mapTargetType, Parquet GEOMETRY/GEOGRAPHY load as hex-encoded WKB, and Avro MAP/DURATION/multi-branch unions follow the Avro conversion table (ORC and Parquet VARIANT fail loud — BigQuery documents no batch-load mapping for either) |
+
+## cloudbilling
+
+_Coverage: REST **18 of 28** published methods served · 10 not served · 18 graded (`cloudbilling.v1` Discovery)_
+
+_Coverage: GRPC: coverage unavailable — no gRPC service is registered for this service, so its published RPC surface cannot be derived; its surface is REST-only in the matrix_
+
+_18 cell(s): ga=4 limited=1 preview=0 unsupported=13_
+
+| operation | transport | state | verified | reason |
+| --- | --- | --- | --- | --- |
+| CloudBilling.BillingAccountTestIamPermissions | rest | ga | yes | — |
+| CloudBilling.BillingAccountsCreate | rest | unsupported | no | the billing-account catalog is not modelled (plan CB5); explicit Unimplemented 501 stub naming billingAccounts.create |
+| CloudBilling.BillingAccountsGet | rest | limited | no | no billing-account catalog exists (plan CB5), so get answers NotFound 404 for every id — it never fabricates an account; the empty list is the whole catalog surface |
+| CloudBilling.BillingAccountsGetIamPolicy | rest | unsupported | no | billing-account IAM policy is not modelled (plan CB5); explicit Unimplemented 501 stub (only the permissive testIamPermissions echo is served) |
+| CloudBilling.BillingAccountsList | rest | ga | yes | — |
+| CloudBilling.BillingAccountsMove | rest | unsupported | no | the billing-account catalog is not modelled (plan CB5); explicit Unimplemented 501 stub naming billingAccounts.move |
+| CloudBilling.BillingAccountsPatch | rest | unsupported | no | the billing-account catalog is not modelled (plan CB5); explicit Unimplemented 501 stub naming billingAccounts.patch |
+| CloudBilling.BillingAccountsProjectsList | rest | unsupported | no | no billing-account catalog exists to list projects for (plan CB5); explicit Unimplemented 501 stub |
+| CloudBilling.BillingAccountsSetIamPolicy | rest | unsupported | no | billing-account IAM policy is not modelled (plan CB5); explicit Unimplemented 501 stub — returning a fabricated policy would be worse than failing loud |
+| CloudBilling.BillingAccountsSubAccountsCreate | rest | unsupported | no | billing sub-accounts are not modelled (plan CB5); explicit Unimplemented 501 stub |
+| CloudBilling.BillingAccountsSubAccountsList | rest | unsupported | no | billing sub-accounts are not modelled (plan CB5); explicit Unimplemented 501 stub |
+| CloudBilling.OrganizationsBillingAccountsCreate | rest | unsupported | no | the organization-scoped billing-account catalog is not modelled (plan CB5); explicit Unimplemented 501 stub |
+| CloudBilling.OrganizationsBillingAccountsList | rest | unsupported | no | the organization-scoped billing-account catalog is not modelled (plan CB5); explicit Unimplemented 501 stub |
+| CloudBilling.OrganizationsBillingAccountsMove | rest | unsupported | no | the organization-scoped billing-account catalog is not modelled (plan CB5); explicit Unimplemented 501 stub |
+| CloudBilling.ProjectGetBillingInfo | rest | ga | yes | — |
+| CloudBilling.ProjectUpdateBillingInfo | rest | ga | yes | — |
+| CloudBilling.ServicesList | rest | unsupported | no | no service/SKU pricing catalog exists in the emulator (plan CB5); explicit Unimplemented 501 stub |
+| CloudBilling.ServicesSkusList | rest | unsupported | no | no SKU catalog or pricing data exists in the emulator (plan CB5); explicit Unimplemented 501 stub |
 
 ## clouddns
 

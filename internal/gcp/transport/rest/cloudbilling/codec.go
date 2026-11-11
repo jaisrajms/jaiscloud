@@ -14,18 +14,22 @@
 //	                                                   (cloudbilling.billingAccounts.testIamPermissions)
 //
 // The billing-account catalog itself (create/patch/move, subAccounts.*,
-// organizations.*, services.*, skus.*, the IAM policy methods) is deliberately
-// not modelled (plan CB5) and fails loud with Unimplemented 501 — never a
-// plausible empty body. Any other path answers UnsupportedOperation 404. The
-// Codec is a NormalizedRequest adapter (HTTP path/query/body ↔ the core's typed
-// API); the Provider holds the routes. Neither owns business logic — both
-// delegate to the core Service in internal/gcp/service/cloudbilling.
+// organizations.billingAccounts.*, services.*, skus.*, the IAM policy methods)
+// is deliberately not modelled (plan CB5). Those paths are still claimed — the
+// codec decodes each to its own action so the Provider answers an explicit
+// Unimplemented 501 naming the Discovery method (never a plausible empty body,
+// and never the unknown-service 404 the path had before the document was
+// vendored). The live document's unrelated tasks.* / message:send|stream /
+// getCard cluster is not a Cloud Billing surface and stays unclaimed. Any other
+// path answers UnsupportedOperation 404. The Codec is a NormalizedRequest
+// adapter (HTTP path/query/body ↔ the core's typed API); the Provider holds the
+// routes. Neither owns business logic — both delegate to the core Service in
+// internal/gcp/service/cloudbilling.
 package cloudbilling
 
 import (
 	"encoding/json"
 	"net/http"
-	"strings"
 
 	"jaiscloud/internal/gcp/gcperr"
 	"jaiscloud/internal/gcp/wire"
@@ -48,12 +52,15 @@ func NewCodec() *Codec { return &Codec{} }
 func (c *Codec) ServiceName() string { return ServiceName }
 
 // Decode parses a v1 Cloud Billing path into a NormalizedRequest. Params carry
-// the path ids (project or billingAccount) and the decoded JSON body (write
-// methods), plus any query parameters (alt, prettyPrint, ...), which are
-// ignored. Two path families are decoded:
+// the path ids (project, billingAccount or organization) and the decoded JSON
+// body (write methods), plus any query parameters (alt, prettyPrint, ...), which
+// are ignored. Three path families are decoded:
 //
 //   - the top-level billing-account collection, /v1/billingAccounts..., which
 //     has no project segment and is therefore claimed first;
+//   - the organization billing-account collection,
+//     /v1/organizations/{org}/billingAccounts..., claimed next;
+//   - the top-level service/SKU catalog, /v1/services[/{service}/skus];
 //   - the project billingInfo singleton, /v1/projects/{project}/billingInfo.
 //     The segment match is case-sensitive ("billingInfo", capital I), exactly
 //     as the Discovery document declares it.
@@ -62,8 +69,15 @@ func (c *Codec) Decode(r *http.Request, body []byte) (*model.NormalizedRequest, 
 	// billingAccounts is a top-level collection: /v1/billingAccounts[/{id}]
 	// [:verb]. It has no project segment, so it is decoded before the projects
 	// scan (which would otherwise treat the path as malformed).
-	if len(seg) >= 2 && seg[0] == "v1" && seg[1] == "billingAccounts" {
-		return c.decodeBillingAccounts(r, body, seg)
+	if len(seg) >= 2 && seg[0] == "v1" {
+		switch seg[1] {
+		case "billingAccounts":
+			return c.decodeBillingAccounts(r, body, seg)
+		case "organizations":
+			return c.decodeOrganizationBillingAccounts(r, body, seg)
+		case "services":
+			return c.decodeServices(r, body, seg)
+		}
 	}
 	pi := -1
 	for i, s := range seg {
@@ -89,39 +103,37 @@ func (c *Codec) Decode(r *http.Request, body []byte) (*model.NormalizedRequest, 
 	case http.MethodPut:
 		// updateBillingInfo: the ProjectBillingInfo body carries
 		// billingAccountName (billingEnabled is output-only and ignored).
-		m, err := parseJSON(body)
-		if err != nil {
-			return nil, model.NewProviderError("InvalidArgument", "malformed JSON body", 400)
-		}
-		if m != nil {
-			nr.Params["body"] = m
-		}
 		nr.Action = "ProjectUpdateBillingInfo"
+		return c.withBody(nr, body)
 	default:
 		return nil, model.NewProviderError("UnsupportedOperation", "unsupported operation", 404)
 	}
 	return nr, nil
 }
 
-// decodeBillingAccounts decodes the top-level /v1/billingAccounts family. Only
-// list, get and the permissive testIamPermissions echo are modelled; the rest of
-// the catalog and the IAM policy methods fail loud with Unimplemented 501 (plan
-// CB5), naming the operation family so the refusal is self-describing.
+// decodeBillingAccounts decodes the top-level /v1/billingAccounts family. The
+// catalog methods (create/patch/move, subAccounts.*, projects.list, the IAM
+// policy verbs) are decoded to their own actions so the Provider answers an
+// explicit Unimplemented 501 naming the method (plan CB5); list, get and the
+// permissive testIamPermissions echo are served.
 func (c *Codec) decodeBillingAccounts(r *http.Request, body []byte, seg []string) (*model.NormalizedRequest, error) {
 	nr := &model.NormalizedRequest{Service: ServiceName, Params: map[string]any{}, Raw: r}
 	queryToParams(r, nr.Params)
 
-	// /v1/billingAccounts — the collection (list). A create (POST) is not
-	// modelled; it falls through to the catalog refusal below.
-	if len(seg) == 2 && r.Method == http.MethodGet {
-		nr.Action = "BillingAccountsList"
-		return nr, nil
+	// /v1/billingAccounts — the collection: list (GET) / create (POST).
+	if len(seg) == 2 {
+		switch r.Method {
+		case http.MethodGet:
+			nr.Action = "BillingAccountsList"
+			return nr, nil
+		case http.MethodPost:
+			nr.Action = "BillingAccountsCreate"
+			return nr, nil
+		}
+		return nil, model.NewProviderError("UnsupportedOperation", "unsupported operation", 404)
 	}
 
-	account, custom := "", ""
-	if len(seg) >= 3 {
-		account, custom = splitVerb(seg[2])
-	}
+	account, custom := splitVerb(seg[2])
 	if account != "" {
 		nr.Params["billingAccount"] = account
 	}
@@ -130,74 +142,122 @@ func (c *Codec) decodeBillingAccounts(r *http.Request, body []byte, seg []string
 		case custom == "" && r.Method == http.MethodGet:
 			nr.Action = "BillingAccountsGet"
 			return nr, nil
+		case custom == "" && r.Method == http.MethodPatch:
+			nr.Action = "BillingAccountsPatch"
+			return c.withBody(nr, body)
+		case custom == "move" && r.Method == http.MethodPost:
+			nr.Action = "BillingAccountsMove"
+			return c.withBody(nr, body)
 		case custom == "testIamPermissions" && r.Method == http.MethodPost:
 			// The default-permissive IAM echo: the handler returns exactly the
 			// requested permission strings and enforces nothing.
-			m, err := parseJSON(body)
-			if err != nil {
-				return nil, model.NewProviderError("InvalidArgument", "malformed JSON body", 400)
-			}
-			if m != nil {
-				nr.Params["body"] = m
-			}
 			nr.Action = "BillingAccountTestIamPermissions"
+			return c.withBody(nr, body)
+		case custom == "getIamPolicy" && r.Method == http.MethodGet:
+			nr.Action = "BillingAccountsGetIamPolicy"
+			return c.withBody(nr, body)
+		case custom == "setIamPolicy" && r.Method == http.MethodPost:
+			nr.Action = "BillingAccountsSetIamPolicy"
+			return c.withBody(nr, body)
+		}
+		return nil, model.NewProviderError("UnsupportedOperation", "unsupported operation", 404)
+	}
+
+	// /v1/billingAccounts/{account}/{sub-collection}: projects.list and the
+	// sub-account collection. A single sub-account id is not declared by the
+	// document, so it stays an unsupported operation.
+	if len(seg) == 4 && account != "" {
+		switch seg[3] {
+		case "projects":
+			if r.Method == http.MethodGet {
+				nr.Action = "BillingAccountsProjectsList"
+				return nr, nil
+			}
+		case "subAccounts":
+			switch r.Method {
+			case http.MethodGet:
+				nr.Action = "BillingAccountsSubAccountsList"
+				return nr, nil
+			case http.MethodPost:
+				nr.Action = "BillingAccountsSubAccountsCreate"
+				return c.withBody(nr, body)
+			}
+		}
+	}
+	return nil, model.NewProviderError("UnsupportedOperation", "unsupported operation", 404)
+}
+
+// decodeOrganizationBillingAccounts decodes the organization-scoped catalog,
+// /v1/organizations/{org}/billingAccounts[/{id}:move] (the live document
+// declares organizations.billingAccounts create/list/move only). Every decoded
+// action is an explicit Unimplemented 501 in the Provider; the project-level
+// association is the only billing resource the emulator models.
+func (c *Codec) decodeOrganizationBillingAccounts(r *http.Request, body []byte, seg []string) (*model.NormalizedRequest, error) {
+	if len(seg) < 4 || seg[2] == "" || seg[3] != "billingAccounts" {
+		return nil, model.NewProviderError("UnsupportedOperation", "unsupported operation", 404)
+	}
+	nr := &model.NormalizedRequest{Service: ServiceName, Params: map[string]any{}, Raw: r}
+	queryToParams(r, nr.Params)
+	nr.Params["organization"] = seg[2]
+
+	if len(seg) == 4 {
+		switch r.Method {
+		case http.MethodGet:
+			nr.Action = "OrganizationsBillingAccountsList"
 			return nr, nil
-		case custom == "getIamPolicy" || custom == "setIamPolicy":
-			return nil, model.NewProviderError("Unimplemented",
-				"billingAccounts."+custom+": billing-account IAM policy is not modelled (plan CB5)", 501)
+		case http.MethodPost:
+			nr.Action = "OrganizationsBillingAccountsCreate"
+			return c.withBody(nr, body)
+		}
+		return nil, model.NewProviderError("UnsupportedOperation", "unsupported operation", 404)
+	}
+	if len(seg) == 5 {
+		// The document declares the move as GET (v1/{+destinationParent}/
+		// {+name}:move); AIP-151-style clients send POST on a ':verb'. Both
+		// decode to the same refusal, so neither spelling reaches the
+		// unknown-service 404.
+		id, custom := splitVerb(seg[4])
+		if id != "" && custom == "move" && (r.Method == http.MethodGet || r.Method == http.MethodPost) {
+			nr.Params["billingAccount"] = id
+			nr.Action = "OrganizationsBillingAccountsMove"
+			return c.withBody(nr, body)
 		}
 	}
-	family := billingAccountsFamily(seg, custom, r.Method)
-	return nil, model.NewProviderError("Unimplemented",
-		family+": the billing-account catalog is not modelled (plan CB5)", 501)
+	return nil, model.NewProviderError("UnsupportedOperation", "unsupported operation", 404)
 }
 
-// billingAccountsFamily names the operation family an unmodelled
-// /v1/billingAccounts path addresses ("billingAccounts.create",
-// "billingAccounts.subAccounts.move", ...), for the 501 message. Account and
-// sub-account ids are dropped: the family, not the instance, is what is refused.
-func billingAccountsFamily(seg []string, custom, method string) string {
-	parts := []string{"billingAccounts"}
-	// seg[0] is "v1", seg[1] "billingAccounts", seg[2] the account (or the
-	// collection's ':verb' pseudo-segment); a sub-collection follows it.
-	rest := seg[2:]
-	if len(rest) > 0 {
-		rest = rest[1:]
+// decodeServices decodes the pricing catalog: /v1/services (list) and
+// /v1/services/{service}/skus (list). The emulator holds no SKU catalog, so both
+// are explicit Unimplemented 501s in the Provider.
+func (c *Codec) decodeServices(r *http.Request, body []byte, seg []string) (*model.NormalizedRequest, error) {
+	if r.Method != http.MethodGet {
+		return nil, model.NewProviderError("UnsupportedOperation", "unsupported operation", 404)
 	}
-	for i, s := range rest {
-		id, verb := splitVerb(s)
-		if verb != "" && i == len(rest)-1 {
-			custom = verb
-			s = id
-		}
-		if i == 1 || s == "" {
-			continue // the sub-account id
-		}
-		parts = append(parts, s)
+	nr := &model.NormalizedRequest{Service: ServiceName, Params: map[string]any{}, Raw: r}
+	queryToParams(r, nr.Params)
+	if len(seg) == 2 {
+		nr.Action = "ServicesList"
+		return nr, nil
 	}
-	if custom == "" {
-		custom = methodFamily(method)
+	if len(seg) == 4 && seg[2] != "" && seg[3] == "skus" {
+		nr.Params["service"] = seg[2]
+		nr.Action = "ServicesSkusList"
+		return nr, nil
 	}
-	if custom != "" {
-		parts = append(parts, custom)
-	}
-	return strings.Join(parts, ".")
+	return nil, model.NewProviderError("UnsupportedOperation", "unsupported operation", 404)
 }
 
-// methodFamily names a collection-level operation from its HTTP method, for a
-// path shape that carries no custom verb (billingAccounts.create, .../{id}.patch).
-func methodFamily(method string) string {
-	switch method {
-	case http.MethodPost:
-		return "create"
-	case http.MethodPatch:
-		return "patch"
-	case http.MethodDelete:
-		return "delete"
-	case http.MethodPut:
-		return "update"
+// withBody decodes the JSON request body into the request params (write and
+// custom methods carry one; an empty body is not an error).
+func (c *Codec) withBody(nr *model.NormalizedRequest, body []byte) (*model.NormalizedRequest, error) {
+	m, err := parseJSON(body)
+	if err != nil {
+		return nil, model.NewProviderError("InvalidArgument", "malformed JSON body", 400)
 	}
-	return ""
+	if m != nil {
+		nr.Params["body"] = m
+	}
+	return nr, nil
 }
 
 // Encode serialises a provider response as JSON.

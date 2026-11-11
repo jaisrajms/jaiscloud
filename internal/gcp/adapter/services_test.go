@@ -195,6 +195,21 @@ func TestDetectServiceCloudBilling(t *testing.T) {
 		{"billingAccounts get", http.MethodGet, "/v1/billingAccounts/0X0X0X-0X0X0X-0X0X0X", "cloudbilling"},
 		{"billingAccounts testIamPermissions", http.MethodPost, "/v1/billingAccounts/0X0X0X-0X0X0X-0X0X0X:testIamPermissions", "cloudbilling"},
 		{"billingAccounts unimplemented family", http.MethodPost, "/v1/billingAccounts/0X0X0X-0X0X0X-0X0X0X:setIamPolicy", "cloudbilling"},
+		// The organization-scoped catalog and the service/SKU pricing catalog
+		// are claimed so their published methods answer a documented 501
+		// instead of the unknown-service 404.
+		{"organizations billingAccounts", http.MethodGet, "/v1/organizations/123456789012/billingAccounts", "cloudbilling"},
+		{"organizations billingAccounts move", http.MethodGet, "/v1/organizations/123456789012/billingAccounts/0X0X0X:move", "cloudbilling"},
+		{"services catalog", http.MethodGet, "/v1/services", "cloudbilling"},
+		{"service skus", http.MethodGet, "/v1/services/6F81-5844-456A/skus", "cloudbilling"},
+		// The organization arm requires the billingAccounts segment, so other
+		// organization paths stay unclaimed for a future Resource Manager
+		// organizations surface; the services arm is the top-level collection
+		// only.
+		// The projects-last guard already claims any /v1/.../projects path for
+		// resourcemanager, so the organization arm does not widen that.
+		{"organizations neighbour", http.MethodGet, "/v1/organizations/123456789012/projects", "resourcemanager"},
+		{"services neighbour", http.MethodGet, "/v1/services/6F81-5844-456A", ""},
 		// The project itself and its custom methods keep resourcemanager.
 		{"bare project", http.MethodGet, "/v1/projects/p", "resourcemanager"},
 		{"project IAM", http.MethodPost, "/v1/projects/p:getIamPolicy", "resourcemanager"},

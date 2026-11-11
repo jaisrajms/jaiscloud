@@ -24,13 +24,48 @@ func NewProvider(c *core.Service, defaultProj string) *Provider {
 }
 
 // Routes maps "CloudBilling.<Action>" keys to their handlers.
+//
+// The two project-association methods and the empty billing-account list, get
+// and permissive IAM echo are served. Every other method the vendored v1
+// document publishes for the billing catalog (billingAccounts.create/patch/move,
+// subAccounts.*, projects.list, the IAM policy verbs, the organization-scoped
+// catalog, the service/SKU catalog) is an explicit Unimplemented 501 that names
+// the Discovery method (plan CB5) — never a plausible empty body, and never the
+// unknown-service 404 those paths answered before the document was vendored.
 func (p *Provider) Routes() map[string]provider.HandlerFunc {
 	return map[string]provider.HandlerFunc{
-		"CloudBilling.ProjectGetBillingInfo":            p.GetProjectBillingInfo,
-		"CloudBilling.ProjectUpdateBillingInfo":         p.UpdateProjectBillingInfo,
-		"CloudBilling.BillingAccountsList":              p.ListBillingAccounts,
-		"CloudBilling.BillingAccountsGet":               p.GetBillingAccount,
+		"CloudBilling.ProjectGetBillingInfo":    p.GetProjectBillingInfo,
+		"CloudBilling.ProjectUpdateBillingInfo": p.UpdateProjectBillingInfo,
+		"CloudBilling.BillingAccountsList":      p.ListBillingAccounts,
+		"CloudBilling.BillingAccountsGet":       p.GetBillingAccount,
+
 		"CloudBilling.BillingAccountTestIamPermissions": p.TestBillingAccountIamPermissions,
+
+		"CloudBilling.BillingAccountsCreate":              p.unimplemented("billingAccounts.create"),
+		"CloudBilling.BillingAccountsPatch":               p.unimplemented("billingAccounts.patch"),
+		"CloudBilling.BillingAccountsMove":                p.unimplemented("billingAccounts.move"),
+		"CloudBilling.BillingAccountsGetIamPolicy":        p.unimplemented("billingAccounts.getIamPolicy"),
+		"CloudBilling.BillingAccountsSetIamPolicy":        p.unimplemented("billingAccounts.setIamPolicy"),
+		"CloudBilling.BillingAccountsProjectsList":        p.unimplemented("billingAccounts.projects.list"),
+		"CloudBilling.BillingAccountsSubAccountsCreate":   p.unimplemented("billingAccounts.subAccounts.create"),
+		"CloudBilling.BillingAccountsSubAccountsList":     p.unimplemented("billingAccounts.subAccounts.list"),
+		"CloudBilling.OrganizationsBillingAccountsCreate": p.unimplemented("organizations.billingAccounts.create"),
+		"CloudBilling.OrganizationsBillingAccountsList":   p.unimplemented("organizations.billingAccounts.list"),
+		"CloudBilling.OrganizationsBillingAccountsMove":   p.unimplemented("organizations.billingAccounts.move"),
+		"CloudBilling.ServicesList":                       p.unimplemented("services.list"),
+		"CloudBilling.ServicesSkusList":                   p.unimplemented("services.skus.list"),
+	}
+}
+
+// unimplemented returns a handler that fails loud with Unimplemented for a
+// catalog operation the emulator deliberately does not model (plan CB5). The
+// message names the Discovery method so the refusal is self-describing and the
+// conformance stub-evidence gate classifies it as an operation stub rather than
+// a request-input rejection.
+func (p *Provider) unimplemented(method string) provider.HandlerFunc {
+	return func(_ context.Context, _ *model.NormalizedRequest) (*model.ProviderResponse, error) {
+		return nil, model.NewProviderError("Unimplemented",
+			method+" is not supported by the emulator: the billing-account/SKU catalog is not modelled (plan CB5)", 501)
 	}
 }
 

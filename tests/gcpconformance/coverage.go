@@ -186,6 +186,33 @@ var actionOverrides = map[string]string{
 	"ServiceUsage.ServicesEnable":      "serviceusage.services.enable",
 	"ServiceUsage.ServicesDisable":     "serviceusage.services.disable",
 
+	// Cloud Billing v1: the billingInfo singleton and the billing-account
+	// collection, plus the catalog methods the emulator refuses with an explicit
+	// Unimplemented 501 (plan CB5). The nested sub-collections
+	// (subAccounts/projects/skus/organizations.billingAccounts) are pinned
+	// because the CamelCase heuristic cannot derive the multi-word resource
+	// paths; the top-level verbs are pinned so the cell never depends on
+	// heuristic tie-breaking.
+	"CloudBilling.ProjectGetBillingInfo":    "cloudbilling.projects.getBillingInfo",
+	"CloudBilling.ProjectUpdateBillingInfo": "cloudbilling.projects.updateBillingInfo",
+	"CloudBilling.BillingAccountsList":      "cloudbilling.billingAccounts.list",
+	"CloudBilling.BillingAccountsGet":       "cloudbilling.billingAccounts.get",
+
+	"CloudBilling.BillingAccountTestIamPermissions":   "cloudbilling.billingAccounts.testIamPermissions",
+	"CloudBilling.BillingAccountsCreate":              "cloudbilling.billingAccounts.create",
+	"CloudBilling.BillingAccountsPatch":               "cloudbilling.billingAccounts.patch",
+	"CloudBilling.BillingAccountsMove":                "cloudbilling.billingAccounts.move",
+	"CloudBilling.BillingAccountsGetIamPolicy":        "cloudbilling.billingAccounts.getIamPolicy",
+	"CloudBilling.BillingAccountsSetIamPolicy":        "cloudbilling.billingAccounts.setIamPolicy",
+	"CloudBilling.BillingAccountsProjectsList":        "cloudbilling.billingAccounts.projects.list",
+	"CloudBilling.BillingAccountsSubAccountsCreate":   "cloudbilling.billingAccounts.subAccounts.create",
+	"CloudBilling.BillingAccountsSubAccountsList":     "cloudbilling.billingAccounts.subAccounts.list",
+	"CloudBilling.OrganizationsBillingAccountsCreate": "cloudbilling.organizations.billingAccounts.create",
+	"CloudBilling.OrganizationsBillingAccountsList":   "cloudbilling.organizations.billingAccounts.list",
+	"CloudBilling.OrganizationsBillingAccountsMove":   "cloudbilling.organizations.billingAccounts.move",
+	"CloudBilling.ServicesList":                       "cloudbilling.services.list",
+	"CloudBilling.ServicesSkusList":                   "cloudbilling.services.skus.list",
+
 	// Monitoring's custom-verb and verification-code actions do not derive
 	// from the CamelCase heuristic.
 	"Monitoring.CreateServiceTimeSeries":                 "monitoring.projects.timeSeries.createService",

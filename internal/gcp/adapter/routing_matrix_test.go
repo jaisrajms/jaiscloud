@@ -96,6 +96,19 @@ func TestRoutingMatrixAdversarial(t *testing.T) {
 			"/v1/billingAccounts/0X0X0X-0X0X0X-0X0X0X", "cloudbilling", SourcePath},
 		{"cloudbilling billingAccounts testIamPermissions", "", http.MethodPost,
 			"/v1/billingAccounts/0X0X0X-0X0X0X-0X0X0X:testIamPermissions", "cloudbilling", SourcePath},
+		// The organization-scoped catalog and the top-level service/SKU catalog
+		// are claimed for Cloud Billing (they are catalog families it refuses
+		// with an explicit 501); the organization arm needs the billingAccounts
+		// segment and the services arm is the collection itself.
+		{"cloudbilling organizations billingAccounts", "", http.MethodGet,
+			"/v1/organizations/123456789012/billingAccounts", "cloudbilling", SourcePath},
+		{"cloudbilling services catalog", "", http.MethodGet, "/v1/services", "cloudbilling", SourcePath},
+		{"cloudbilling service skus", "", http.MethodGet,
+			"/v1/services/6F81-5844-456A/skus", "cloudbilling", SourcePath},
+		{"cloudbilling neighbour organization", "", http.MethodGet,
+			"/v1/organizations/123456789012/projects", "resourcemanager", SourcePath},
+		{"cloudbilling neighbour service resource", "", http.MethodGet,
+			"/v1/services/6F81-5844-456A", "", SourceUnknown},
 		// The project-last guards run first, so the project itself and its
 		// custom verbs stay with resourcemanager.
 		{"cloudbilling neighbour bare project", "", http.MethodGet, "/v1/projects/p", "resourcemanager", SourcePath},
