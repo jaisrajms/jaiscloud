@@ -427,3 +427,36 @@ entries:
     match: "firestore: make a deleted database id reusable"
     pr: 697
     note: "resolved: TGM13 wave shipped in #697; the per-session branch was never a PR head"
+
+  # kms-parity (CKP1, CKP2, CKG1, CKG5) was delivered as one PR — plan_docs is
+  # gitignored scratch and the four rows are anchored on per-session branches
+  # that carry no PR of their own, so the integration PR is linked here. The
+  # evidence gate still applies: nothing closes until #782 is MERGED.
+  - source: "kms-parity"
+    match: "purpose validation, REST + gRPC"
+    pr: 782
+    note: "resolved: updatePrimaryVersion purpose refusal shipped in #782 (W1.1)"
+  - source: "kms-parity"
+    match: "Keys with purpose ASYMMETRIC_SIGN do not have a primary version"
+    pr: 782
+    note: "resolved: CKP1 shipped in #782"
+  - source: "kms-parity"
+    match: "console cryptoKeyVersions.restore"
+    pr: 782
+    note: "resolved: console version restore shipped in #782 (W1.2)"
+  - source: "kms-parity"
+    match: "console cannot restore a"
+    pr: 782
+    note: "resolved: CKP2 shipped in #782"
+  - source: "kms-parity"
+    match: "CMEK object key-version metadata"
+    pr: 782
+    note: "resolved: object kmsKeyName reports the CryptoKeyVersion, CMEK errors match real GCS (#782, W2.1)"
+  - source: "kms-parity"
+    match: "answers with the wrong contract"
+    pr: 782
+    note: "resolved: CKG1 shipped in #782"
+  - source: "kms-parity"
+    match: "reports the CryptoKey name in"
+    pr: 782
+    note: "resolved: CKG5 shipped in #782"
