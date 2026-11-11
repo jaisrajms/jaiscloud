@@ -16,7 +16,7 @@
 #   STRICT=1      a SKIP is a failure
 #   PATTERNS      whitespace-separated subset (default: every directory with a
 #                 run.sh, in name order)
-#   LOG_DIR       per-pattern logs + summary.md/summary.tsv
+#   LOG_DIR       per-pattern logs + summary.md/summary.tsv/failures.md
 #                 (default: /tmp/jaiscloud-gcp-terraform-patterns)
 #
 # Exit: 0 all patterns passed (or SKIP without STRICT); 1 a failure, a missing
@@ -66,6 +66,11 @@ PASS=0
 FAIL=0
 SKIP=0
 ROWS=()
+# failures.md collects the tail of every failing pattern log, so the GitHub step
+# log and the auto-filed nightly issue carry the cause without an artifact
+# download (a pattern that dies on `set -e` leaves no [FAIL] line of its own).
+FAILURES="$LOG_DIR/failures.md"
+: >"$FAILURES"
 
 run_one() {
   local name="$1"
@@ -84,6 +89,11 @@ run_one() {
   else
     verdict="FAIL"
     FAIL=$((FAIL + 1))
+    {
+      printf '## %s (exit %s)\n\n```\n' "$name" "$rc"
+      tail -n 40 "$log" 2>/dev/null || true
+      printf '```\n\n'
+    } >>"$FAILURES"
   fi
   printf '  [%-4s] %-16s %4ss  %s\n' "$verdict" "$name" "$secs" "$log"
   ROWS+=("$name|$verdict|$secs|$log")
@@ -126,6 +136,9 @@ echo "== summary ($PASS passed, $FAIL failed, $SKIP skipped)"
 cat "$LOG_DIR/summary.md"
 
 if [[ "$FAIL" -gt 0 ]]; then
+  echo
+  echo "== failed pattern logs (tail)"
+  cat "$FAILURES"
   exit 1
 fi
 if [[ "$STRICT" = "1" && "$SKIP" -gt 0 ]]; then

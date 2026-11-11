@@ -25,9 +25,10 @@
 #     storage-triggered function;
 #   - destroy leaves no orphan topic, subscription, job, trigger or function.
 #
-# Time is deterministic: the scheduler job is created PAUSED with a far-future
-# cron, and the driver fires it with projects.locations.jobs.run (Cloud
-# Scheduler's documented "force a run now" call). A live cron would make the
+# Time is deterministic: the scheduler job is ENABLED with a far-future cron
+# (nothing fires on its own during the run), and the driver fires it with
+# projects.locations.jobs.run (Cloud Scheduler's documented "force a run now"
+# call), which real GCP only allows on an ENABLED job. A live cron would make the
 # run wait for a wall-clock minute; the due-time engine itself is covered by the
 # emulator's time-control suite and the scheduler module case.
 
@@ -90,24 +91,29 @@ resource "google_pubsub_subscription" "push" {
 }
 
 # ── Cloud Scheduler: the producer ────────────────────────────────────────────
-# The job is created PAUSED and the driver fires it with projects.locations.jobs.run,
-# which is Cloud Scheduler's documented "force it now" call: a live cron would make
-# the run wait for a wall-clock minute, and driving the due-time engine is covered
-# by the emulator's time-control suite. So this pattern proves the producer ->
-# topic -> consumer graph deterministically.
+# The job is ENABLED with a far-future cron (1 January) and the driver fires it
+# with projects.locations.jobs.run, Cloud Scheduler's documented "force it now"
+# call: a near cron would make the run wait for a wall-clock minute, and driving
+# the due-time engine is covered by the emulator's time-control suite. So this
+# pattern proves the producer -> topic -> consumer graph deterministically.
 #
-# An ENABLED job cannot be created through provider 7.46.2 yet: its create always
-# calls jobs:resume when `paused` is false, and the emulator rejects resuming an
-# ENABLED job. That provider dependency is TF2-12
-# (`fix/gcp-scheduler-resume-enabled`), recorded in the wave plan; the paused job
-# here keeps this composition green without depending on that fix.
+# The job must be ENABLED. Real Cloud Scheduler answers 400 FAILED_PRECONDITION
+# ("Job.state must be ENABLED for RunJob.") for jobs.run on a paused job, and the
+# emulator now does the same (TF2-12-2). The provider's create issues jobs:resume
+# after storing an unpaused job, which real GCP tolerates and the emulator now
+# does too (TF2-12), so `paused = false` is creatable.
+#
+# retry_config is explicit even though it carries the API defaults: the provider
+# drops an all-zero block from the create body, the read fills the documented
+# defaults back in (TF3-4-2), and Terraform would then plan their removal on
+# every re-plan. Sending the same values keeps the re-plan clean.
 resource "google_cloud_scheduler_job" "tick" {
   project   = var.project
   region    = var.region
   name      = local.job
   schedule  = "0 0 1 1 *"
   time_zone = "UTC"
-  paused    = true
+  paused    = false
 
   pubsub_target {
     topic_name = google_pubsub_topic.events.id
@@ -117,11 +123,12 @@ resource "google_cloud_scheduler_job" "tick" {
     }
   }
 
-  # No retry_config block: the pattern relies on the API's documented retry
-  # defaults, which the emulator synthesizes on a read (retryCount 0,
-  # minBackoffDuration 5s, maxBackoffDuration 1h, maxDoublings 5; TF3-4-2), so
-  # omitting the block and sending an explicit zero one read back the same.
-  # One run is one delivery either way.
+  # The API's documented default retry config (retryCount 0,
+  # minBackoffDuration 5s, maxBackoffDuration 1h, maxDoublings 5,
+  # maxRetryDuration 0 = unlimited).
+  retry_config {
+    retry_count = 0
+  }
 }
 
 # ── Cloud Storage: the event source ──────────────────────────────────────────

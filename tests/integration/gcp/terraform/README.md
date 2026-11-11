@@ -931,17 +931,18 @@ Recorded boundaries, not worked around:
   the `replication` block as ForceNew, so a Terraform change would replace the
   secret. The emulator's PATCH path for that field is covered by the
   service/REST tests, and the pattern asserts the key it was created with.
-- **The scheduler job in `02-events` is paused.** Provider 7.46.2 calls
-  `jobs:resume` after every create when `paused` is false, and the emulator
-  rejects resuming an ENABLED job, so an enabled `google_cloud_scheduler_job`
-  cannot be created yet (TF2-12, `fix/gcp-scheduler-resume-enabled`). The
-  pattern creates the job paused with a far-future cron and fires it with
-  `projects.locations.jobs.run`, Cloud Scheduler's documented "force it now"
-  call, which goes through the same target dispatcher the cron engine uses.
-  `retry_config` is omitted too — not because it would permadiff (the emulator
-  now synthesizes the API's documented retry defaults on a read, TF3-4-2) but
-  because the pattern relies on those defaults; one run is one delivery either
-  way.
+- **The scheduler job in `02-events` is ENABLED with a far-future cron.** Real
+  Cloud Scheduler refuses `projects.locations.jobs.run` on anything but an
+  ENABLED job (400 `FAILED_PRECONDITION`), and the emulator matches that
+  (TF2-12-2). An enabled `google_cloud_scheduler_job` is creatable because the
+  provider's post-create `jobs:resume` is now idempotent, as real GCP is
+  (TF2-12). The pattern fires the job with `jobs.run`, Cloud Scheduler's
+  documented "force it now" call, which goes through the same target dispatcher
+  the cron engine uses; the far-future cron means it never fires on its own
+  during the run. `retry_config` is written explicitly with the API defaults
+  (`retry_count = 0`): the provider drops an all-zero block from the create body
+  and the read fills the documented defaults back in (TF3-4-2), so omitting it
+  would permadiff on every re-plan.
 - **Event deliveries are asserted at a local HTTP sink.** `patterns/helpers/echo-sink`
   is a small Go program (`patterns/lib.sh` builds it, so Go is already a
   prerequisite of the driver) that records every request it receives. The push

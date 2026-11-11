@@ -479,7 +479,7 @@ ran twice in a row on one emulator to prove the per-run name suffix):
 
 What `02-events` proves:
 
-- one apply creates a Pub/Sub topic, a push subscription, a paused Cloud
+- one apply creates a Pub/Sub topic, a push subscription, an ENABLED Cloud
   Scheduler job with a `pubsub_target`, a Pub/Sub-triggered v1 function, a
   storage-triggered v1 function, a GCS bucket + deployment archive, an Eventarc
   GCS trigger with an `http_endpoint` destination, and the trigger's service
@@ -505,7 +505,7 @@ Recorded gaps and boundaries:
 |---|---|---|
 | TF4-2-1 | `fix` (fixed here) | The bootstrap assertion compared the provider's `google_project.number` (decimal, no leading zero) with the API's zero-padded `projectNumber`; the synthesized number starts with zero for about one id in ten, so the aggregate flaked. The assertion now pads before comparing. |
 | TF4-2-2 | `no fix` | Function delivery records are served only by the console API (`/api/ui/v1/gcp/functions/.../deliveries`), which a non-UI build does not mount; real Cloud Functions exposes no delivery log either. The pattern asserts invocation through `GET /_jaiscloud/export` (`envelope.json` → `stores.functions.deliveries`). |
-| TF2-12 | known, separate session | Provider 7.46.2 calls `jobs:resume` after every create when `paused` is false and the emulator rejects resuming an ENABLED job, so the job is created paused and fired with `jobs.run`; `fix/gcp-scheduler-resume-enabled` owns the enabled path. |
+| TF2-12 | `fix` (fixed, TF2-12-2 follow-up) | Provider 7.46.2 calls `jobs:resume` after every create when `paused` is false; real Cloud Scheduler tolerates resuming an ENABLED job and the emulator now does too, so the pattern creates the job ENABLED. Real Cloud Scheduler refuses `jobs.run` on a paused job (400 `FAILED_PRECONDITION`) and the emulator now matches. |
 | TF3-4-2 | `fix` (fixed) | An all-zero `retry_config` is dropped by the provider; the emulator now synthesizes the documented RetryConfig defaults on the read, so the module case drives the default block and re-plans clean (`fix/gcp-scheduler-retry-config-defaults`). |
 
 ## TF4-3 — Composition pattern: data lake + GKE/Dataproc (2026-11-07)
