@@ -586,6 +586,84 @@ func listAllFields(ctx context.Context, c *admin.FirestoreAdminClient, parent st
 	}
 }
 
+// TestSDKFirestoreAdminEnterpriseIndexSurface is the FE1 official-client check
+// of the Enterprise edition index surface: on an Enterprise database a
+// single-field index is a first-class, named Index resource, and the Enterprise
+// index options (api_scope, density, multikey, unique, shard_count) survive
+// create -> get -> list. A create that omits them serves the edition defaults
+// (DENSE, ANY_API), and the Standard edition contract — a one-field Index is
+// InvalidArgument, single-field indexes live on the Field resource — is
+// asserted unchanged by the p3 case above.
+func TestSDKFirestoreAdminEnterpriseIndexSurface(t *testing.T) {
+	ctx := context.Background()
+	c := newAdmin(t)
+
+	dbID := unique("idxent")
+	op, err := c.CreateDatabase(ctx, &adminpb.CreateDatabaseRequest{
+		Parent:     projectName(),
+		DatabaseId: dbID,
+		Database: &adminpb.Database{
+			LocationId:      "us-central1",
+			Type:            adminpb.Database_FIRESTORE_NATIVE,
+			DatabaseEdition: adminpb.Database_ENTERPRISE,
+		},
+	})
+	require.NoError(t, err)
+	db, err := op.Wait(ctx)
+	require.NoError(t, err)
+	require.Equal(t, adminpb.Database_ENTERPRISE, db.GetDatabaseEdition())
+	deleteDatabaseOnCleanup(t, c, dbID)
+
+	parent := collectionGroupParent(dbID, "orders")
+	createOp, err := c.CreateIndex(ctx, &adminpb.CreateIndexRequest{
+		Parent: parent,
+		Index: &adminpb.Index{
+			QueryScope: adminpb.Index_COLLECTION_GROUP,
+			ApiScope:   adminpb.Index_MONGODB_COMPATIBLE_API,
+			Density:    adminpb.Index_SPARSE_ANY,
+			Multikey:   true,
+			Unique:     true,
+			ShardCount: 2,
+			Fields: []*adminpb.Index_IndexField{{
+				FieldPath: "status",
+				ValueMode: &adminpb.Index_IndexField_Order_{Order: adminpb.Index_IndexField_ASCENDING},
+			}},
+		},
+	})
+	require.NoError(t, err)
+	created, err := createOp.Wait(ctx)
+	require.NoError(t, err)
+	require.NotEmpty(t, created.GetName(), "a single-field Enterprise index is a named Index resource")
+	require.Len(t, created.GetFields(), 1)
+	require.Equal(t, "status", created.GetFields()[0].GetFieldPath())
+	require.Equal(t, adminpb.Index_SPARSE_ANY, created.GetDensity())
+	require.Equal(t, adminpb.Index_MONGODB_COMPATIBLE_API, created.GetApiScope())
+	require.True(t, created.GetMultikey())
+	require.True(t, created.GetUnique())
+	require.EqualValues(t, 2, created.GetShardCount())
+	deleteIndexOnCleanup(t, c, created.GetName())
+
+	got, err := c.GetIndex(ctx, &adminpb.GetIndexRequest{Name: created.GetName()})
+	require.NoError(t, err)
+	require.Equal(t, created.GetDensity(), got.GetDensity())
+	require.Equal(t, created.GetApiScope(), got.GetApiScope())
+	require.True(t, got.GetUnique())
+
+	list, err := listAllIndexes(ctx, c, parent)
+	require.NoError(t, err)
+	require.Len(t, list, 1)
+	require.Equal(t, created.GetName(), list[0].GetName())
+	require.Equal(t, adminpb.Index_SPARSE_ANY, list[0].GetDensity())
+
+	// The INPUT_ONLY DENSITY_UNSPECIFIED resolves to the edition default, and
+	// ANY_API is the proto3 zero value, so it reads back as unset.
+	defaulted := createIndex(t, c, parent, "a", "b")
+	deleteIndexOnCleanup(t, c, defaulted.GetName())
+	require.Equal(t, adminpb.Index_DENSE, defaulted.GetDensity())
+	require.Equal(t, adminpb.Index_ANY_API, defaulted.GetApiScope())
+	require.False(t, defaulted.GetUnique())
+}
+
 // TestSDKFirestoreAdminConcurrency is p2: concurrent control-plane mutations
 // under -race. A same-name create is arbitered by the store's atomic create
 // (exactly one winner, every loser AlreadyExists), distinct creates each land,

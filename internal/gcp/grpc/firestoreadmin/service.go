@@ -1,6 +1,6 @@
 // Package firestoreadmin implements the Firestore Admin gRPC surface
-// (google.firestore.admin.v1.FirestoreAdmin): collection-group composite-index
-// CRUD (service.go) plus the control plane (admin.go) — databases,
+// (google.firestore.admin.v1.FirestoreAdmin): collection-group index CRUD
+// (service.go) plus the control plane (admin.go) — databases,
 // collection-group fields, backup schedules, backups and user creds. The
 // data-plane / disaster-recovery RPCs (ExportDocuments, ImportDocuments,
 // RestoreDatabase, CloneDatabase, BulkDeleteDocuments) are inherited from
@@ -33,7 +33,7 @@ import (
 
 // Service implements adminpb.FirestoreAdminServer over the shared
 // transport-agnostic provider Service, so the REST adapter and this gRPC
-// transport operate on the same composite-index state.
+// transport operate on the same index state.
 type Service struct {
 	adminpb.UnimplementedFirestoreAdminServer
 	svc         *firestoreprovider.Service
@@ -88,7 +88,7 @@ func splitIndexName(name string) (project, database, cg, id string, ok bool) {
 
 // ─── index RPCs ───────────────────────────────────────────────────────────────
 
-// CreateIndex creates a composite index and returns a terminal
+// CreateIndex creates an index and returns a terminal
 // google.longrunning.Operation wrapping the created Index.
 func (s *Service) CreateIndex(ctx context.Context, req *adminpb.CreateIndexRequest) (*longrunningpb.Operation, error) {
 	project, database, cg, ok := splitParent(req.GetParent())
@@ -113,7 +113,7 @@ func (s *Service) CreateIndex(ctx context.Context, req *adminpb.CreateIndexReque
 	}, nil
 }
 
-// GetIndex returns a single composite index.
+// GetIndex returns a single index.
 func (s *Service) GetIndex(ctx context.Context, req *adminpb.GetIndexRequest) (*adminpb.Index, error) {
 	project, database, cg, id, ok := splitIndexName(req.GetName())
 	if !ok {
@@ -129,7 +129,7 @@ func (s *Service) GetIndex(ctx context.Context, req *adminpb.GetIndexRequest) (*
 	return indexToProto(idx), nil
 }
 
-// ListIndexes returns the composite indexes of a collection group, honoring
+// ListIndexes returns the indexes of a collection group, honoring
 // page_size/page_token.
 func (s *Service) ListIndexes(ctx context.Context, req *adminpb.ListIndexesRequest) (*adminpb.ListIndexesResponse, error) {
 	project, database, cg, ok := splitParent(req.GetParent())
@@ -151,7 +151,7 @@ func (s *Service) ListIndexes(ctx context.Context, req *adminpb.ListIndexesReque
 	return &adminpb.ListIndexesResponse{Indexes: out, NextPageToken: nextToken}, nil
 }
 
-// DeleteIndex removes a composite index. The proto result is Empty (the
+// DeleteIndex removes an index. The proto result is Empty (the
 // emulator applies the delete synchronously).
 func (s *Service) DeleteIndex(ctx context.Context, req *adminpb.DeleteIndexRequest) (*emptypb.Empty, error) {
 	project, database, cg, id, ok := splitIndexName(req.GetName())
@@ -171,12 +171,26 @@ func (s *Service) DeleteIndex(ctx context.Context, req *adminpb.DeleteIndexReque
 
 // indexFromProto converts an adminpb.Index definition into the provider's
 // stored shape. Enum names are preserved as strings (COLLECTION, ASCENDING,
-// CONTAINS, ...); unspecified enum values are stored empty.
+// CONTAINS, ...); unspecified enum values are stored empty, and the INPUT_ONLY
+// DENSITY_UNSPECIFIED is left empty so the create path applies the database
+// edition's default. The Enterprise index options (api_scope, density,
+// multikey, unique, shard_count) are carried like every other member; the
+// vector and search index types are not modelled (FE1).
 func indexFromProto(p *adminpb.Index) firestoreprovider.IndexDef {
 	idx := firestoreprovider.IndexDef{}
 	if p.GetQueryScope() != adminpb.Index_QUERY_SCOPE_UNSPECIFIED {
 		idx.QueryScope = p.GetQueryScope().String()
 	}
+	// ANY_API is the proto3 zero value, so it is the "not set" spelling.
+	if p.GetApiScope() != adminpb.Index_ANY_API {
+		idx.APIScope = p.GetApiScope().String()
+	}
+	if p.GetDensity() != adminpb.Index_DENSITY_UNSPECIFIED {
+		idx.Density = p.GetDensity().String()
+	}
+	idx.Multikey = p.GetMultikey()
+	idx.Unique = p.GetUnique()
+	idx.ShardCount = p.GetShardCount()
 	for _, f := range p.GetFields() {
 		field := firestoreprovider.IndexField{FieldPath: f.GetFieldPath()}
 		switch v := f.GetValueMode().(type) {
@@ -195,11 +209,17 @@ func indexFromProto(p *adminpb.Index) firestoreprovider.IndexDef {
 }
 
 // indexToProto renders a stored index definition to its adminpb.Index form.
-// The emulator indexes are always READY.
+// The emulator indexes are always READY. density is the effective value the
+// database edition serves, so it is present on every index read.
 func indexToProto(idx firestoreprovider.IndexDef) *adminpb.Index {
 	out := &adminpb.Index{
 		Name:       idx.Name,
 		QueryScope: adminpb.Index_QueryScope(adminpb.Index_QueryScope_value[idx.QueryScope]),
+		ApiScope:   adminpb.Index_ApiScope(adminpb.Index_ApiScope_value[idx.APIScope]),
+		Density:    adminpb.Index_Density(adminpb.Index_Density_value[idx.Density]),
+		Multikey:   idx.Multikey,
+		Unique:     idx.Unique,
+		ShardCount: idx.ShardCount,
 		State:      adminpb.Index_READY,
 	}
 	for _, f := range idx.Fields {

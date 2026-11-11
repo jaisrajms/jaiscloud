@@ -648,7 +648,12 @@ func fieldFromREST(body map[string]any) fieldDef {
 	return f
 }
 
-// indexFromREST reads one composite index from its REST object.
+// indexFromREST reads one index from a Field body's indexConfig.indexes entry.
+// It is the Standard edition path (single-field indexes are configured through
+// the Field resource there), so it reads only the members that path has always
+// carried; the Enterprise index options are accepted on the Index resource
+// itself (see indexDef / FE1), which the REST CreateIndex adapter decodes from
+// its request body instead.
 func indexFromREST(m map[string]any) indexDef {
 	idx := indexDef{}
 	if s, _ := m["queryScope"].(string); s != "" {

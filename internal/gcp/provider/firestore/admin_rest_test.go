@@ -1937,3 +1937,82 @@ func TestRESTDeleteDatabaseRequiresQueryEtag(t *testing.T) {
 		t.Error("GetDatabase after delete succeeded, want NotFound")
 	}
 }
+
+// TestRESTIndexOptionsWireShape covers the protojson shape of the Enterprise
+// index options (FE1): density is always served because it is the effective
+// value, while ANY_API/apiScope, multikey, unique and shardCount follow the
+// proto3 zero-value rule and are omitted. The Standard Field path is unchanged:
+// an index embedded in Field.index_config is served with the members the client
+// wrote, and never with a synthesized density.
+func TestRESTIndexOptionsWireShape(t *testing.T) {
+	ctx := context.Background()
+	p := newAdminProvider()
+
+	if _, err := p.CreateDatabase(ctx, adminNR("databases", map[string]any{
+		"databaseId": "wire-ent",
+		"body":       map[string]any{"locationId": "nam5", "databaseEdition": databaseEditionEnterprise},
+	})); err != nil {
+		t.Fatalf("CreateDatabase(enterprise): %v", err)
+	}
+
+	// Defaults: no density in the request, no apiScope/multikey/unique/shardCount.
+	created := func(body map[string]any) map[string]any {
+		t.Helper()
+		out, err := p.CreateIndex(ctx, adminNR("databases/wire-ent/collectionGroups/c/indexes", map[string]any{"body": body}))
+		if err != nil {
+			t.Fatalf("CreateIndex: %v", err)
+		}
+		obj, _ := out.Data["response"].(map[string]any)
+		return obj
+	}
+	twoFields := []any{
+		map[string]any{"fieldPath": "a", "order": "ASCENDING"},
+		map[string]any{"fieldPath": "b", "order": "DESCENDING"},
+	}
+
+	dense := created(map[string]any{"fields": twoFields})
+	if dense["density"] != indexDensityDense {
+		t.Errorf("default Enterprise density = %v, want DENSE", dense["density"])
+	}
+	for _, member := range []string{"apiScope", "multikey", "unique", "shardCount"} {
+		if _, ok := dense[member]; ok {
+			t.Errorf("unset %s must be omitted (protojson zero value), got %v", member, dense[member])
+		}
+	}
+
+	explicit := created(map[string]any{
+		"apiScope": "ANY_API",
+		"density":  "SPARSE_ALL",
+		"fields":   twoFields,
+	})
+	if _, ok := explicit["apiScope"]; ok {
+		t.Errorf("ANY_API is the proto3 zero value and must be omitted, got %v", explicit["apiScope"])
+	}
+	if explicit["density"] != "SPARSE_ALL" {
+		t.Errorf("density = %v, want the stored SPARSE_ALL", explicit["density"])
+	}
+
+	// The Standard edition Field path is unchanged: no synthesized density or
+	// apiScope on the embedded index.
+	upd, err := p.UpdateField(ctx, adminNR("databases/(default)/collectionGroups/cg/fields/f", map[string]any{
+		"updateMask": "indexConfig",
+		"body": map[string]any{"indexConfig": map[string]any{
+			"indexes": []any{map[string]any{"fieldPath": "f", "order": "ASCENDING"}},
+		}},
+	}))
+	if err != nil {
+		t.Fatalf("UpdateField: %v", err)
+	}
+	field, _ := upd.Data["response"].(map[string]any)
+	ic, _ := field["indexConfig"].(map[string]any)
+	embedded, _ := ic["indexes"].([]any)
+	if len(embedded) != 1 {
+		t.Fatalf("embedded indexes = %v, want 1", ic["indexes"])
+	}
+	row, _ := embedded[0].(map[string]any)
+	for _, member := range []string{"density", "apiScope", "multikey", "unique", "shardCount"} {
+		if _, ok := row[member]; ok {
+			t.Errorf("Field.index_config.indexes must not gain %s, got %v", member, row)
+		}
+	}
+}

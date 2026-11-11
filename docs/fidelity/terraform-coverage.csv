@@ -298,7 +298,7 @@ google_firestore_change_stream,firestoreadmin,served,none,served,firestoreadmin 
 google_firestore_database,firestoreadmin,served,module:firestore,served,,2027-06-30
 google_firestore_document,firestore,served,none,served,firestore is served; no fixture or module case declares this resource type yet,2027-06-30
 google_firestore_field,firestoreadmin,served,none,served,firestoreadmin is served; no fixture or module case declares this resource type yet,2027-06-30
-google_firestore_index,firestoreadmin,served,none,served,firestoreadmin is served; no fixture or module case declares this resource type yet,2027-06-30
+google_firestore_index,firestoreadmin,served,module:firestore,served,,2027-06-30
 google_firestore_user_creds,firestoreadmin,served,none,served,firestoreadmin is served; no fixture or module case declares this resource type yet,2027-06-30
 google_iam_access_boundary_policy,iam,unsupported,none,unsupported,IAM access boundary policies (IAM v2) are not in the operation registry.,2027-06-30
 google_iam_deny_policy,iam,unsupported,none,unsupported,IAM deny policies (IAM v2) are not in the operation registry.,2027-06-30
