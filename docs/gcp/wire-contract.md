@@ -313,7 +313,13 @@ the non-Discovery `recordsPerRrset` field. The gate still fails on any high-seve
   `Unimplemented` stub (a cross-project log copy needs a per-bucket entry data plane the emulator
   does not model).
 - **Other documented caveats** (functional, not cell states — see
-  [README-GCP Known Limitations](../../README-GCP.md#known-limitations)): Firestore `ExecutePipeline` implements the read-only
+  [README-GCP Known Limitations](../../README-GCP.md#known-limitations)): a Cloud Storage
+  object's `kmsKeyName` is the **CryptoKeyVersion** that encrypted it
+  (`…/cryptoKeys/{key}/cryptoKeyVersions/{n}`, as real GCS reports) and a version-qualified
+  write key is the documented `Malformed Cloud KMS crypto key` 400, so the rotation workflow
+  that finds objects by the version protecting them works; a refused CMEK answers 400 with
+  `errors[].reason` `invalid` and the real GCS messages (missing key, key location vs bucket
+  location, malformed name), not the generic `internalError` shape; Firestore `ExecutePipeline` implements the read-only
   relational subset (`collection`/`collection_group`/`database`/`documents`/`literals` sources
   plus `where`, `sort`, `select`, `distinct`, `limit`/`offset`) and rejects other pipeline
   stages and unsupported expressions with `Unimplemented`; Firestore's `UpdateTime` and
@@ -331,7 +337,10 @@ the non-Discovery `recordsPerRrset` field. The gate still fails on any high-seve
   `DESTROY_SCHEDULED` with a `destroyTime` (the documented 30-day default), and a lazy on-read
   promotion flips it to the terminal `DESTROYED` (recording `destroyEventTime`) once the window
   elapses; `Encrypt`/asymmetric/MAC on a scheduled version fail with `FAILED_PRECONDITION` and
-  `DestroyCryptoKeyVersion` is idempotent on an already-scheduled/destroyed version. The
+  `DestroyCryptoKeyVersion` is idempotent on an already-scheduled/destroyed version.
+  `UpdateCryptoKeyPrimaryVersion` requires an `ENCRYPT_DECRYPT` key and answers
+  `400 FAILED_PRECONDITION` — "Keys with purpose ASYMMETRIC_SIGN do not have a primary version." —
+  for any other purpose (verified against real GCP), before the store is touched. The
   CryptoKey response carries the 30-day `destroyScheduledDuration`; the per-key
   `destroy_scheduled_duration` override (and the org-policy minimum) is not modelled —
   the documented 30-day default applies. As with
