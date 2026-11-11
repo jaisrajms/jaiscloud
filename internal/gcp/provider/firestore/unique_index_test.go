@@ -231,6 +231,46 @@ func TestUniqueIndexDensity(t *testing.T) {
 	wantAlreadyExists(t, createDoc(s, "uniquedb", "sparse/d", strFields("email", "c@example.com")))
 }
 
+// TestUniqueIndexSparseAll pins SPARSE_ALL: a document is only indexed when
+// every indexed field is present, so a partial document never collides.
+func TestUniqueIndexSparseAll(t *testing.T) {
+	s := newUniqueService(t, "uniquedb")
+	createUniqueIndex(t, s, "uniquedb", "allfields", indexDensitySparseAll, asc("a"), asc("b"))
+
+	partial := map[string]*firestorestore.Value{"a": firestorestore.IntVal(1)}
+	if err := createDoc(s, "uniquedb", "allfields/one", partial); err != nil {
+		t.Fatalf("create allfields/one: %v", err)
+	}
+	// Both documents miss b, so neither has an entry: no collision.
+	if err := createDoc(s, "uniquedb", "allfields/two", partial); err != nil {
+		t.Fatalf("SPARSE_ALL must not index a document missing b: %v", err)
+	}
+	full := map[string]*firestorestore.Value{"a": firestorestore.IntVal(1), "b": firestorestore.IntVal(2)}
+	if err := createDoc(s, "uniquedb", "allfields/three", full); err != nil {
+		t.Fatalf("create allfields/three: %v", err)
+	}
+	wantAlreadyExists(t, createDoc(s, "uniquedb", "allfields/four", full))
+}
+
+// TestUniqueIndexCommitFreesValueWithUpdate pins the update variant of the
+// swap: a commit may move the holder off a value and hand it to a new document
+// in the same batch.
+func TestUniqueIndexCommitFreesValueWithUpdate(t *testing.T) {
+	ctx := context.Background()
+	s := newUniqueService(t, "uniquedb")
+	createUniqueIndex(t, s, "uniquedb", "users", "", asc("email"))
+
+	if err := createDoc(s, "uniquedb", "users/a", strFields("email", "a@example.com")); err != nil {
+		t.Fatalf("create users/a: %v", err)
+	}
+	if _, _, err := s.Commit(ctx, nil, []*writeWire{
+		{Update: &documentWire{Name: docName("proj", "uniquedb", "users/a"), Fields: strFields("email", "moved@example.com")}},
+		{Update: &documentWire{Name: docName("proj", "uniquedb", "users/b"), Fields: strFields("email", "a@example.com")}},
+	}); err != nil {
+		t.Fatalf("commit update+create swap: %v", err)
+	}
+}
+
 // TestUniqueIndexCollectionGroupScope pins the index's "collection ID": it spans
 // every collection with that ID at any depth, and nothing else.
 func TestUniqueIndexCollectionGroupScope(t *testing.T) {
