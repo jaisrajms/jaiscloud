@@ -389,3 +389,124 @@ func TestEnterpriseIndexOptionsRoundTrip(t *testing.T) {
 		t.Errorf("Standard single-field index error = %v, want InvalidArgument", err)
 	}
 }
+
+// newAdminClientWithProvider is newAdminClient plus the shared provider Service,
+// so a test can seed data-plane documents (a failed unique-index build needs
+// pre-existing duplicates) alongside the admin calls.
+func newAdminClientWithProvider(t *testing.T, resources store.ResourceStore) (adminpb.FirestoreAdminClient, *firestoreprovider.Service, func()) {
+	t.Helper()
+	providerSvc := firestoreprovider.New(firestorestore.NewMemoryStore(), resources).Service
+	svc := NewService(providerSvc, "test")
+
+	ln, err := net.Listen("tcp", "localhost:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	srv := grpc.NewServer()
+	adminpb.RegisterFirestoreAdminServer(srv, svc)
+	go func() { _ = srv.Serve(ln) }()
+
+	conn, err := grpc.NewClient(ln.Addr().String(), grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		srv.Stop()
+		t.Fatalf("dial: %v", err)
+	}
+	cleanup := func() {
+		conn.Close()
+		srv.Stop()
+	}
+	return adminpb.NewFirestoreAdminClient(conn), providerSvc, cleanup
+}
+
+// TestUniqueIndexBuildNeedsRepairLRO pins FE6 over gRPC: a unique index over
+// data that already holds a duplicate finishes its create operation with the
+// google.rpc status as its error (and no response), and the index is readable
+// in NEEDS_REPAIR. Delete -> fix the data -> re-create yields READY.
+func TestUniqueIndexBuildNeedsRepairLRO(t *testing.T) {
+	client, providerSvc, cleanup := newAdminClientWithProvider(t, store.NewMemoryResourceStore())
+	defer cleanup()
+	ctx := context.Background()
+
+	const db = "build-db"
+	op, err := client.CreateDatabase(ctx, &adminpb.CreateDatabaseRequest{
+		Parent:     testDBParent,
+		DatabaseId: db,
+		Database:   &adminpb.Database{LocationId: "nam5", DatabaseEdition: adminpb.Database_ENTERPRISE},
+	})
+	if err != nil {
+		t.Fatalf("CreateDatabase: %v", err)
+	}
+	if op.GetError() != nil {
+		t.Fatalf("CreateDatabase error = %v", op.GetError())
+	}
+	for _, id := range []string{"a", "b"} {
+		if _, err := providerSvc.CreateDocument(ctx, "proj", db, "users", id, map[string]*firestorestore.Value{
+			"email": firestorestore.StringVal("dup@example.com"),
+		}); err != nil {
+			t.Fatalf("seed users/%s: %v", id, err)
+		}
+	}
+
+	parent := "projects/proj/databases/" + db + "/collectionGroups/users"
+	createOp, err := client.CreateIndex(ctx, &adminpb.CreateIndexRequest{
+		Parent: parent,
+		Index: &adminpb.Index{
+			QueryScope: adminpb.Index_COLLECTION,
+			Unique:     true,
+			Fields:     []*adminpb.Index_IndexField{asc("email")},
+		},
+	})
+	if err != nil {
+		t.Fatalf("CreateIndex RPC: %v", err)
+	}
+	if !createOp.GetDone() || createOp.GetError() == nil {
+		t.Fatalf("operation done=%v error=%v, want a done operation carrying the build failure", createOp.GetDone(), createOp.GetError())
+	}
+	if got := createOp.GetError().GetCode(); got != int32(codes.FailedPrecondition) {
+		t.Fatalf("operation error code = %d, want FAILED_PRECONDITION", got)
+	}
+	if createOp.GetResponse() != nil {
+		t.Fatalf("a failed build must not carry an operation response: %v", createOp.GetResponse())
+	}
+
+	list, err := client.ListIndexes(ctx, &adminpb.ListIndexesRequest{Parent: parent})
+	if err != nil {
+		t.Fatalf("ListIndexes: %v", err)
+	}
+	if len(list.GetIndexes()) != 1 {
+		t.Fatalf("ListIndexes = %v, want the NEEDS_REPAIR record", list.GetIndexes())
+	}
+	failed := list.GetIndexes()[0]
+	if failed.GetState() != adminpb.Index_NEEDS_REPAIR {
+		t.Fatalf("listed state = %v, want NEEDS_REPAIR", failed.GetState())
+	}
+
+	// Recover: delete the failed index, remove one duplicate, re-create.
+	if _, err := client.DeleteIndex(ctx, &adminpb.DeleteIndexRequest{Name: failed.GetName()}); err != nil {
+		t.Fatalf("DeleteIndex(failed): %v", err)
+	}
+	if err := providerSvc.DeleteDocument(ctx, "proj", db, "users/b", nil); err != nil {
+		t.Fatalf("DeleteDocument(users/b): %v", err)
+	}
+	readyOp, err := client.CreateIndex(ctx, &adminpb.CreateIndexRequest{
+		Parent: parent,
+		Index: &adminpb.Index{
+			QueryScope: adminpb.Index_COLLECTION,
+			Unique:     true,
+			Fields:     []*adminpb.Index_IndexField{asc("email")},
+		},
+	})
+	if err != nil {
+		t.Fatalf("CreateIndex (after fix): %v", err)
+	}
+	if readyOp.GetError() != nil {
+		t.Fatalf("re-created operation error = %v, want none", readyOp.GetError())
+	}
+	var ready adminpb.Index
+	if err := readyOp.GetResponse().UnmarshalTo(&ready); err != nil {
+		t.Fatalf("re-created operation response: %v", err)
+	}
+	if ready.GetState() != adminpb.Index_READY {
+		t.Fatalf("re-created state = %v, want READY", ready.GetState())
+	}
+}

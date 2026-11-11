@@ -19,6 +19,7 @@ package firestoreadmin
 
 import (
 	"context"
+	"errors"
 	"strings"
 
 	adminpb "cloud.google.com/go/firestore/apiv1/admin/adminpb"
@@ -27,6 +28,7 @@ import (
 	firestoreprovider "jaiscloud/internal/gcp/provider/firestore"
 	"jaiscloud/internal/model"
 
+	statuspb "google.golang.org/genproto/googleapis/rpc/status"
 	"google.golang.org/protobuf/types/known/anypb"
 	"google.golang.org/protobuf/types/known/emptypb"
 )
@@ -100,6 +102,19 @@ func (s *Service) CreateIndex(ctx context.Context, req *adminpb.CreateIndexReque
 	}
 	created, opName, err := s.svc.CreateIndexDef(ctx, project, database, cg, indexFromProto(req.GetIndex()))
 	if err != nil {
+		var build *firestoreprovider.IndexBuildError
+		if errors.As(err, &build) {
+			// A failed unique-index build is a finished operation carrying the
+			// status as its error; the index itself was created in NEEDS_REPAIR.
+			return &longrunningpb.Operation{
+				Name: opName,
+				Done: true,
+				Result: &longrunningpb.Operation_Error{Error: &statuspb.Status{
+					Code:    build.Code,
+					Message: build.Message,
+				}},
+			}, nil
+		}
 		return nil, mapError(err)
 	}
 	resp, err := anypb.New(indexToProto(created))
@@ -209,9 +224,17 @@ func indexFromProto(p *adminpb.Index) firestoreprovider.IndexDef {
 }
 
 // indexToProto renders a stored index definition to its adminpb.Index form.
-// The emulator indexes are always READY. density is the effective value the
-// database edition serves, so it is present on every index read.
+// A failed unique-index build is stored in NEEDS_REPAIR; every other record is
+// READY (and a record written before the state was modelled reads as READY).
+// density is the effective value the database edition serves, so it is present
+// on every index read.
 func indexToProto(idx firestoreprovider.IndexDef) *adminpb.Index {
+	state := adminpb.Index_READY
+	if idx.State != "" {
+		if v, ok := adminpb.Index_State_value[idx.State]; ok {
+			state = adminpb.Index_State(v)
+		}
+	}
 	out := &adminpb.Index{
 		Name:       idx.Name,
 		QueryScope: adminpb.Index_QueryScope(adminpb.Index_QueryScope_value[idx.QueryScope]),
@@ -220,7 +243,7 @@ func indexToProto(idx firestoreprovider.IndexDef) *adminpb.Index {
 		Multikey:   idx.Multikey,
 		Unique:     idx.Unique,
 		ShardCount: idx.ShardCount,
-		State:      adminpb.Index_READY,
+		State:      state,
 	}
 	for _, f := range idx.Fields {
 		field := &adminpb.Index_IndexField{FieldPath: f.FieldPath}

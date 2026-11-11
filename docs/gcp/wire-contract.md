@@ -320,8 +320,10 @@ the non-Discovery `recordsPerRrset` field. The gate still fails on any high-seve
   Datastore's entity `update_time` optimistic-concurrency tokens are kept strictly monotonic
   (per document / per entity) even under a frozen clock; Firestore `unique` index entries are
   enforced on create/patch/commit/batchWrite with `ALREADY_EXISTS`, evaluated by scanning the
-  index's collection group under an in-process write lock (no index entries are materialized, and
-  creating a unique index over pre-existing duplicates still builds); Datastore transactions are single
+  index's collection group under an in-process write lock (no index entries are materialized); a
+  unique index built over pre-existing duplicates is stored in `NEEDS_REPAIR` and its finished
+  create operation carries a `FAILED_PRECONDITION` status (the exact code/message is unverified
+  real-GCP evidence, recorded in the ledger); Datastore transactions are single
   entity-group with read-set
   approximations, and its query engine models only kind/filter/offset/limit, so GQL projection,
   `ORDER BY`, and cursor bindings are parsed/ignored and `HAS ANCESTOR`/`CONTAINS`/`NOT` are

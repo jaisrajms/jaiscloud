@@ -1050,7 +1050,7 @@ func (s *Service) hasIndex(ctx context.Context, project, database string, requir
 	}
 	for _, e := range entries {
 		var idx indexDef
-		if json.Unmarshal(e.Data, &idx) != nil {
+		if json.Unmarshal(e.Data, &idx) != nil || !indexIsReady(idx) {
 			continue
 		}
 		var paths []string
@@ -1132,6 +1132,27 @@ func (s *Service) CreateIndexDef(ctx context.Context, project, database, cg stri
 		idx = appendStandardNameField(idx)
 	}
 
+	// A unique index build validates the data it would index. Real GCP stores
+	// the index in NEEDS_REPAIR and finishes the create operation with an error
+	// when the existing documents already collide (FE6); the scan and the store
+	// write run under the unique write lock so a concurrent duplicate write
+	// cannot slip in between them, and a failed index is neither planned from
+	// nor enforced (indexIsReady).
+	var buildFailure *IndexBuildError
+	idx.State = indexStateReady
+	if idx.Unique {
+		s.uniqueMu.Lock()
+		defer s.uniqueMu.Unlock()
+		dup, err := s.uniqueIndexDataHasDuplicates(ctx, project, database, cg, idx)
+		if err != nil {
+			return IndexDef{}, "", err
+		}
+		if dup {
+			idx.State = indexStateNeedsRepair
+			buildFailure = &IndexBuildError{Code: 9, Message: indexBuildFailureMessage}
+		}
+	}
+
 	id := randomHex(12)
 	idx.Name = fullIndexName(project, database, cg, id)
 	if idx.QueryScope == "" {
@@ -1150,6 +1171,11 @@ func (s *Service) CreateIndexDef(ctx context.Context, project, database, cg stri
 	// The operation name is the google.longrunning.Operation the index creation
 	// is wrapped in (done=true); both transports complete it synchronously.
 	opName := resource.ResourceID(project)("firestore-operation", database+"/"+randomHex(12))
+	if buildFailure != nil {
+		// The index record exists in NEEDS_REPAIR; the caller renders the finished
+		// operation with this failure instead of a response.
+		return idx, opName, buildFailure
+	}
 	return idx, opName, nil
 }
 
@@ -1157,6 +1183,16 @@ func (s *Service) CreateIndexDef(ctx context.Context, project, database, cg stri
 func (s *Service) CreateIndex(ctx context.Context, project, database, cg string, idx IndexDef) (map[string]any, error) {
 	created, opName, err := s.CreateIndexDef(ctx, project, database, cg, idx)
 	if err != nil {
+		var build *IndexBuildError
+		if errors.As(err, &build) {
+			// A failed build is a finished operation carrying the status, not an
+			// RPC error: the index was created (NEEDS_REPAIR) and is readable.
+			return map[string]any{
+				"name":  opName,
+				"done":  true,
+				"error": statusWire(int64(build.Code), build.Message),
+			}, nil
+		}
 		return nil, err
 	}
 	// CreateIndex returns a google.longrunning.Operation wrapping the created
