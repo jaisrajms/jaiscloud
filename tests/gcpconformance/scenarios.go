@@ -1877,6 +1877,49 @@ func Scenarios(suffix string) []Scenario {
 		Scenario{Service: "firestore", Method: "DELETE", Path: "/v1/${fsUniqIndex}"},
 	)
 
+	// ─── Firestore unique index build failure (FE6) ───────────────────────────
+	// A unique index over data that already holds a duplicate entry fails its
+	// build: the create's finished operation carries a google.rpc.Status error,
+	// the index is stored in NEEDS_REPAIR (readable, not enforcing), and the
+	// documented recovery is delete -> fix the data -> re-create. The second
+	// create proves the recovery builds READY.
+	fsBuildDB := "conf-build-db-" + suffix
+	fsBuildBase := "/v1/projects/" + p + "/databases/" + fsBuildDB
+	fsBuildDoc := func(id string) string {
+		return "projects/" + p + "/databases/" + fsBuildDB + "/documents/conf-users/" + id
+	}
+	fsBuildUser := func(id, email string) string {
+		return fmt.Sprintf(`{"update":{"name":%q,"fields":{"email":{"stringValue":%q}}}}`, fsBuildDoc(id), email)
+	}
+	fsBuildIndexBody := `{"queryScope":"COLLECTION_GROUP","density":"DENSE","unique":true,"fields":[{"fieldPath":"email","order":"ASCENDING"}]}`
+	sc = append(sc,
+		Scenario{Service: "firestore", Method: "POST",
+			Path: "/v1/projects/" + p + "/databases?databaseId=" + fsBuildDB,
+			Body: `{"type":"FIRESTORE_NATIVE","locationId":"nam5","databaseEdition":"ENTERPRISE"}`},
+		// Two documents already share the entry the index would enforce.
+		Scenario{Service: "firestore", Method: "POST", Path: fsBuildBase + "/documents:commit",
+			Body: `{"writes":[` + fsBuildUser("alice", "dup@example.com") + `,` + fsBuildUser("bob", "dup@example.com") + `]}`},
+		// The create fails its build: a done operation carrying the error.
+		Scenario{Service: "firestore", Method: "POST",
+			Path: fsBuildBase + "/collectionGroups/conf-users/indexes",
+			Body: fsBuildIndexBody},
+		// The failed record is listed in NEEDS_REPAIR; name it for the delete.
+		Scenario{Service: "firestore", Method: "GET",
+			Path: fsBuildBase + "/collectionGroups/conf-users/indexes",
+			Save: map[string]string{"fsBuildIndex": "indexes.0.name"}},
+		Scenario{Service: "firestore", Method: "GET", Path: "/v1/${fsBuildIndex}"},
+		Scenario{Service: "firestore", Method: "DELETE", Path: "/v1/${fsBuildIndex}"},
+		// Fix the data, then the re-created index builds READY.
+		Scenario{Service: "firestore", Method: "POST", Path: fsBuildBase + "/documents:commit",
+			Body: fmt.Sprintf(`{"writes":[{"delete":%q}]}`, fsBuildDoc("bob"))},
+		Scenario{Service: "firestore", Method: "POST",
+			Path: fsBuildBase + "/collectionGroups/conf-users/indexes",
+			Body: fsBuildIndexBody,
+			Save: map[string]string{"fsBuildReady": "response.name"}},
+		Scenario{Service: "firestore", Method: "GET", Path: "/v1/${fsBuildReady}"},
+		Scenario{Service: "firestore", Method: "DELETE", Path: "/v1/${fsBuildReady}"},
+	)
+
 	// ─── Cloud Logging: folder-scoped views and their IAM policy ──────────────
 	// The view IAM trio exists on the folders scope as well as projects; a
 	// folder-scoped bucket + view drives get/set/test on the same core.

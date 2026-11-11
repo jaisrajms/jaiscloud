@@ -96,3 +96,70 @@ func TestSDKFirestoreAdminUniqueIndexEnforcement(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "alice@example.com", snap.Data()["email"])
 }
+
+// TestSDKFirestoreAdminUniqueIndexBuildNeedsRepair is the FE6 official-client
+// check: creating a unique index over a collection group that already holds a
+// duplicate entry finishes the create operation with FAILED_PRECONDITION and
+// leaves the index in NEEDS_REPAIR (readable, not enforcing). The documented
+// recovery — delete the failed index, fix the data, re-create — yields READY.
+func TestSDKFirestoreAdminUniqueIndexBuildNeedsRepair(t *testing.T) {
+	ctx := context.Background()
+	c := newAdmin(t)
+
+	dbID := unique("uniqbuild")
+	op, err := c.CreateDatabase(ctx, &adminpb.CreateDatabaseRequest{
+		Parent:     projectName(),
+		DatabaseId: dbID,
+		Database: &adminpb.Database{
+			LocationId:      "us-central1",
+			Type:            adminpb.Database_FIRESTORE_NATIVE,
+			DatabaseEdition: adminpb.Database_ENTERPRISE,
+		},
+	})
+	require.NoError(t, err)
+	_, err = op.Wait(ctx)
+	require.NoError(t, err)
+	deleteDatabaseOnCleanup(t, c, dbID)
+
+	users := newDatabaseClient(t, dbID).Collection("users")
+	_, err = users.Doc("alice").Create(ctx, map[string]any{"email": "dup@example.com"})
+	require.NoError(t, err)
+	_, err = users.Doc("bob").Create(ctx, map[string]any{"email": "dup@example.com"})
+	require.NoError(t, err)
+
+	parent := collectionGroupParent(dbID, "users")
+	uniqueEmail := func() *adminpb.Index {
+		return &adminpb.Index{
+			QueryScope: adminpb.Index_COLLECTION_GROUP,
+			Density:    adminpb.Index_DENSE,
+			Unique:     true,
+			Fields: []*adminpb.Index_IndexField{{
+				FieldPath: "email",
+				ValueMode: &adminpb.Index_IndexField_Order_{Order: adminpb.Index_IndexField_ASCENDING},
+			}},
+		}
+	}
+
+	createOp, err := c.CreateIndex(ctx, &adminpb.CreateIndexRequest{Parent: parent, Index: uniqueEmail()})
+	require.NoError(t, err, "the create RPC itself succeeds; the build failure rides on the operation")
+	_, err = createOp.Wait(ctx)
+	require.Equal(t, codes.FailedPrecondition, status.Code(err), "failed build = %v, want FAILED_PRECONDITION", err)
+
+	list, err := listAllIndexes(ctx, c, parent)
+	require.NoError(t, err)
+	require.Len(t, list, 1, "the failed index is still a record")
+	require.Equal(t, adminpb.Index_NEEDS_REPAIR, list[0].GetState())
+	deleteIndexOnCleanup(t, c, list[0].GetName())
+
+	// Recover: delete the failed index, remove the duplicate document, re-create.
+	err = c.DeleteIndex(ctx, &adminpb.DeleteIndexRequest{Name: list[0].GetName()})
+	require.NoError(t, err)
+	_, err = users.Doc("bob").Delete(ctx)
+	require.NoError(t, err)
+	reOp, err := c.CreateIndex(ctx, &adminpb.CreateIndexRequest{Parent: parent, Index: uniqueEmail()})
+	require.NoError(t, err)
+	ready, err := reOp.Wait(ctx)
+	require.NoError(t, err)
+	require.Equal(t, adminpb.Index_READY, ready.GetState())
+	deleteIndexOnCleanup(t, c, ready.GetName())
+}

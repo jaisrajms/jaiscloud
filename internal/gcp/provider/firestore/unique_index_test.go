@@ -3,6 +3,7 @@ package firestore
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync"
 	"testing"
 
@@ -456,4 +457,129 @@ func TestUniqueIndexRESTCommitEnvelope(t *testing.T) {
 		t.Fatalf("commit users/a: %v", err)
 	}
 	wantAlreadyExists(t, commit("b"))
+}
+
+// TestUniqueIndexBuildNeedsRepair pins FE6's build contract: a unique index over
+// data that already holds a duplicate entry fails its build. The record is
+// stored in NEEDS_REPAIR (readable, but neither served by the planner nor
+// enforced on writes), and the documented recovery is delete -> fix the data ->
+// re-create.
+func TestUniqueIndexBuildNeedsRepair(t *testing.T) {
+	ctx := context.Background()
+	s := newUniqueService(t, "builddb")
+	for _, id := range []string{"a", "b"} {
+		if err := createDoc(s, "builddb", "users/"+id, strFields("email", "dup@example.com")); err != nil {
+			t.Fatalf("seed users/%s: %v", id, err)
+		}
+	}
+
+	failed, opName, err := s.CreateIndexDef(ctx, "proj", "builddb", "users", indexDef{
+		QueryScope: "COLLECTION",
+		Unique:     true,
+		Fields:     []indexField{asc("email")},
+	})
+	var build *IndexBuildError
+	if !errors.As(err, &build) {
+		t.Fatalf("CreateIndexDef error = %v, want *IndexBuildError", err)
+	}
+	if build.Code != 9 || opName == "" {
+		t.Fatalf("build failure code=%d opName=%q, want FAILED_PRECONDITION and an operation name", build.Code, opName)
+	}
+	if failed.State != indexStateNeedsRepair {
+		t.Fatalf("failed index state = %q, want NEEDS_REPAIR", failed.State)
+	}
+	got, err := s.GetIndex(ctx, "proj", "builddb", "users", indexID(t, failed.Name))
+	if err != nil || got.State != indexStateNeedsRepair {
+		t.Fatalf("GetIndex after a failed build = %+v, %v; want NEEDS_REPAIR", got, err)
+	}
+	// A failed index is not served by the planner and does not enforce.
+	if ok, err := s.hasIndex(ctx, "proj", "builddb", []string{"email"}); err != nil || ok {
+		t.Fatalf("hasIndex(NEEDS_REPAIR) = %v, %v; want false", ok, err)
+	}
+	if err := createDoc(s, "builddb", "users/c", strFields("email", "dup@example.com")); err != nil {
+		t.Fatalf("a NEEDS_REPAIR index must not enforce uniqueness: %v", err)
+	}
+
+	// Recovery: remove the failed index, fix the data, re-create.
+	if err := s.DeleteIndex(ctx, "proj", "builddb", "users", indexID(t, failed.Name)); err != nil {
+		t.Fatalf("DeleteIndex(failed): %v", err)
+	}
+	for _, id := range []string{"b", "c"} {
+		if err := s.DeleteDocument(ctx, "proj", "builddb", "users/"+id, nil); err != nil {
+			t.Fatalf("DeleteDocument(users/%s): %v", id, err)
+		}
+	}
+	created, _, err := s.CreateIndexDef(ctx, "proj", "builddb", "users", indexDef{
+		QueryScope: "COLLECTION",
+		Unique:     true,
+		Fields:     []indexField{asc("email")},
+	})
+	if err != nil {
+		t.Fatalf("re-create after fixing the data: %v", err)
+	}
+	if created.State != indexStateReady {
+		t.Fatalf("re-created index state = %q, want READY", created.State)
+	}
+	wantAlreadyExists(t, createDoc(s, "builddb", "users/d", strFields("email", "dup@example.com")))
+}
+
+// TestUniqueIndexBuildRESTEnvelope pins the REST rendering of a failed build:
+// the create answers 200 with a done operation whose error is the google.rpc
+// status and no response, and the index is readable in NEEDS_REPAIR.
+func TestUniqueIndexBuildRESTEnvelope(t *testing.T) {
+	ctx := context.Background()
+	docs := firestorestore.NewMemoryStore()
+	p := New(docs, store.NewMemoryResourceStore())
+	if _, _, err := p.CreateDatabaseDef(ctx, "proj", "builddb", databaseDef{
+		LocationID:      "us-central1",
+		DatabaseEdition: databaseEditionEnterprise,
+	}); err != nil {
+		t.Fatalf("CreateDatabaseDef: %v", err)
+	}
+	for _, id := range []string{"a", "b"} {
+		if err := docs.CreateDocument(ctx, firestorestore.Document{
+			Name:   docName("proj", "builddb", "users/"+id),
+			Fields: strFields("email", "dup@example.com"),
+		}); err != nil {
+			t.Fatalf("seed users/%s: %v", id, err)
+		}
+	}
+
+	nr := testNR()
+	nr.Params["name"] = "databases/builddb/collectionGroups/users/indexes"
+	nr.Params["body"] = map[string]any{
+		"queryScope": "COLLECTION",
+		"unique":     true,
+		"fields":     []any{map[string]any{"fieldPath": "email", "order": "ASCENDING"}},
+	}
+	resp, err := p.CreateIndex(ctx, nr)
+	if err != nil {
+		t.Fatalf("CreateIndex: %v", err)
+	}
+	if resp.Data["done"] != true {
+		t.Fatalf("operation done = %v, want true", resp.Data["done"])
+	}
+	if _, ok := resp.Data["response"]; ok {
+		t.Fatalf("a failed build must not carry an operation response: %v", resp.Data["response"])
+	}
+	errObj, ok := resp.Data["error"].(map[string]any)
+	if !ok {
+		t.Fatalf("operation error = %v, want a google.rpc status object", resp.Data["error"])
+	}
+	if code, _ := errObj["code"].(int64); code != 9 {
+		t.Fatalf("operation error code = %v, want 9 (FAILED_PRECONDITION)", errObj["code"])
+	}
+	if msg, _ := errObj["message"].(string); !strings.Contains(msg, "unique index") {
+		t.Fatalf("operation error message = %q, want the unique-index build failure", msg)
+	}
+
+	lresp, lerr := p.ListIndexes(ctx, adminNR("databases/builddb/collectionGroups/users/indexes", nil))
+	list := indexData(t, lresp, lerr)
+	idxs, _ := list["indexes"].([]any)
+	if len(idxs) != 1 {
+		t.Fatalf("ListIndexes = %v, want the NEEDS_REPAIR record", list)
+	}
+	if state := idxs[0].(map[string]any)["state"]; state != "NEEDS_REPAIR" {
+		t.Fatalf("listed state = %v, want NEEDS_REPAIR", state)
+	}
 }

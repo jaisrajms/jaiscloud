@@ -98,7 +98,9 @@ func (s *Service) uniqueIndexesForGroups(ctx context.Context, project, database 
 		if json.Unmarshal(e.Data, &idx) != nil {
 			continue
 		}
-		if !idx.Unique {
+		if !idx.Unique || !indexIsReady(idx) {
+			// A NEEDS_REPAIR index is not updated on writes ("The index is not
+			// updated when writing a document"), so it cannot enforce uniqueness.
 			continue
 		}
 		out = append(out, idx)
@@ -282,6 +284,36 @@ func (s *Service) checkUniqueState(ctx context.Context, idxs map[docScope][]inde
 		}
 	}
 	return nil
+}
+
+// uniqueIndexDataHasDuplicates reports whether the collection group already
+// holds two documents whose entries for idx are equal. It is the index-build
+// check (FE6): real GCP fails a unique index build on such data, stores the
+// index in NEEDS_REPAIR and finishes the operation with an error. The caller
+// holds the unique write lock, so the scan and the index record's store write
+// are atomic with respect to duplicate-producing writes.
+func (s *Service) uniqueIndexDataHasDuplicates(ctx context.Context, project, database, cg string, idx indexDef) (bool, error) {
+	if s.store == nil {
+		return false, nil
+	}
+	docs, err := s.store.ListDocuments(ctx, project, database)
+	if err != nil {
+		return false, err
+	}
+	seen := make(map[string]string)
+	for _, d := range docs {
+		p, db, docCG, ok := docCollectionGroup(d.Name)
+		if !ok || p != project || db != database || docCG != cg {
+			continue
+		}
+		for _, key := range uniqueIndexEntries(idx, d) {
+			if owner, dup := seen[key]; dup && owner != d.Name {
+				return true, nil
+			}
+			seen[key] = d.Name
+		}
+	}
+	return false, nil
 }
 
 // indexFieldValue returns the value at a dot-delimited field path together with

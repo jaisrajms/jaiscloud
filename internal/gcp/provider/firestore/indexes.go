@@ -27,6 +27,20 @@ const (
 	indexDensityDense       = "DENSE"
 )
 
+// Index.state values (google.firestore.admin.v1.Index.State). The emulator
+// completes every build synchronously, so a stored index is READY — except a
+// unique index whose data already held a duplicate entry: real GCP stores it in
+// NEEDS_REPAIR ("The index was being created, but something went wrong ... The
+// index is not updated when writing a document. Some index data may exist. Use
+// the google.longrunning.Operations API to determine why the operation that
+// last attempted to create this index failed, then re-create the index."), and
+// the create's finished operation carries the failure. An index in that state
+// is neither served by the planner nor enforced on writes (FE6).
+const (
+	indexStateReady       = "READY"
+	indexStateNeedsRepair = "NEEDS_REPAIR"
+)
+
 // Index.apiScope values (google.firestore.admin.v1.Index.ApiScope). ANY_API is
 // the proto3 zero value and "the default", so it is the unset spelling: it is
 // never stored and never rendered (protojson omits a zero enum, and the
@@ -79,6 +93,34 @@ var indexFieldEnumFields = map[string]map[string]bool{
 // DENSITY_UNSPECIFIED "will use database default setting"; DENSE "is the
 // default density for an Enterprise edition database"; SPARSE_ALL is "the
 // default and only allowed value for Standard edition databases").
+// indexIsReady reports whether a stored index is served and maintained. An index
+// record written before the state was modelled has none and is READY.
+func indexIsReady(idx indexDef) bool {
+	return idx.State == "" || idx.State == indexStateReady
+}
+
+// IndexBuildError reports a unique index build that failed on the database's
+// existing data. The index is stored in NEEDS_REPAIR; the create returns a
+// finished google.longrunning.Operation carrying this failure as its error
+// (REST `error`, gRPC Operation.error), exactly as the v1beta1 create method
+// describes: "During creation, the process could result in an error, in which
+// case the index will move to the ERROR state. The process can be recovered by
+// fixing the data that caused the error, removing the index ... then re-creating
+// the index." The exact status code/message is not published, so the emulator
+// serves FAILED_PRECONDITION with the message below; the ledger records that as
+// an unverified wire detail (FE6).
+type IndexBuildError struct {
+	// Code is the google.rpc status code the finished operation carries.
+	Code int32
+	// Message is the operation error message.
+	Message string
+}
+
+func (e *IndexBuildError) Error() string { return e.Message }
+
+// indexBuildFailureMessage is the message a failed unique index build carries.
+const indexBuildFailureMessage = "The index build failed: " + uniqueViolationMessage
+
 func indexDensityDefault(edition string) string {
 	if edition == databaseEditionEnterprise {
 		return indexDensityDense
@@ -206,14 +248,17 @@ func validateIndexEnums(idx indexDef) error {
 // record type is deliberately scalar so an index definition can never claim a
 // query capability the emulator does not serve (see the FE1 ledger row).
 type indexDef struct {
-	Name       string       `json:"name,omitempty"`
-	QueryScope string       `json:"queryScope,omitempty"`
-	APIScope   string       `json:"apiScope,omitempty"`
-	Density    string       `json:"density,omitempty"`
-	Multikey   bool         `json:"multikey,omitempty"`
-	Unique     bool         `json:"unique,omitempty"`
-	ShardCount int32        `json:"shardCount,omitempty"`
-	Fields     []indexField `json:"fields,omitempty"`
+	Name       string `json:"name,omitempty"`
+	QueryScope string `json:"queryScope,omitempty"`
+	APIScope   string `json:"apiScope,omitempty"`
+	Density    string `json:"density,omitempty"`
+	Multikey   bool   `json:"multikey,omitempty"`
+	Unique     bool   `json:"unique,omitempty"`
+	ShardCount int32  `json:"shardCount,omitempty"`
+	// State is OUTPUT_ONLY in the Discovery document. A record written before
+	// the state was modelled has none and reads back as READY.
+	State  string       `json:"state,omitempty"`
+	Fields []indexField `json:"fields,omitempty"`
 }
 
 type indexField struct {
@@ -267,10 +312,14 @@ func indexMap(idx indexDef) map[string]any {
 		}
 		fields = append(fields, m)
 	}
+	state := idx.State
+	if state == "" {
+		state = indexStateReady
+	}
 	m := map[string]any{
 		"name":       idx.Name,
 		"queryScope": idx.QueryScope,
-		"state":      "READY",
+		"state":      state,
 		"fields":     fields,
 	}
 	if idx.APIScope != "" && idx.APIScope != indexAPIScopeAny {
