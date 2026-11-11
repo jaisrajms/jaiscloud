@@ -453,10 +453,10 @@ entries:
     pr: 782
     note: "resolved: object kmsKeyName reports the CryptoKeyVersion, CMEK errors match real GCS (#782, W2.1)"
   - source: "kms-parity"
-    match: "answers with the wrong contract"
+    match: "refuses the right writes with the wrong contract"
     pr: 782
     note: "resolved: CKG1 shipped in #782"
   - source: "kms-parity"
-    match: "reports the CryptoKey name in"
+    match: "real GCS reports the"
     pr: 782
     note: "resolved: CKG5 shipped in #782"
