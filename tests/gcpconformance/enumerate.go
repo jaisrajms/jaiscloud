@@ -23,6 +23,7 @@ import (
 	pubsubprovider "jaiscloud/internal/gcp/provider/pubsub"
 	secretmanagerprovider "jaiscloud/internal/gcp/provider/secretmanager"
 	storageprovider "jaiscloud/internal/gcp/provider/storage"
+	restcloudbilling "jaiscloud/internal/gcp/transport/rest/cloudbilling"
 	restcontainer "jaiscloud/internal/gcp/transport/rest/container"
 	restdataproc "jaiscloud/internal/gcp/transport/rest/dataproc"
 	restdatastore "jaiscloud/internal/gcp/transport/rest/datastore"
@@ -76,6 +77,7 @@ var providerPrefixes = map[string]string{
 	"Eventarc":          "eventarc",
 	"CloudDNS":          "clouddns",
 	"Memorystore":       "memorystore",
+	"CloudBilling":      "cloudbilling",
 	"CloudSQL":          "cloudsql",
 	"Compute":           "compute",
 	"ServiceUsage":      "serviceusage",
@@ -118,6 +120,7 @@ func providers() []provider.Provider {
 		&resttasks.Provider{},
 		&restrun.Provider{},
 		&restresourcemanager.Provider{},
+		&restcloudbilling.Provider{},
 		&restdatastore.Provider{},
 		&restlogging.Provider{},
 		&restmonitoring.Provider{},

@@ -17,6 +17,62 @@
       "reason": "BigQuery jobs are created by query/load with a server-assigned job id; dataset/table update is a full replace that needs a prior create with the reference sub-objects. The emulator serves these (the curated SQL/load scenarios exercise them); the generic path probe cannot stage them."
     },
     {
+      "operation": "CloudBilling.BillingAccountsCreate",
+      "reason": "Cloud Billing's billing-account and service/SKU catalog is deliberately not modelled (plan CB5): there is no account lifecycle and no SKU catalog to serve, so a record would be fabricated. The method is an explicit Unimplemented 501 stub naming the Discovery method, so no schema-valid response exists to validate."
+    },
+    {
+      "operation": "CloudBilling.BillingAccountsGet",
+      "reason": "The emulator models no billing-account catalog, so billingAccounts.get answers NotFound 404 for every id by design \u2014 it never fabricates an account. That is the same answer real GCP gives for an unknown account, and the only shape a real client sees when it lists nothing."
+    },
+    {
+      "operation": "CloudBilling.BillingAccountsGetIamPolicy",
+      "reason": "Cloud Billing's billing-account and service/SKU catalog is deliberately not modelled (plan CB5): there is no account lifecycle and no SKU catalog to serve, so a record would be fabricated. The method is an explicit Unimplemented 501 stub naming the Discovery method, so no schema-valid response exists to validate."
+    },
+    {
+      "operation": "CloudBilling.BillingAccountsMove",
+      "reason": "Cloud Billing's billing-account and service/SKU catalog is deliberately not modelled (plan CB5): there is no account lifecycle and no SKU catalog to serve, so a record would be fabricated. The method is an explicit Unimplemented 501 stub naming the Discovery method, so no schema-valid response exists to validate."
+    },
+    {
+      "operation": "CloudBilling.BillingAccountsPatch",
+      "reason": "Cloud Billing's billing-account and service/SKU catalog is deliberately not modelled (plan CB5): there is no account lifecycle and no SKU catalog to serve, so a record would be fabricated. The method is an explicit Unimplemented 501 stub naming the Discovery method, so no schema-valid response exists to validate."
+    },
+    {
+      "operation": "CloudBilling.BillingAccountsProjectsList",
+      "reason": "Cloud Billing's billing-account and service/SKU catalog is deliberately not modelled (plan CB5): there is no account lifecycle and no SKU catalog to serve, so a record would be fabricated. The method is an explicit Unimplemented 501 stub naming the Discovery method, so no schema-valid response exists to validate."
+    },
+    {
+      "operation": "CloudBilling.BillingAccountsSetIamPolicy",
+      "reason": "Cloud Billing's billing-account and service/SKU catalog is deliberately not modelled (plan CB5): there is no account lifecycle and no SKU catalog to serve, so a record would be fabricated. The method is an explicit Unimplemented 501 stub naming the Discovery method, so no schema-valid response exists to validate."
+    },
+    {
+      "operation": "CloudBilling.BillingAccountsSubAccountsCreate",
+      "reason": "Cloud Billing's billing-account and service/SKU catalog is deliberately not modelled (plan CB5): there is no account lifecycle and no SKU catalog to serve, so a record would be fabricated. The method is an explicit Unimplemented 501 stub naming the Discovery method, so no schema-valid response exists to validate."
+    },
+    {
+      "operation": "CloudBilling.BillingAccountsSubAccountsList",
+      "reason": "Cloud Billing's billing-account and service/SKU catalog is deliberately not modelled (plan CB5): there is no account lifecycle and no SKU catalog to serve, so a record would be fabricated. The method is an explicit Unimplemented 501 stub naming the Discovery method, so no schema-valid response exists to validate."
+    },
+    {
+      "operation": "CloudBilling.OrganizationsBillingAccountsCreate",
+      "reason": "Cloud Billing's billing-account and service/SKU catalog is deliberately not modelled (plan CB5): there is no account lifecycle and no SKU catalog to serve, so a record would be fabricated. The method is an explicit Unimplemented 501 stub naming the Discovery method, so no schema-valid response exists to validate."
+    },
+    {
+      "operation": "CloudBilling.OrganizationsBillingAccountsList",
+      "reason": "Cloud Billing's billing-account and service/SKU catalog is deliberately not modelled (plan CB5): there is no account lifecycle and no SKU catalog to serve, so a record would be fabricated. The method is an explicit Unimplemented 501 stub naming the Discovery method, so no schema-valid response exists to validate."
+    },
+    {
+      "operation": "CloudBilling.OrganizationsBillingAccountsMove",
+      "reason": "Cloud Billing's billing-account and service/SKU catalog is deliberately not modelled (plan CB5): there is no account lifecycle and no SKU catalog to serve, so a record would be fabricated. The method is an explicit Unimplemented 501 stub naming the Discovery method, so no schema-valid response exists to validate."
+    },
+    {
+      "operation": "CloudBilling.ServicesList",
+      "reason": "Cloud Billing's billing-account and service/SKU catalog is deliberately not modelled (plan CB5): there is no account lifecycle and no SKU catalog to serve, so a record would be fabricated. The method is an explicit Unimplemented 501 stub naming the Discovery method, so no schema-valid response exists to validate."
+    },
+    {
+      "operation": "CloudBilling.ServicesSkusList",
+      "reason": "Cloud Billing's billing-account and service/SKU catalog is deliberately not modelled (plan CB5): there is no account lifecycle and no SKU catalog to serve, so a record would be fabricated. The method is an explicit Unimplemented 501 stub naming the Discovery method, so no schema-valid response exists to validate."
+    },
+    {
       "operation": "CloudDNS.ChangeGet",
       "reason": "DNS change ids are returned by the change create and record-set names are DNS names, so the Discovery-driven probe cannot reference the resource it would need to read/delete."
     },

@@ -269,6 +269,23 @@ func detectV1Service(path string) string {
 	if len(seg) >= 2 && seg[0] == "v1" && seg[1] == "billingAccounts" {
 		return "cloudbilling"
 	}
+	// Cloud Billing's organization-scoped billing-account catalog
+	// (/v1/organizations/{org}/billingAccounts[/{id}:move]) and the top-level
+	// service/SKU pricing catalog (/v1/services, /v1/services/{service}/skus).
+	// Both are catalog families the emulator refuses with an explicit 501
+	// (plan CB5), claimed so a client gets the documented Unimplemented rather
+	// than the unknown-service 404. The organization arm requires the
+	// billingAccounts segment, so a later Resource Manager v1 organizations
+	// surface is not blocked; the services arm is the top-level collection only
+	// (Service Usage's per-project services live under /v1/projects/{p}/).
+	if len(seg) >= 2 && seg[0] == "v1" && seg[1] == "organizations" &&
+		len(seg) >= 4 && seg[3] == "billingAccounts" {
+		return "cloudbilling"
+	}
+	if len(seg) >= 2 && seg[0] == "v1" && seg[1] == "services" &&
+		(len(seg) == 2 || (len(seg) == 4 && seg[3] == "skus")) {
+		return "cloudbilling"
+	}
 	pi := -1
 	for i, s := range seg {
 		if s == "projects" {

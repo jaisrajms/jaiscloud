@@ -40,6 +40,7 @@ package main
 //	compute            -> internal/store (ResourceStore)
 //	memorystore        -> internal/store (ResourceStore)
 //	serviceusage       -> internal/store (ResourceStore)
+//	cloudbilling       -> internal/store (ResourceStore)
 //	resourcemanager    -> internal/store (ResourceStore, via internal/gcp/policy)
 //	logging            -> internal/gcp/store/logging
 //	monitoring         -> internal/gcp/store/monitoring
@@ -85,6 +86,7 @@ var persistentBackends = map[string]bool{
 	"compute":            true,
 	"memorystore":        true,
 	"serviceusage":       true,
+	"cloudbilling":       true,
 	"resourcemanager":    true,
 	"logging":            true,
 	"monitoring":         true,

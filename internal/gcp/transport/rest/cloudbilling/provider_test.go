@@ -345,42 +345,107 @@ func TestBillingAccountTestIamPermissionsEcho(t *testing.T) {
 }
 
 // TestBillingAccountIamPolicyUnimplemented locks D6: only the permission echo is
-// served. The IAM policy methods fail loud with Unimplemented 501 naming the
-// method, never a fabricated policy.
+// served. The IAM policy methods are registered routes that fail loud with
+// Unimplemented 501 naming the method, never a fabricated policy.
 func TestBillingAccountIamPolicyUnimplemented(t *testing.T) {
-	c, _, _ := newTestProvider()
-	for _, verb := range []string{"getIamPolicy", "setIamPolicy"} {
-		target := "/v1/billingAccounts/0X0X0X-0X0X0X-0X0X0X:" + verb
-		perr := decodeErr(t, c, http.MethodPost, target, `{}`)
-		if perr.HTTPStatus != http.StatusNotImplemented || perr.Code != "Unimplemented" {
-			t.Errorf("%s = %d/%q, want 501/Unimplemented", target, perr.HTTPStatus, perr.Code)
+	c, p, _ := newTestProvider()
+	for _, tc := range []struct{ method, verb string }{
+		{http.MethodGet, "getIamPolicy"},
+		{http.MethodPost, "setIamPolicy"},
+	} {
+		target := "/v1/billingAccounts/0X0X0X-0X0X0X-0X0X0X:" + tc.verb
+		status, _, perr := handlerErr(t, c, p, tc.method, target, `{}`)
+		if status != http.StatusNotImplemented || perr.Code != "Unimplemented" {
+			t.Errorf("%s = %d/%q, want 501/Unimplemented", target, status, perr.Code)
 		}
-		if !strings.Contains(perr.Message, verb) || !strings.Contains(perr.Message, "plan CB5") {
+		if !strings.Contains(perr.Message, tc.verb) || !strings.Contains(perr.Message, "plan CB5") {
 			t.Errorf("%s message %q does not name the method and the plan", target, perr.Message)
 		}
 	}
 }
 
 // TestBillingAccountsCatalogUnimplemented locks the fail-loud rule for the rest
-// of the billing-account surface (plan CB5): the refusal is Unimplemented 501
-// and names the operation family, not an empty success body.
+// of the billing-account surface (plan CB5): each catalog path decodes to its
+// own action and the registered route refuses with Unimplemented 501 naming the
+// Discovery method, not an empty success body and not an unknown-service 404.
 func TestBillingAccountsCatalogUnimplemented(t *testing.T) {
-	c, _, _ := newTestProvider()
-	cases := []struct{ method, target, family string }{
+	c, p, _ := newTestProvider()
+	cases := []struct{ method, target, methodID string }{
 		{http.MethodPost, "/v1/billingAccounts", "billingAccounts.create"},
 		{http.MethodPatch, "/v1/billingAccounts/0X0X0X-0X0X0X-0X0X0X", "billingAccounts.patch"},
 		{http.MethodPost, "/v1/billingAccounts/0X0X0X-0X0X0X-0X0X0X:move", "billingAccounts.move"},
-		{http.MethodGet, "/v1/billingAccounts/0X0X0X-0X0X0X-0X0X0X/subAccounts", "billingAccounts.subAccounts"},
-		{http.MethodGet, "/v1/billingAccounts/0X0X0X-0X0X0X-0X0X0X/projects", "billingAccounts.projects"},
+		{http.MethodGet, "/v1/billingAccounts/0X0X0X-0X0X0X-0X0X0X/subAccounts", "billingAccounts.subAccounts.list"},
+		{http.MethodPost, "/v1/billingAccounts/0X0X0X-0X0X0X-0X0X0X/subAccounts", "billingAccounts.subAccounts.create"},
+		{http.MethodGet, "/v1/billingAccounts/0X0X0X-0X0X0X-0X0X0X/projects", "billingAccounts.projects.list"},
+		{http.MethodGet, "/v1/organizations/123456789012/billingAccounts", "organizations.billingAccounts.list"},
+		{http.MethodPost, "/v1/organizations/123456789012/billingAccounts", "organizations.billingAccounts.create"},
+		{http.MethodGet, "/v1/organizations/123456789012/billingAccounts/0X0X0X-0X0X0X-0X0X0X:move", "organizations.billingAccounts.move"},
+		{http.MethodGet, "/v1/services", "services.list"},
+		{http.MethodGet, "/v1/services/6F81-5844-456A/skus", "services.skus.list"},
 	}
 	for _, tc := range cases {
-		perr := decodeErr(t, c, tc.method, tc.target, `{}`)
-		if perr.HTTPStatus != http.StatusNotImplemented || perr.Code != "Unimplemented" {
-			t.Errorf("%s %s = %d/%q, want 501/Unimplemented", tc.method, tc.target, perr.HTTPStatus, perr.Code)
+		status, _, perr := handlerErr(t, c, p, tc.method, tc.target, `{}`)
+		if status != http.StatusNotImplemented || perr.Code != "Unimplemented" {
+			t.Errorf("%s %s = %d/%q, want 501/Unimplemented", tc.method, tc.target, status, perr.Code)
 			continue
 		}
-		if !strings.Contains(perr.Message, tc.family) {
-			t.Errorf("%s %s message %q does not name the family %q", tc.method, tc.target, perr.Message, tc.family)
+		if !strings.Contains(perr.Message, tc.methodID) {
+			t.Errorf("%s %s message %q does not name the method %q", tc.method, tc.target, perr.Message, tc.methodID)
+		}
+	}
+}
+
+// TestCatalogPathDecoding locks the (service, action) each catalog path decodes
+// to, so the routing matrix and the fidelity cells key off the documented
+// method rather than a guess.
+func TestCatalogPathDecoding(t *testing.T) {
+	c := NewCodec()
+	cases := []struct{ method, target, action string }{
+		{http.MethodGet, "/v1/billingAccounts", "BillingAccountsList"},
+		{http.MethodPost, "/v1/billingAccounts", "BillingAccountsCreate"},
+		{http.MethodGet, "/v1/billingAccounts/0X0X0X-0X0X0X-0X0X0X", "BillingAccountsGet"},
+		{http.MethodPatch, "/v1/billingAccounts/0X0X0X-0X0X0X-0X0X0X", "BillingAccountsPatch"},
+		{http.MethodGet, "/v1/billingAccounts/0X0X0X-0X0X0X-0X0X0X/subAccounts", "BillingAccountsSubAccountsList"},
+		{http.MethodGet, "/v1/billingAccounts/0X0X0X-0X0X0X-0X0X0X/projects", "BillingAccountsProjectsList"},
+		{http.MethodGet, "/v1/organizations/123456789012/billingAccounts", "OrganizationsBillingAccountsList"},
+		{http.MethodPost, "/v1/organizations/123456789012/billingAccounts", "OrganizationsBillingAccountsCreate"},
+		{http.MethodGet, "/v1/organizations/123456789012/billingAccounts/0X0X0X:move", "OrganizationsBillingAccountsMove"},
+		// The live document declares the organization move as GET; an
+		// AIP-151-style POST decodes to the same refusal.
+		{http.MethodPost, "/v1/organizations/123456789012/billingAccounts/0X0X0X:move", "OrganizationsBillingAccountsMove"},
+		{http.MethodGet, "/v1/services", "ServicesList"},
+		{http.MethodGet, "/v1/services/6F81-5844-456A/skus", "ServicesSkusList"},
+	}
+	for _, tc := range cases {
+		req, err := http.NewRequest(tc.method, tc.target, nil)
+		if err != nil {
+			t.Fatalf("new request: %v", err)
+		}
+		nr, err := c.Decode(req, nil)
+		if err != nil {
+			t.Errorf("%s %s: %v", tc.method, tc.target, err)
+			continue
+		}
+		if nr.Action != tc.action {
+			t.Errorf("%s %s action = %q, want %q", tc.method, tc.target, nr.Action, tc.action)
+		}
+		if nr.Service != ServiceName {
+			t.Errorf("%s %s service = %q, want %q", tc.method, tc.target, nr.Service, ServiceName)
+		}
+	}
+
+	// Shapes the document does not declare stay UnsupportedOperation 404 — the
+	// codec must not widen a claim beyond the published surface.
+	for _, tc := range []struct{ method, target string }{
+		{http.MethodDelete, "/v1/billingAccounts"},
+		{http.MethodGet, "/v1/billingAccounts/0X0X0X/subAccounts/sub1"},
+		{http.MethodPut, "/v1/services/6F81-5844-456A/skus"},
+		{http.MethodGet, "/v1/services/6F81-5844-456A"},
+		{http.MethodGet, "/v1/organizations/123456789012/projects"},
+	} {
+		perr := decodeErr(t, c, tc.method, tc.target, "")
+		if perr.HTTPStatus != http.StatusNotFound || perr.Code != "UnsupportedOperation" {
+			t.Errorf("%s %s = %d/%q, want 404/UnsupportedOperation", tc.method, tc.target, perr.HTTPStatus, perr.Code)
 		}
 	}
 }

@@ -133,7 +133,10 @@ schema by `TestTranscriptsConform`.
 ## 3. Stability & versioning
 
 - **Pinned to official artifacts.** REST is validated against the vendored Discovery documents —
-  BigQuery `v2`; Cloud DNS `v1`; Cloud SQL Admin `v1`; Compute Engine `v1`; Dataproc `v1`;
+  BigQuery `v2`; Cloud Billing `v1`
+  (revision `20261106`; the document also declares an unrelated `tasks.*` / `message:send|stream` /
+  `getCard` cluster, which is not a Cloud Billing surface and stays unclaimed);
+  Cloud DNS `v1`; Cloud SQL Admin `v1`; Compute Engine `v1`; Dataproc `v1`;
   Datastore `v1`; Eventarc `v1`; Firestore `v1`; Cloud Functions `v1`; IAM `v1`; IAM Credentials
   `v1`; Cloud KMS `v1`;
   Cloud Logging `v2`; Managed Kafka `v1`; Memorystore `v1`; Dataproc Metastore `v1`; Cloud
@@ -264,6 +267,18 @@ the non-Discovery `recordsPerRrset` field. The gate still fails on any high-seve
   `/48`-within-`fd20::/20` range — so raw readers see the routing mode and BGP state that was set
   (TF2-17-2).
 - **BigLake Iceberg REST catalog** — 14 cells `preview` (no official Discovery document).
+- **Cloud Billing** — REST only (no `google.cloud.billing.v1` client in scope speaks gRPC).
+  4 cells `ga` (`projects.getBillingInfo`, `projects.updateBillingInfo`, the always-empty
+  `billingAccounts.list`, the default-permissive `billingAccounts.testIamPermissions` echo),
+  1 `limited` (`billingAccounts.get` — no account catalog exists, so every id is the same
+  `404` real GCP gives for an unknown account) and 13 `unsupported` stubs for the catalog the
+  emulator deliberately does not model (`billingAccounts.create/patch/move`, `projects.list`,
+  `subAccounts.*`, the IAM policy verbs, `organizations.billingAccounts.*`, `services.list`,
+  `services.skus.list`): each path is claimed and answers an `Unimplemented` 501 that names the
+  Discovery method, because there is no account lifecycle and no SKU/pricing catalog to serve.
+  The vendored `cloudbilling.v1` document also declares `tasks.*`, `message:send|stream` and
+  `getCard`, which are not a Cloud Billing surface: those 10 methods are left unclaimed (the
+  matrix records them as *not served*, never as `ga`).
 - **Cloud Functions** — **v1 and v2 surfaces**. gcloud 586 (and current client SDKs) speak the
   v2 API, so `/v2/projects/{p}/locations/{loc}/functions` (and `operations`) route to the
   `functions` service and serialize the v2 shape (`state`, `buildConfig`, `serviceConfig`);

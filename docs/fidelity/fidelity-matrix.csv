@@ -39,6 +39,24 @@ bigquery,BigQuery.UpdateDataset,rest,limited,false,"documented Standard SQL subs
 bigquery,BigQuery.UpdateRoutine,rest,limited,true,"PUT replace or updateMask merge over the stored Routine, with the etag precondition (412 conditionNotMet); the body is stored, not executed"
 bigquery,BigQuery.UpdateRowAccessPolicy,rest,limited,true,"PUT replace or updateMask merge over the stored policy, with the etag precondition (412 conditionNotMet); the predicate is stored, not enforced"
 bigquery,BigQuery.UpdateTable,rest,limited,false,"documented Standard SQL subset (one pure-Go SQLite engine in both memory and --dsn modes, docs/gcp/bigquery-sql-engine.md §5); DDL/DML jobs complete synchronously and paging/getQueryResults snapshot semantics are simplified; load jobs cover one or more gs:// objects (including a single-'*' wildcard) or an uploaded file (multipart / resumable media session) of NEWLINE_DELIMITED_JSON, CSV, Parquet or Avro, with a supplied schema, an embedded file schema, or autodetect; gzip-compressed CSV/JSON is auto-detected; useAvroLogicalTypes selects logical vs raw Avro types; Parquet/Avro DECIMAL loads exactly through decimalTargetTypes (NUMERIC/BIGNUMERIC/STRING), Parquet MAP follows parquetOptions.mapTargetType, Parquet GEOMETRY/GEOGRAPHY load as hex-encoded WKB, and Avro MAP/DURATION/multi-branch unions follow the Avro conversion table (ORC and Parquet VARIANT fail loud — BigQuery documents no batch-load mapping for either)"
+cloudbilling,CloudBilling.BillingAccountTestIamPermissions,rest,ga,true,
+cloudbilling,CloudBilling.BillingAccountsCreate,rest,unsupported,false,the billing-account catalog is not modelled (plan CB5); explicit Unimplemented 501 stub naming billingAccounts.create
+cloudbilling,CloudBilling.BillingAccountsGet,rest,limited,false,"no billing-account catalog exists (plan CB5), so get answers NotFound 404 for every id — it never fabricates an account; the empty list is the whole catalog surface"
+cloudbilling,CloudBilling.BillingAccountsGetIamPolicy,rest,unsupported,false,billing-account IAM policy is not modelled (plan CB5); explicit Unimplemented 501 stub (only the permissive testIamPermissions echo is served)
+cloudbilling,CloudBilling.BillingAccountsList,rest,ga,true,
+cloudbilling,CloudBilling.BillingAccountsMove,rest,unsupported,false,the billing-account catalog is not modelled (plan CB5); explicit Unimplemented 501 stub naming billingAccounts.move
+cloudbilling,CloudBilling.BillingAccountsPatch,rest,unsupported,false,the billing-account catalog is not modelled (plan CB5); explicit Unimplemented 501 stub naming billingAccounts.patch
+cloudbilling,CloudBilling.BillingAccountsProjectsList,rest,unsupported,false,no billing-account catalog exists to list projects for (plan CB5); explicit Unimplemented 501 stub
+cloudbilling,CloudBilling.BillingAccountsSetIamPolicy,rest,unsupported,false,billing-account IAM policy is not modelled (plan CB5); explicit Unimplemented 501 stub — returning a fabricated policy would be worse than failing loud
+cloudbilling,CloudBilling.BillingAccountsSubAccountsCreate,rest,unsupported,false,billing sub-accounts are not modelled (plan CB5); explicit Unimplemented 501 stub
+cloudbilling,CloudBilling.BillingAccountsSubAccountsList,rest,unsupported,false,billing sub-accounts are not modelled (plan CB5); explicit Unimplemented 501 stub
+cloudbilling,CloudBilling.OrganizationsBillingAccountsCreate,rest,unsupported,false,the organization-scoped billing-account catalog is not modelled (plan CB5); explicit Unimplemented 501 stub
+cloudbilling,CloudBilling.OrganizationsBillingAccountsList,rest,unsupported,false,the organization-scoped billing-account catalog is not modelled (plan CB5); explicit Unimplemented 501 stub
+cloudbilling,CloudBilling.OrganizationsBillingAccountsMove,rest,unsupported,false,the organization-scoped billing-account catalog is not modelled (plan CB5); explicit Unimplemented 501 stub
+cloudbilling,CloudBilling.ProjectGetBillingInfo,rest,ga,true,
+cloudbilling,CloudBilling.ProjectUpdateBillingInfo,rest,ga,true,
+cloudbilling,CloudBilling.ServicesList,rest,unsupported,false,no service/SKU pricing catalog exists in the emulator (plan CB5); explicit Unimplemented 501 stub
+cloudbilling,CloudBilling.ServicesSkusList,rest,unsupported,false,no SKU catalog or pricing data exists in the emulator (plan CB5); explicit Unimplemented 501 stub
 clouddns,CloudDNS.ChangeCreate,rest,limited,true,metadata-only over ResourceStore (no private DNS resolution)
 clouddns,CloudDNS.ChangeGet,rest,limited,false,metadata-only over ResourceStore (no private DNS resolution)
 clouddns,CloudDNS.ChangeList,rest,limited,true,metadata-only over ResourceStore (no private DNS resolution)
