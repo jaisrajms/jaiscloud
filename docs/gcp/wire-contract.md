@@ -340,7 +340,11 @@ the non-Discovery `recordsPerRrset` field. The gate still fails on any high-seve
   `DestroyCryptoKeyVersion` is idempotent on an already-scheduled/destroyed version.
   `UpdateCryptoKeyPrimaryVersion` requires an `ENCRYPT_DECRYPT` key and answers
   `400 FAILED_PRECONDITION` — "Keys with purpose ASYMMETRIC_SIGN do not have a primary version." —
-  for any other purpose (verified against real GCP), before the store is touched. The
+  for any other purpose (verified against real GCP), before the store is touched. It has **no
+  version-state guard**: real Cloud KMS accepts a `DISABLED` or `DESTROY_SCHEDULED` version as
+  primary (verified against real GCP — both answer `200` and the `CryptoKey.primary` object echoes
+  that state), and refusing here would diverge; what refuses to encrypt is the *consumer* (Cloud
+  Storage and Pub/Sub reject CMEK use until a usable primary exists). The
   CryptoKey response carries the 30-day `destroyScheduledDuration`; the per-key
   `destroy_scheduled_duration` override (and the org-policy minimum) is not modelled —
   the documented 30-day default applies. As with
