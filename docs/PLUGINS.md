@@ -291,7 +291,7 @@ repository of their own, with no jaiscloud checkout:
 
    ```text
    $ jaiscloud-aws-plugins version
-   in-process plugins: supported, built with go1.26.10 linux/amd64, cgo=true, tags=ui, trimpath=true,
+   in-process plugins: supported, built with go1.26.11 linux/amd64, cgo=true, tags=ui, trimpath=true,
    sdk=v0.1.0 (require github.com/jaisrajms/jaiscloud/sdk v0.1.0)
    ```
 
@@ -307,7 +307,7 @@ repository of their own, with no jaiscloud checkout:
    exactly the release the emulator was built with:
 
    ```bash
-   GOTOOLCHAIN=go1.26.10 CGO_ENABLED=1 go build -buildmode=plugin -trimpath -o acme-redact.so .
+   GOTOOLCHAIN=go1.26.11 CGO_ENABLED=1 go build -buildmode=plugin -trimpath -o acme-redact.so .
    ```
 
 4. Start the emulator with it:
