@@ -41,6 +41,14 @@ type Service struct {
 	txnMu    sync.Mutex
 	readSets map[string]*readSet
 
+	// uniqueMu serializes writes that touch a collection group with a unique
+	// index. The emulator keeps no index entries (queries scan), so uniqueness
+	// is checked by scanning the collection group's documents; holding this
+	// lock across that scan and the store commit makes the check-and-apply
+	// atomic in-process. Writes with no covering unique index never take it
+	// (see uniqueGuardForWrites).
+	uniqueMu sync.Mutex
+
 	// changeMu guards the change-feed: changeSeq (monotonic), changeLog (the
 	// bounded ordered history used for resume-token replay), changeFloor (the
 	// highest evicted sequence), and changeSubs.
@@ -312,6 +320,16 @@ func (s *Service) CreateDocument(ctx context.Context, project, database, path, d
 		CreateTime: now,
 		UpdateTime: now,
 	}
+	// A unique index entry must be unique across the collection group, so the
+	// check and the store write form one critical section (see uniqueMu).
+	uniqueIdx, release, err := s.uniqueGuardForNames(ctx, name)
+	if err != nil {
+		return firestorestore.Document{}, err
+	}
+	defer release()
+	if err := s.checkUniqueState(ctx, uniqueIdx, map[string]bool{name: true}, []firestorestore.Document{doc}); err != nil {
+		return firestorestore.Document{}, err
+	}
 	if err := s.store.CreateDocument(ctx, doc); err != nil {
 		return firestorestore.Document{}, mapStoreError(err)
 	}
@@ -443,6 +461,19 @@ func (s *Service) PatchDocument(ctx context.Context, project, database, path str
 	// store's lock, atomically with applying the write. The lock is only
 	// held for that fast in-memory check-and-apply, not across this
 	// function's merge computation.
+	//
+	// A unique index covering the document's collection group adds one more
+	// atomic step: the duplicate check and the commit run under the unique
+	// write lock, so a concurrent create of the same value serializes behind
+	// this patch instead of racing it.
+	uniqueIdx, release, err := s.uniqueGuardForNames(ctx, name)
+	if err != nil {
+		return firestorestore.Document{}, err
+	}
+	defer release()
+	if err := s.checkUniqueState(ctx, uniqueIdx, map[string]bool{name: true}, []firestorestore.Document{doc}); err != nil {
+		return firestorestore.Document{}, err
+	}
 	implicitRead := firestorestore.ReadRef{Name: name, Exists: exists, UpdateTime: existing.UpdateTime}
 	if err := s.store.Commit(ctx, []firestorestore.ReadRef{implicitRead}, []firestorestore.Write{
 		{Name: name, Document: &doc, Precondition: pre},
@@ -677,8 +708,16 @@ func (s *Service) Commit(ctx context.Context, transaction []byte, writes []*writ
 	}
 
 	commitTime := clock.Now()
+	uniqueIdx, release, err := s.uniqueGuardForWrites(ctx, writes)
+	if err != nil {
+		return time.Time{}, nil, err
+	}
+	defer release()
 	ws, results, implicitReads, changed, err := s.buildWrites(ctx, writes, commitTime)
 	if err != nil {
+		return time.Time{}, nil, err
+	}
+	if err := s.checkUniqueWrites(ctx, uniqueIdx, ws); err != nil {
 		return time.Time{}, nil, err
 	}
 	reads := append(s.readSetFor(transaction), implicitReads...)
@@ -717,33 +756,47 @@ func (s *Service) BatchWrite(ctx context.Context, writes []*writeWire) ([]any, [
 	statuses := make([]any, 0, len(writes))
 	writeResults := make([]any, 0, len(writes))
 	for _, w := range writes {
-		ws, results, implicitReads, changed, err := s.buildWrites(ctx, []*writeWire{w}, now)
-		if err != nil {
-			statuses = append(statuses, statusWireForWriteError(err))
-			writeResults = append(writeResults, map[string]any{})
-			continue
-		}
-		if err := s.store.Commit(ctx, implicitReads, ws); err != nil {
-			statuses = append(statuses, statusWireForWriteError(err))
-			writeResults = append(writeResults, map[string]any{})
-			continue
-		}
-		// A committed write fans out to listeners, exactly as in Commit: real
-		// Firestore's batchWrite notifies Listen subscribers for every write it
-		// applies (verified against real GCP) and stays silent for the
-		// empty-mask no-op.
-		if changed[0] {
-			if w := ws[0]; w.Document == nil {
-				s.publishChange(ChangeEvent{Name: w.Name})
-			} else {
-				d := *w.Document
-				s.publishChange(ChangeEvent{Name: w.Name, Doc: &d})
-			}
-		}
-		statuses = append(statuses, statusWire(0, ""))
-		writeResults = append(writeResults, results[0])
+		status, result := s.batchWriteOne(ctx, w, now)
+		statuses = append(statuses, status)
+		writeResults = append(writeResults, result)
 	}
 	return statuses, writeResults, nil
+}
+
+// batchWriteOne applies a single BatchWrite write and reports its status/result.
+// A unique-index violation is this write's own ALREADY_EXISTS status (google.rpc
+// code 6): batchWrite is non-atomic, so the other writes in the request are
+// unaffected, exactly as real GCP reports per-write failures.
+func (s *Service) batchWriteOne(ctx context.Context, w *writeWire, now time.Time) (map[string]any, any) {
+	uniqueIdx, release, err := s.uniqueGuardForWrites(ctx, []*writeWire{w})
+	if err != nil {
+		return statusWireForWriteError(err), map[string]any{}
+	}
+	defer release()
+
+	ws, results, implicitReads, changed, err := s.buildWrites(ctx, []*writeWire{w}, now)
+	if err != nil {
+		return statusWireForWriteError(err), map[string]any{}
+	}
+	if err := s.checkUniqueWrites(ctx, uniqueIdx, ws); err != nil {
+		return statusWireForWriteError(err), map[string]any{}
+	}
+	if err := s.store.Commit(ctx, implicitReads, ws); err != nil {
+		return statusWireForWriteError(err), map[string]any{}
+	}
+	// A committed write fans out to listeners, exactly as in Commit: real
+	// Firestore's batchWrite notifies Listen subscribers for every write it
+	// applies (verified against real GCP) and stays silent for the
+	// empty-mask no-op.
+	if changed[0] {
+		if w := ws[0]; w.Document == nil {
+			s.publishChange(ChangeEvent{Name: w.Name})
+		} else {
+			d := *w.Document
+			s.publishChange(ChangeEvent{Name: w.Name, Doc: &d})
+		}
+	}
+	return statusWire(0, ""), results[0]
 }
 
 // BatchGet returns the documents (found/missing wire items) for the given
