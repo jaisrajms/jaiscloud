@@ -6752,7 +6752,7 @@
         "discovery=firestore.projects.databases.collectionGroups.indexes.create",
         "mutating",
         "postgres=yes",
-        "verified=true (rest, 4 transcript entries)"
+        "verified=true (rest, 5 transcript entries)"
       ]
     },
     {
@@ -6850,7 +6850,7 @@
         "discovery=firestore.projects.databases.collectionGroups.indexes.delete",
         "mutating",
         "postgres=yes",
-        "verified=true (rest, 4 transcript entries)"
+        "verified=true (rest, 5 transcript entries)"
       ]
     },
     {
@@ -7010,7 +7010,7 @@
       "evidence": [
         "discovery=firestore.projects.databases.collectionGroups.indexes.get",
         "postgres=yes",
-        "verified=true (rest, 3 transcript entries)"
+        "verified=true (rest, 4 transcript entries)"
       ]
     },
     {

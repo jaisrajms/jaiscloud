@@ -207,8 +207,17 @@ func checkFirestoreAdminGetIndex(ctx context.Context, cfg Config) error {
 	if got.GetState() != adminpb.Index_READY {
 		return fmt.Errorf("GetIndex state = %v, want READY", got.GetState())
 	}
-	if len(got.GetFields()) != 2 || got.GetFields()[0].GetFieldPath() != want {
-		return fmt.Errorf("GetIndex fields = %v, want first field %q", got.GetFields(), want)
+	// Standard edition serves the documented server-appended trailing __name__
+	// field: "The last field entry is always for the field path `__name__`…
+	// added automatically with the same direction as that of the last field
+	// defined" (FE3). The fixture above is (a ASC, b ASC), so __name__ is last
+	// and ASCENDING.
+	fields := got.GetFields()
+	if len(fields) != 3 || fields[0].GetFieldPath() != want {
+		return fmt.Errorf("GetIndex fields = %v, want first field %q plus the appended __name__", fields, want)
+	}
+	if last := fields[len(fields)-1]; last.GetFieldPath() != "__name__" || last.GetOrder() != fields[len(fields)-2].GetOrder() {
+		return fmt.Errorf("GetIndex trailing field = %v, want __name__ with the last declared field's order %v", last, fields[len(fields)-2].GetOrder())
 	}
 	return nil
 }

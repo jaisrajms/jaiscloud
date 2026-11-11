@@ -507,3 +507,153 @@ func TestNormalizeIndexLegacyRecord(t *testing.T) {
 		t.Errorf("ANY_API must be normalized to unset, got %q", got)
 	}
 }
+
+// ─── FE3: the Standard edition __name__ append ───────────────────────────────
+
+// indexFieldPairs renders the `fields` array of a stored index as path/order
+// pairs, which is what a client sees on the wire.
+func indexFieldPairs(t *testing.T, idx map[string]any) [][2]string {
+	t.Helper()
+	raw, ok := idx["fields"].([]any)
+	if !ok {
+		t.Fatalf("index has no fields array: %v", idx)
+	}
+	out := make([][2]string, 0, len(raw))
+	for _, item := range raw {
+		f, ok := item.(map[string]any)
+		if !ok {
+			t.Fatalf("field entry = %T, want map", item)
+		}
+		path, _ := f["fieldPath"].(string)
+		order, _ := f["order"].(string)
+		out = append(out, [2]string{path, order})
+	}
+	return out
+}
+
+func wantFieldPairs(t *testing.T, idx map[string]any, want ...[2]string) {
+	t.Helper()
+	got := indexFieldPairs(t, idx)
+	if len(got) != len(want) {
+		t.Fatalf("fields = %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("fields = %v, want %v", got, want)
+		}
+	}
+}
+
+// TestStandardIndexNameFieldAppend pins the Discovery rule for Standard edition
+// composite indexes: the last field entry is always __name__, appended with the
+// last declared field's direction, or ASCENDING when that field is not
+// directional. Enterprise edition appends nothing.
+func TestStandardIndexNameFieldAppend(t *testing.T) {
+	ctx := context.Background()
+	std := createTestDatabase(t, databaseEditionStandard)
+
+	t.Run("direction follows the last field", func(t *testing.T) {
+		idx, _ := createTestIndex(t, std, "std-db", "orders", map[string]any{
+			"fields": []any{
+				map[string]any{"fieldPath": "status", "order": "ASCENDING"},
+				map[string]any{"fieldPath": "total", "order": "DESCENDING"},
+			},
+		})
+		wantFieldPairs(t, idx,
+			[2]string{"status", "ASCENDING"},
+			[2]string{"total", "DESCENDING"},
+			[2]string{"__name__", "DESCENDING"})
+	})
+
+	t.Run("non-directional last field defaults to ASCENDING", func(t *testing.T) {
+		idx, _ := createTestIndex(t, std, "std-db", "tags", map[string]any{
+			"fields": []any{
+				map[string]any{"fieldPath": "status", "order": "ASCENDING"},
+				map[string]any{"fieldPath": "tags", "arrayConfig": "CONTAINS"},
+			},
+		})
+		wantFieldPairs(t, idx,
+			[2]string{"status", "ASCENDING"},
+			[2]string{"tags", ""},
+			[2]string{"__name__", "ASCENDING"})
+	})
+
+	t.Run("explicit trailing __name__ is kept", func(t *testing.T) {
+		idx, _ := createTestIndex(t, std, "std-db", "explicit", map[string]any{
+			"fields": []any{
+				map[string]any{"fieldPath": "a", "order": "ASCENDING"},
+				map[string]any{"fieldPath": "__name__", "order": "DESCENDING"},
+			},
+		})
+		wantFieldPairs(t, idx,
+			[2]string{"a", "ASCENDING"},
+			[2]string{"__name__", "DESCENDING"})
+	})
+
+	t.Run("a __name__ that is not last moves to the end", func(t *testing.T) {
+		idx, _ := createTestIndex(t, std, "std-db", "moved", map[string]any{
+			"fields": []any{
+				map[string]any{"fieldPath": "__name__", "order": "DESCENDING"},
+				map[string]any{"fieldPath": "a", "order": "ASCENDING"},
+			},
+		})
+		wantFieldPairs(t, idx,
+			[2]string{"a", "ASCENDING"},
+			[2]string{"__name__", "DESCENDING"})
+	})
+
+	t.Run("a GET serves the appended field", func(t *testing.T) {
+		_, name := createTestIndex(t, std, "std-db", "get", map[string]any{
+			"fields": []any{
+				map[string]any{"fieldPath": "a", "order": "ASCENDING"},
+				map[string]any{"fieldPath": "b", "order": "DESCENDING"},
+			},
+		})
+		resp, err := std.GetIndex(ctx, adminNR("databases/std-db/collectionGroups/get/indexes/"+indexID(t, name), nil))
+		got := indexData(t, resp, err)
+		wantFieldPairs(t, got,
+			[2]string{"a", "ASCENDING"},
+			[2]string{"b", "DESCENDING"},
+			[2]string{"__name__", "DESCENDING"})
+	})
+
+	t.Run("Enterprise appends nothing", func(t *testing.T) {
+		ent := createTestDatabase(t, databaseEditionEnterprise)
+		idx, _ := createTestIndex(t, ent, "ent-db", "orders", map[string]any{
+			"fields": []any{
+				map[string]any{"fieldPath": "a", "order": "ASCENDING"},
+				map[string]any{"fieldPath": "b", "order": "DESCENDING"},
+			},
+		})
+		wantFieldPairs(t, idx,
+			[2]string{"a", "ASCENDING"},
+			[2]string{"b", "DESCENDING"})
+	})
+}
+
+// TestNormalizeIndexStandardNameField pins the read-side normalisation for a
+// Standard composite record written before FE3: get/list agree with a create,
+// while an Enterprise record and a single-field Standard record stay as stored.
+func TestNormalizeIndexStandardNameField(t *testing.T) {
+	legacy := indexDef{
+		Name: "n",
+		Fields: []indexField{
+			{FieldPath: "a", Order: "ASCENDING"},
+			{FieldPath: "b", Order: "DESCENDING"},
+		},
+	}
+	std := normalizeIndex(databaseEditionStandard, legacy)
+	if len(std.Fields) != 3 || std.Fields[2].FieldPath != "__name__" || std.Fields[2].Order != "DESCENDING" {
+		t.Fatalf("Standard legacy fields = %+v, want the appended __name__ DESCENDING", std.Fields)
+	}
+	if len(legacy.Fields) != 2 {
+		t.Fatalf("normalisation mutated the stored record: %+v", legacy.Fields)
+	}
+	if ent := normalizeIndex(databaseEditionEnterprise, legacy); len(ent.Fields) != 2 {
+		t.Fatalf("Enterprise legacy fields = %+v, want unchanged", ent.Fields)
+	}
+	single := indexDef{Fields: []indexField{{FieldPath: "a", Order: "ASCENDING"}}}
+	if got := normalizeIndex(databaseEditionStandard, single); len(got.Fields) != 1 {
+		t.Fatalf("single-field Standard record = %+v, want unchanged", got.Fields)
+	}
+}

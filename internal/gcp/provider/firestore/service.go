@@ -1126,6 +1126,11 @@ func (s *Service) CreateIndexDef(ctx context.Context, project, database, cg stri
 		// renderer omits it.
 		idx.APIScope = ""
 	}
+	if !enterprise {
+		// Standard edition serves the server-appended trailing __name__ field
+		// (see appendStandardNameField), so store the effective definition.
+		idx = appendStandardNameField(idx)
+	}
 
 	id := randomHex(12)
 	idx.Name = fullIndexName(project, database, cg, id)
