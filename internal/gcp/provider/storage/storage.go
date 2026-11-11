@@ -163,12 +163,66 @@ func (p *Provider) SetKMSStore(k kmsstore.Store) { p.kms = k }
 // store for a bucket in location. The REST insert/update and the gRPC
 // CreateBucket/UpdateBucket all call it, so both transports answer alike. An
 // empty/absent defaultKmsKeyName is not a reference and passes.
+//
+// Cloud Storage documents its own wording for a refused CMEK, so the reference
+// error is rendered through gcsCMEKError rather than the generic
+// INVALID_ARGUMENT message the other referring services keep.
 func (p *Provider) ValidateBucketEncryption(ctx context.Context, location string, enc map[string]any) error {
 	key, _ := enc["defaultKmsKeyName"].(string)
 	if key == "" {
 		return nil
 	}
-	return reference.ValidateCryptoKey(ctx, p.kms, "encryption.defaultKmsKeyName", key, location)
+	return gcsCMEKError(reference.ValidateCryptoKey(ctx, p.kms, "encryption.defaultKmsKeyName", key, location))
+}
+
+// Cloud Storage's documented CMEK rejections. The messages are the ones real
+// GCS answers (verified against parity-diff-jaiscloud on 2026-11-11 for the
+// missing-key, wrong-location and version-qualified cases; the disabled-key
+// wording comes from the documented `cloudKmsDisabledKey` reason and is pinned
+// by the CMEK differential session). All of them are HTTP 400 with
+// errors[].reason "invalid".
+const (
+	gcsCMEKReasonInvalid = "invalid"
+	gcsCMEKMsgNotFound   = "Cannot find the requested Cloud KMS encryption key."
+	gcsCMEKMsgMalformed  = "Malformed Cloud KMS crypto key: %s"
+)
+
+// gcsCMEKError renders a CMEK reference/state failure with Cloud Storage's
+// contract: a 400 whose errors[].reason is "invalid" and whose message names the
+// actual cause, instead of the generic INVALID_ARGUMENT (whose reason would fall
+// through to "internalError"). Non-CMEK errors pass through untouched.
+func gcsCMEKError(err error) error {
+	if err == nil {
+		return nil
+	}
+	var pe *model.ProviderError
+	if !errors.As(err, &pe) {
+		return err
+	}
+	name, _ := pe.Data["cryptoKeyName"].(string)
+	if name == "" {
+		name, _ = pe.Data["kmsKeyName"].(string)
+	}
+	var msg string
+	switch {
+	case pe.Data["cryptoKeyError"] == reference.CryptoKeyErrorMalformed:
+		msg = fmt.Sprintf(gcsCMEKMsgMalformed, name)
+	case pe.Data["cryptoKeyError"] == reference.CryptoKeyErrorNotFound,
+		pe.Data["kmsKeyState"] == "notFound":
+		msg = gcsCMEKMsgNotFound
+	case pe.Data["cryptoKeyError"] == reference.CryptoKeyErrorLocation:
+		keyLoc, _ := pe.Data["keyLocation"].(string)
+		resLoc, _ := pe.Data["resourceLocation"].(string)
+		msg = fmt.Sprintf("Cloud KMS region '%s' not available for use with GCS region '%s'.", keyLoc, resLoc)
+	case pe.Data["cryptoKeyError"] == reference.CryptoKeyErrorPurpose:
+		msg = fmt.Sprintf("Cloud KMS key %s must have purpose ENCRYPT_DECRYPT.", name)
+	case pe.Data["kmsKeyState"] == "notEnabled":
+		msg = fmt.Sprintf("Cloud KMS key %s is disabled, destroyed, or scheduled to be destroyed.", name)
+	default:
+		return err
+	}
+	return model.NewProviderError("InvalidArgument", msg, 400).
+		WithData(map[string]any{"reason": gcsCMEKReasonInvalid})
 }
 
 // SetEventPublisher wires the Pub/Sub publisher used to fan object events out
@@ -2628,7 +2682,7 @@ func (p *Provider) ObjectsInsert(ctx context.Context, nr *model.NormalizedReques
 // finalized objectMeta with checksums/size populated.
 func (p *Provider) writeObjectRaw(ctx context.Context, nr *model.NormalizedRequest, bucket, object string, o objectMeta, raw []byte, versioned bool, priorBlobKey string, md5Enabled bool) (objectMeta, error) {
 	bmeta, _ := p.objects.GetBucket(ctx, bucket)
-	kmsKeyName, cseKey, cseKeySHA256, err := p.resolveWriteKey(nr, bucket, bmeta)
+	kmsKeyName, cseKey, cseKeySHA256, err := p.resolveWriteKey(ctx, nr, bucket, bmeta)
 	if err != nil {
 		return o, err
 	}
@@ -2700,7 +2754,7 @@ func (p *Provider) PutObjectData(ctx context.Context, project string, meta gcs.O
 	} else {
 		rawDEK, wd, err := p.encryptor.Wrap(ctx, project, kmsKeyName)
 		if err != nil {
-			return meta, err
+			return meta, gcsCMEKError(err)
 		}
 		wrappedDEK = wd
 		ciphertext, err := kmsstore.EncryptData(rawDEK, raw, nil)
@@ -2710,7 +2764,18 @@ func (p *Provider) PutObjectData(ctx context.Context, project string, meta gcs.O
 		if err := p.blobs.Put(ctx, blobsNamespace, id, ciphertext); err != nil {
 			return meta, err
 		}
-		meta.KmsKeyName = kmsKeyName
+		// Real GCS reports the CryptoKeyVersion that actually encrypted the
+		// object (…/cryptoKeys/k/cryptoKeyVersions/N), not the CryptoKey name:
+		// it is how objects are found when a version is being retired, and what
+		// clients read back and must strip before re-using as a write key.
+		// Wrap tags the wrapped DEK with the version it used, so the version is
+		// read back from there rather than re-resolving the primary (which a
+		// concurrent rotation could have moved).
+		if used, _, derr := kmsstore.DecodeVersionedCiphertext(wd); derr == nil && used != "" {
+			meta.KmsKeyName = kmsKeyName + "/cryptoKeyVersions/" + used
+		} else {
+			meta.KmsKeyName = kmsKeyName
+		}
 	}
 
 	meta.WrappedDEK = wrappedDEK
@@ -3583,7 +3648,7 @@ func (p *Provider) ObjectsCompose(ctx context.Context, nr *model.NormalizedReque
 // resolveWriteKey determines the DEK for an object write: CSEK (header) wins,
 // then CMEK (per-object kmsKeyName query param, else the bucket's
 // encryption.defaultKmsKeyName), else empty (server DEK via Wrap).
-func (p *Provider) resolveWriteKey(nr *model.NormalizedRequest, bucket string, bmeta map[string]any) (kmsKeyName string, cseKey []byte, cseKeySHA256 string, err error) {
+func (p *Provider) resolveWriteKey(ctx context.Context, nr *model.NormalizedRequest, bucket string, bmeta map[string]any) (kmsKeyName string, cseKey []byte, cseKeySHA256 string, err error) {
 	cseKey, cseKeySHA256, err = resolveCSEK(nr.Params, wire.CSEKAlgorithm, wire.CSEKKey, wire.CSEKKeySHA256)
 	if err != nil {
 		return "", nil, "", err
@@ -3592,14 +3657,25 @@ func (p *Provider) resolveWriteKey(nr *model.NormalizedRequest, bucket string, b
 		return "", cseKey, cseKeySHA256, nil
 	}
 	if k, _ := nr.Params["kmsKeyName"].(string); k != "" {
-		return k, nil, "", nil
-	}
-	if enc, ok := bmeta["encryption"].(map[string]any); ok {
+		kmsKeyName = k
+	} else if enc, ok := bmeta["encryption"].(map[string]any); ok {
 		if dk, _ := enc["defaultKmsKeyName"].(string); dk != "" {
-			return dk, nil, "", nil
+			kmsKeyName = dk
 		}
 	}
-	return "", nil, "", nil
+	if kmsKeyName == "" {
+		return "", nil, "", nil
+	}
+	// Real GCS re-resolves the CMEK on every write (not just when the bucket's
+	// default key was set), and it rejects a version-qualified name outright:
+	// "Malformed Cloud KMS crypto key: …/cryptoKeyVersions/1". Validating here
+	// also refuses a wrong-location or missing key at upload time, which bucket
+	// writes alone would miss for a per-object kmsKeyName.
+	location, _ := bmeta["location"].(string)
+	if err := reference.ValidateCryptoKey(ctx, p.kms, "kmsKeyName", kmsKeyName, location); err != nil {
+		return "", nil, "", gcsCMEKError(err)
+	}
+	return kmsKeyName, nil, "", nil
 }
 
 // Documented GCS reasons for customer-supplied encryption key (CSEK) failures.

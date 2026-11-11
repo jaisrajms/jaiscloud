@@ -53,7 +53,9 @@ func TestGCSCMEKRoundTrip(t *testing.T) {
 		t.Fatalf("insert object: %v", err)
 	}
 
-	// Metadata surfaces the resolved kmsKeyName.
+	// Metadata surfaces the CryptoKeyVersion that encrypted the object — real
+	// GCS reports …/cryptoKeys/{key}/cryptoKeyVersions/{n}, not the key name
+	// (verified against real GCP, parity-diff-jaiscloud, 2026-11-11).
 	nr = bucketParams()
 	nr.Params["bucket"] = "cmek-bkt"
 	nr.Params["object"] = "secret.txt"
@@ -61,8 +63,9 @@ func TestGCSCMEKRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("get object: %v", err)
 	}
-	if k, _ := get.Data["kmsKeyName"].(string); k != kmsKeyName {
-		t.Fatalf("expected kmsKeyName %q, got %q", kmsKeyName, k)
+	wantKey := kmsKeyName + "/cryptoKeyVersions/1"
+	if k, _ := get.Data["kmsKeyName"].(string); k != wantKey {
+		t.Fatalf("expected kmsKeyName %q, got %q", wantKey, k)
 	}
 
 	// Media round-trips.

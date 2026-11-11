@@ -38,6 +38,28 @@ func invalidArgument(format string, args ...any) error {
 	return model.NewProviderError("InvalidArgument", fmt.Sprintf(format, args...), 400)
 }
 
+// CryptoKeyErrorKind classifies a refused CryptoKey reference. The message is
+// the generic one (INVALID_ARGUMENT) every referring service has always used;
+// a consumer whose API documents its own wording (Cloud Storage does: see the
+// GCS JSON/XML status references) reads the kind from
+// ProviderError.Data["cryptoKeyError"] and renders its own message, so no other
+// service's text changes.
+const (
+	CryptoKeyErrorMalformed = "malformed"
+	CryptoKeyErrorNotFound  = "notFound"
+	CryptoKeyErrorLocation  = "location"
+	CryptoKeyErrorPurpose   = "purpose"
+)
+
+// cryptoKeyError builds the classified refusal.
+func cryptoKeyError(kind, msg string, extra map[string]any) error {
+	data := map[string]any{"cryptoKeyError": kind}
+	for k, v := range extra {
+		data[k] = v
+	}
+	return model.NewProviderError("InvalidArgument", msg, 400).WithData(data)
+}
+
 // SplitCryptoKeyName parses the Cloud KMS CryptoKey resource name
 // "projects/{project}/locations/{location}/keyRings/{keyRing}/cryptoKeys/{key}".
 func SplitCryptoKeyName(name string) (project, location, ring, key string, ok bool) {
@@ -78,10 +100,14 @@ func KMSLocationMatches(resourceLocation, keyLocation string) bool {
 func ValidateCryptoKey(ctx context.Context, keys kmsstore.Store, field, name, resourceLocation string) error {
 	project, location, ring, key, ok := SplitCryptoKeyName(name)
 	if !ok {
-		return invalidArgument("%s must be a CryptoKey resource name (projects/{project}/locations/{location}/keyRings/{keyRing}/cryptoKeys/{key})", field)
+		return cryptoKeyError(CryptoKeyErrorMalformed,
+			fmt.Sprintf("%s must be a CryptoKey resource name (projects/{project}/locations/{location}/keyRings/{keyRing}/cryptoKeys/{key})", field),
+			map[string]any{"cryptoKeyName": name})
 	}
 	if !KMSLocationMatches(resourceLocation, location) {
-		return invalidArgument("%s must be in the same location as the resource (%s)", field, resourceLocation)
+		return cryptoKeyError(CryptoKeyErrorLocation,
+			fmt.Sprintf("%s must be in the same location as the resource (%s)", field, resourceLocation),
+			map[string]any{"cryptoKeyName": name, "keyLocation": location, "resourceLocation": resourceLocation})
 	}
 	if keys == nil {
 		return nil
@@ -89,12 +115,16 @@ func ValidateCryptoKey(ctx context.Context, keys kmsstore.Store, field, name, re
 	ck, err := keys.GetCryptoKey(ctx, project, location, ring, key)
 	switch {
 	case errors.Is(err, kmsstore.ErrNoSuchCryptoKey), errors.Is(err, kmsstore.ErrNoSuchKeyRing):
-		return invalidArgument("%s refers to a key that does not exist: %s", field, name)
+		return cryptoKeyError(CryptoKeyErrorNotFound,
+			fmt.Sprintf("%s refers to a key that does not exist: %s", field, name),
+			map[string]any{"cryptoKeyName": name})
 	case err != nil:
 		return model.NewProviderError("Internal", err.Error(), 500)
 	}
 	if ck.Purpose != "" && ck.Purpose != "ENCRYPT_DECRYPT" {
-		return invalidArgument("%s must have purpose ENCRYPT_DECRYPT", field)
+		return cryptoKeyError(CryptoKeyErrorPurpose,
+			fmt.Sprintf("%s must have purpose ENCRYPT_DECRYPT", field),
+			map[string]any{"cryptoKeyName": name, "purpose": ck.Purpose})
 	}
 	return nil
 }
