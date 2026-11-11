@@ -488,6 +488,28 @@ func (h *Handler) DestroyVersion(w http.ResponseWriter, r *http.Request) {
 	uihelper.WriteJSON(w, versionFromMap(resp.Data))
 }
 
+// POST .../cryptoKeys/{key}/versions/{version}/restore
+//
+// Reverses a scheduled destruction. The core enforces the window: only a
+// DESTROY_SCHEDULED version can be restored, and the version comes back
+// DISABLED. Without this route a console-driven destroy was irreversible even
+// though the wire operation exists.
+func (h *Handler) RestoreVersion(w http.ResponseWriter, r *http.Request) {
+	name, ok := h.versionName(w, r)
+	if !ok {
+		return
+	}
+	nr := uihelper.NR(r.Context(), h.cfg, "kms", "KMS.CryptoKeyVersionRestore", "", h.account(r))
+	nr.Params["name"] = name
+
+	resp, err := h.provider.CryptoKeyVersionRestore(r.Context(), nr)
+	if err != nil {
+		uihelper.WriteError(w, err)
+		return
+	}
+	uihelper.WriteJSON(w, versionFromMap(resp.Data))
+}
+
 // POST .../cryptoKeys/{key}/versions/{version}/disable
 func (h *Handler) DisableVersion(w http.ResponseWriter, r *http.Request) {
 	h.setVersionState(w, r, "DISABLED")

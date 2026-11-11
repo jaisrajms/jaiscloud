@@ -36,6 +36,7 @@ func BuildRouter(p ProviderInterface, cfg *config.Config) chi.Router {
 	r.Post("/locations/{location}/keyRings/{keyRing}/cryptoKeys/{key}/versions", h.CreateVersion)
 	r.Get("/locations/{location}/keyRings/{keyRing}/cryptoKeys/{key}/versions/{version}", h.GetVersion)
 	r.Post("/locations/{location}/keyRings/{keyRing}/cryptoKeys/{key}/versions/{version}/destroy", h.DestroyVersion)
+	r.Post("/locations/{location}/keyRings/{keyRing}/cryptoKeys/{key}/versions/{version}/restore", h.RestoreVersion)
 	r.Post("/locations/{location}/keyRings/{keyRing}/cryptoKeys/{key}/versions/{version}/disable", h.DisableVersion)
 	r.Post("/locations/{location}/keyRings/{keyRing}/cryptoKeys/{key}/versions/{version}/enable", h.EnableVersion)
 
