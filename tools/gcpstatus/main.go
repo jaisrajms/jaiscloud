@@ -1596,6 +1596,12 @@ func findPlanDoc(it *Item, docPaths []string, docService map[string]map[string]s
 			return p
 		}
 		if strings.Contains(base, strings.ToLower(it.ID)+"-") {
+			// A doc's leading ID is its identity, so `G5` must not match
+			// `NG5-…` merely because the ID is a suffix of it. Only docs with
+			// no leading ID fall back to the substring match.
+			if lead := leadingDocID(base); lead != "" && !strings.EqualFold(lead, it.ID) {
+				continue
+			}
 			bestAny = p
 			svc := docService[p][it.ID]
 			if svc == "" || it.Service == "" || svc == it.Service {
@@ -1614,6 +1620,15 @@ func findPlanDoc(it *Item, docPaths []string, docService map[string]map[string]s
 		return it.Source
 	}
 	return bestAny
+}
+
+// leadingDocID returns the `<letters><digits>` prefix of a plan doc filename
+// ("ng5-load-gate-soft-delete.md" -> "NG5"), or "" when the name does not start
+// with an ID. It is the boundary check that keeps findPlanDoc from matching an
+// ID as a suffix of a longer one.
+func leadingDocID(base string) string {
+	m := leadingIDRe.FindString(base)
+	return strings.TrimSuffix(m, "-")
 }
 
 // backfillPRs adds a row for every base-gcp PR not already matched to an item.
