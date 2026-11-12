@@ -140,6 +140,7 @@ jobs:
             /tmp/jaiscloud-gcp-terraform-lifecycle.log
             /tmp/jaiscloud-gcp-terraform-patterns/summary.md
             /tmp/jaiscloud-gcp-terraform-patterns/summary.tsv
+            /tmp/jaiscloud-gcp-terraform-patterns/failures.md
             /tmp/jaiscloud-gcp-terraform-patterns/*.log
             /tmp/jaiscloud-gcp-terraform-patterns.log
           if-no-files-found: ignore
@@ -154,14 +155,32 @@ jobs:
           {
             echo "Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
             echo
+            echo "### module cases"
             echo '```'
             cat /tmp/jaiscloud-gcp-terraform-all/summary.md 2>/dev/null || echo "no summary (the job failed before the cases ran)"
             echo '```'
             echo
+            echo "### lifecycle depth gate"
+            echo '```'
+            cat /tmp/jaiscloud-gcp-terraform-lifecycle/summary.md 2>/dev/null || echo "no summary (the gate did not run)"
+            echo '```'
+            echo
+            echo "### composition patterns"
+            echo '```'
+            cat /tmp/jaiscloud-gcp-terraform-patterns/summary.md 2>/dev/null || echo "no summary (the gate did not run)"
+            echo '```'
+            echo
+            if [ -s /tmp/jaiscloud-gcp-terraform-patterns/failures.md ]; then
+              cat /tmp/jaiscloud-gcp-terraform-patterns/failures.md
+            fi
             echo 'The artifact `gcp-terraform-nightly` carries the per-case logs.'
           } > issue-body.md
-          num="$(gh issue list --repo "$GITHUB_REPOSITORY" --state open \
-            --search "$title in:title" --json number --jq '.[0].number // empty')"
+          # Resolve the existing issue by exact title: a loose `--search "$title in:title"`
+          # matches both the (Terraform) and (OpenTofu) issues, so one job's failures
+          # never land in the other's issue.
+          num="$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --limit 500 \
+            --json number,title \
+            | jq -r --arg t "$title" 'first(.[] | select(.title == $t) | .number) // empty')"
           if [ -z "$num" ]; then
             gh issue create --repo "$GITHUB_REPOSITORY" --title "$title" --body-file issue-body.md
           else
@@ -278,6 +297,7 @@ jobs:
             /tmp/jaiscloud-gcp-terraform-lifecycle.log
             /tmp/jaiscloud-gcp-terraform-patterns/summary.md
             /tmp/jaiscloud-gcp-terraform-patterns/summary.tsv
+            /tmp/jaiscloud-gcp-terraform-patterns/failures.md
             /tmp/jaiscloud-gcp-terraform-patterns/*.log
             /tmp/jaiscloud-gcp-terraform-patterns.log
           if-no-files-found: ignore
@@ -292,14 +312,32 @@ jobs:
           {
             echo "Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
             echo
+            echo "### module cases"
             echo '```'
             cat /tmp/jaiscloud-gcp-terraform-all/summary.md 2>/dev/null || echo "no summary (the job failed before the cases ran)"
             echo '```'
             echo
+            echo "### lifecycle depth gate"
+            echo '```'
+            cat /tmp/jaiscloud-gcp-terraform-lifecycle/summary.md 2>/dev/null || echo "no summary (the gate did not run)"
+            echo '```'
+            echo
+            echo "### composition patterns"
+            echo '```'
+            cat /tmp/jaiscloud-gcp-terraform-patterns/summary.md 2>/dev/null || echo "no summary (the gate did not run)"
+            echo '```'
+            echo
+            if [ -s /tmp/jaiscloud-gcp-terraform-patterns/failures.md ]; then
+              cat /tmp/jaiscloud-gcp-terraform-patterns/failures.md
+            fi
             echo 'The artifact `gcp-opentofu-nightly` carries the per-case logs.'
           } > issue-body.md
-          num="$(gh issue list --repo "$GITHUB_REPOSITORY" --state open \
-            --search "$title in:title" --json number --jq '.[0].number // empty')"
+          # Resolve the existing issue by exact title: a loose `--search "$title in:title"`
+          # matches both the (Terraform) and (OpenTofu) issues, so one job's failures
+          # never land in the other's issue.
+          num="$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --limit 500 \
+            --json number,title \
+            | jq -r --arg t "$title" 'first(.[] | select(.title == $t) | .number) // empty')"
           if [ -z "$num" ]; then
             gh issue create --repo "$GITHUB_REPOSITORY" --title "$title" --body-file issue-body.md
           else

@@ -15,9 +15,10 @@
 # Delivery is asserted at the far end, not inferred from the resource existing:
 # the pattern starts helpers/echo-sink, points the push endpoint and the Eventarc
 # httpEndpoint at it, and inspects the body and CloudEvents headers it received.
-# The scheduler job is created paused with a far-future cron and fired through
+# The scheduler job is ENABLED with a far-future cron and fired through
 # projects.locations.jobs.run, Cloud Scheduler's documented "force it now" call,
-# so the run never waits for a wall-clock minute and needs no clock control.
+# which real GCP only allows on an ENABLED job; the far-future cron means the run
+# never waits for a wall-clock minute and needs no clock control.
 #
 # Usage:
 #   tests/integration/gcp/terraform/patterns/02-events/run.sh [ENDPOINT] [PROJECT]
@@ -150,7 +151,7 @@ check "the push subscription points at the local sink" \
 JOB_URL="$ENDPOINT/v1/$JOB_ID"
 check "the scheduler job targets the topic with the configured payload" \
   "$JOB_URL" "\"name\":\"$JOB_ID\"" '"schedule":"0 0 1 1 *"' '"timeZone":"UTC"' \
-  '"state":"PAUSED"' "\"topicName\":\"$TOPIC_ID\"" "\"data\":\"$SCHEDULER_PAYLOAD\"" \
+  '"state":"ENABLED"' "\"topicName\":\"$TOPIC_ID\"" "\"data\":\"$SCHEDULER_PAYLOAD\"" \
   '"source":"cloud-scheduler"'
 
 # ── Cloud Storage: the event source ──────────────────────────────────────────
@@ -201,13 +202,21 @@ check "the storage function materialized its backing Eventarc trigger" \
 # ── Delivery 1: scheduler -> Pub/Sub -> push sink + function ────────────────
 echo "== delivery (scheduler -> topic -> push sink; topic -> function)"
 
-# The job is created paused with a far-future cron. jobs.run is Cloud
-# Scheduler's documented "force this job now" call and uses the same target
-# dispatcher the cron engine does, so the producer->topic->consumer path is
-# exercised without waiting for a wall-clock minute.
+# The job is ENABLED with a far-future cron. jobs.run is Cloud Scheduler's
+# documented "force this job now" call and uses the same target dispatcher the
+# cron engine does, so the producer->topic->consumer path is exercised without
+# waiting for a wall-clock minute. It is also the only state jobs.run accepts
+# (real GCP: 400 FAILED_PRECONDITION on a paused job), so a non-200 here is a
+# gate failure with the API's own error, not a silent `set -e` abort.
 sink_reset "$SINK_LOG"
-curl -sf -o /dev/null -X POST -H 'Content-Type: application/json' \
-  -H "Authorization: Bearer $GOOGLE_OAUTH_ACCESS_TOKEN" -d '{}' "$JOB_URL:run"
+run_code="$(curl -sS -o "$WORK/jobs-run.json" -w '%{http_code}' -X POST \
+  -H 'Content-Type: application/json' \
+  -H "Authorization: Bearer $GOOGLE_OAUTH_ACCESS_TOKEN" -d '{}' \
+  "$JOB_URL:run" 2>"$WORK/jobs-run.err")" || run_code="000"
+if [[ "$run_code" != "200" ]]; then
+  cat "$WORK/jobs-run.json" "$WORK/jobs-run.err" 2>/dev/null || true
+  fail "jobs.run was refused (HTTP $run_code)"
+fi
 
 if wait_for_sink "$SINK_LOG" 1 20; then
   pass "jobs.run published the scheduler payload to the push subscription"
