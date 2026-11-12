@@ -1047,7 +1047,7 @@ test-gcp-mutation-update: ## Raise one target's recorded mutation floor from a f
 	@go build -o bin/gcpstatus ./tools/gcpstatus
 	@bin/gcpstatus -mutation-floor-update -mutation-report bin/gcp-mutation-report.json -mutation-floor $(MUTATION_FLOOR) -mutation-target "$(PKG)" $(if $(ALLOW_LOWER),-allow-lower,)
 
-gcp-mutation: $(MUTESTING_STAMP) ## Diff-scoped mutation over internal/gcp/provider + internal/gcp/grpc (local/weekly, not PR CI)
+gcp-mutation: $(MUTESTING_STAMP) ## Diff-scoped mutation over internal/gcp/provider + internal/gcp/grpc (local/dispatch-only, not PR CI)
 	@set -e; \
 	  pkgs="$(PKG)"; \
 	  base="$(MUTATION_BASE)"; \
