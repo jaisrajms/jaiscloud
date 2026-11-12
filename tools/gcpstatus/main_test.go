@@ -407,6 +407,35 @@ func TestFindPlanDocIDCollision(t *testing.T) {
 	}
 }
 
+// TestFindPlanDocLeadingIDBoundary guards the suffix collision: a row whose ID
+// is the tail of another doc's ID (`G5` vs `NG5-…`) must not borrow that doc.
+// A doc's leading ID is authoritative; only names without one fall back to the
+// substring match.
+func TestFindPlanDocLeadingIDBoundary(t *testing.T) {
+	ngDoc := "plan_docs/final/NG5-load-gate-soft-delete.md"
+	future := "plan_docs/gcp-future-work.md"
+	docPaths := []string{ngDoc, future}
+
+	// No doc starts with G5, so the G5 row has no plan doc — and in particular
+	// it must not pick up the NG5 doc.
+	g5 := &Item{ID: "G5", Source: future}
+	if got := findPlanDoc(g5, docPaths, nil); got != "" {
+		t.Fatalf("G5 plan doc = %q, want \"\" (must not match %q)", got, ngDoc)
+	}
+
+	// The NG* row still finds its own doc.
+	ng5 := &Item{ID: "NG5", Source: ngDoc}
+	if got := findPlanDoc(ng5, docPaths, nil); got != ngDoc {
+		t.Fatalf("NG5 plan doc = %q, want %q", got, ngDoc)
+	}
+
+	// An exact leading ID still matches.
+	g5Doc := "plan_docs/final/G5-functions-v2-deploy.md"
+	if got := findPlanDoc(g5, append(docPaths, g5Doc), nil); got != g5Doc {
+		t.Fatalf("G5 plan doc with exact doc = %q, want %q", got, g5Doc)
+	}
+}
+
 // ─── table predicates ─────────────────────────────────────────────────────────
 func TestTablePredicates(t *testing.T) {
 	if !isWaveTable([]string{"Wave", "Session", "IDs", "Service(s)", "Branch", "Depends on"}) {
