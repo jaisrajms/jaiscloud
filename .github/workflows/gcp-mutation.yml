@@ -1,16 +1,21 @@
 name: GCP mutation testing
 
-# FC6 — the weekly mutation gate.
+# FC6 — the mutation gate.
 #
 # Mutation testing measures whether the suite would *catch* a changed behaviour:
 # a surviving mutant means an assertion is missing, which is exactly how the
 # TGM defects shipped. A full run costs minutes per package, so this is
-# scheduled (and dispatchable) rather than a pull_request check. The target is
-# diff-scoped: only the provider/grpc packages that changed in the last seven
-# days are mutated.
+# dispatch-only rather than a pull_request check. The target is diff-scoped:
+# only the provider/grpc packages that changed in the last seven days are
+# mutated.
+#
+# The Monday cron is off until the gate can finish inside its budget: every
+# scheduled run since 2026-11-09 was killed at the 90-minute timeout, and a
+# cancelled run never reaches the `if: failure()` issue step, so the schedule
+# produced no signal while costing 90 runner-minutes a week. Re-enable
+# `schedule:` (cron '41 5 * * 1') once a narrowed or sharded run completes
+# green by hand — tracked in #788. The job stays dispatchable meanwhile.
 on:
-  schedule:
-    - cron: '41 5 * * 1' # Mondays 05:41 UTC
   workflow_dispatch:
     inputs:
       scope:
@@ -75,7 +80,7 @@ jobs:
           title="GCP mutation survivors ($(date +%F))"
           if gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "$title in:title" --json number --jq 'length' | grep -q '^0$'; then
             gh issue create --repo "$GITHUB_REPOSITORY" --title "$title" \
-              --body "The weekly mutation run failed or a target survived above its floor. See the workflow run's report artifacts: a target with a recorded floor survived above it, or the run itself failed. Add the missing assertion, or record the survivor as intentional in docs/gcp-mutation-floor.yaml (targets without a floor are reported only — see FC6-3)."
+              --body "The mutation run failed or a target survived above its floor. See the workflow run's report artifacts: a target with a recorded floor survived above it, or the run itself failed. Add the missing assertion, or record the survivor as intentional in docs/gcp-mutation-floor.yaml (targets without a floor are reported only — see FC6-3)."
           else
             echo "an open mutation issue already exists; see the run log"
           fi
