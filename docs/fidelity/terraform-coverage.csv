@@ -15,7 +15,8 @@ google_bigquery_connection,bigquery,unsupported,none,unsupported,BigQuery Connec
 google_bigquery_connection_iam_binding,bigquery,unsupported,none,unsupported,BigQuery Connection API is a separate service; the emulator registers no connection operation.,2027-06-30
 google_bigquery_connection_iam_member,bigquery,unsupported,none,unsupported,BigQuery Connection API is a separate service; the emulator registers no connection operation.,2027-06-30
 google_bigquery_connection_iam_policy,bigquery,unsupported,none,unsupported,BigQuery Connection API is a separate service; the emulator registers no connection operation.,2027-06-30
-google_bigquery_data_transfer_config,bigquery,unsupported,none,unsupported,BigQuery Data Transfer Service is a separate API; the emulator registers no transferConfig operation.,2027-06-30
+google_bigquery_data_transfer_config,bigquery,unsupported,none,unsupported,BigQuery Data Transfer Service is a separate API; the emulator registers no transferConfig/dataSourceEnrollment operation.,2027-06-30
+google_bigquery_data_transfer_data_source_enrollment,bigquery,unsupported,none,unsupported,BigQuery Data Transfer Service is a separate API; the emulator registers no transferConfig/dataSourceEnrollment operation.,2027-06-30
 google_bigquery_datapolicy_data_policy,bigquery,unsupported,none,unsupported,BigQuery Data Policy API is a separate service; the emulator registers no dataPolicy operation.,2027-06-30
 google_bigquery_datapolicy_data_policy_iam_binding,bigquery,unsupported,none,unsupported,BigQuery Data Policy API is a separate service; the emulator registers no dataPolicy operation.,2027-06-30
 google_bigquery_datapolicy_data_policy_iam_member,bigquery,unsupported,none,unsupported,BigQuery Data Policy API is a separate service; the emulator registers no dataPolicy operation.,2027-06-30
@@ -47,6 +48,10 @@ google_cloud_run_service,run,unsupported,none,unsupported,Cloud Run v1 (run.goog
 google_cloud_run_service_iam_binding,run,unsupported,none,unsupported,Cloud Run v1 IAM is not in the operation registry; the emulator serves v2 service IAM.,2027-06-30
 google_cloud_run_service_iam_member,run,unsupported,none,unsupported,Cloud Run v1 IAM is not in the operation registry; the emulator serves v2 service IAM.,2027-06-30
 google_cloud_run_service_iam_policy,run,unsupported,none,unsupported,Cloud Run v1 IAM is not in the operation registry; the emulator serves v2 service IAM.,2027-06-30
+google_cloud_run_v2_instance,run,unsupported,none,unsupported,Cloud Run v2 Instances and their IAM are not served; the emulator serves the v2 service control plane only.,2027-06-30
+google_cloud_run_v2_instance_iam_binding,run,unsupported,none,unsupported,Cloud Run v2 Instances and their IAM are not served; the emulator serves the v2 service control plane only.,2027-06-30
+google_cloud_run_v2_instance_iam_member,run,unsupported,none,unsupported,Cloud Run v2 Instances and their IAM are not served; the emulator serves the v2 service control plane only.,2027-06-30
+google_cloud_run_v2_instance_iam_policy,run,unsupported,none,unsupported,Cloud Run v2 Instances and their IAM are not served; the emulator serves the v2 service control plane only.,2027-06-30
 google_cloud_run_v2_job,run,unsupported,none,unsupported,Cloud Run Jobs are not served (recorded boundary in the terraform suite README).,2027-06-30
 google_cloud_run_v2_job_iam_binding,run,unsupported,none,unsupported,Cloud Run Jobs are not served (recorded boundary in the terraform suite README).,2027-06-30
 google_cloud_run_v2_job_iam_member,run,unsupported,none,unsupported,Cloud Run Jobs are not served (recorded boundary in the terraform suite README).,2027-06-30
@@ -135,6 +140,7 @@ google_compute_interconnect_group,compute,unsupported,none,unsupported,"Compute 
 google_compute_managed_ssl_certificate,compute,unsupported,none,unsupported,"Compute resource targets an API surface outside the emulator's served subset (instances, disks, networks, firewalls, subnetworks, machine types, operations, zones, regions).",2027-06-30
 google_compute_network,compute,limited,fixture:compat,served,,2027-06-30
 google_compute_network_attachment,compute,unsupported,none,unsupported,"Compute resource targets an API surface outside the emulator's served subset (instances, disks, networks, firewalls, subnetworks, machine types, operations, zones, regions).",2027-06-30
+google_compute_network_edge_security_service,compute,unsupported,none,unsupported,"Compute resource targets an API surface outside the emulator's served subset (instances, disks, networks, firewalls, subnetworks, machine types, operations, zones, regions).",2027-06-30
 google_compute_network_endpoint,compute,unsupported,none,unsupported,"Compute resource targets an API surface outside the emulator's served subset (instances, disks, networks, firewalls, subnetworks, machine types, operations, zones, regions).",2027-06-30
 google_compute_network_endpoint_group,compute,unsupported,none,unsupported,"Compute resource targets an API surface outside the emulator's served subset (instances, disks, networks, firewalls, subnetworks, machine types, operations, zones, regions).",2027-06-30
 google_compute_network_endpoints,compute,unsupported,none,unsupported,"Compute resource targets an API surface outside the emulator's served subset (instances, disks, networks, firewalls, subnetworks, machine types, operations, zones, regions).",2027-06-30
@@ -282,6 +288,7 @@ google_dns_managed_zone,clouddns,limited,fixture:compat,served,,2027-06-30
 google_dns_managed_zone_iam_binding,clouddns,limited,none,served,clouddns is served with declared caveats; no fixture or module case declares this resource type yet,2027-06-30
 google_dns_managed_zone_iam_member,clouddns,limited,fixture:compat,served,,2027-06-30
 google_dns_managed_zone_iam_policy,clouddns,limited,none,served,clouddns is served with declared caveats; no fixture or module case declares this resource type yet,2027-06-30
+google_dns_outbound_endpoint,clouddns,unsupported,none,unsupported,DNS outbound endpoints (outboundEndpoints) are not in the operation registry.,2027-06-30
 google_dns_policy,clouddns,unsupported,none,unsupported,DNS policies (policies) are not in the operation registry.,2027-06-30
 google_dns_record_set,clouddns,limited,none,served,clouddns is served with declared caveats; no fixture or module case declares this resource type yet,2027-06-30
 google_dns_response_policy,clouddns,unsupported,none,unsupported,DNS response policies (responsePolicies) are not in the operation registry.,2027-06-30
@@ -292,6 +299,9 @@ google_eventarc_google_api_source,eventarc,served,none,served,eventarc is served
 google_eventarc_google_channel_config,eventarc,served,none,served,eventarc is served; no fixture or module case declares this resource type yet,2027-06-30
 google_eventarc_message_bus,eventarc,served,none,served,eventarc is served; no fixture or module case declares this resource type yet,2027-06-30
 google_eventarc_pipeline,eventarc,served,none,served,eventarc is served; no fixture or module case declares this resource type yet,2027-06-30
+google_eventarc_pipeline_iam_binding,eventarc,served,none,served,eventarc is served; no fixture or module case declares this resource type yet,2027-06-30
+google_eventarc_pipeline_iam_member,eventarc,served,none,served,eventarc is served; no fixture or module case declares this resource type yet,2027-06-30
+google_eventarc_pipeline_iam_policy,eventarc,served,none,served,eventarc is served; no fixture or module case declares this resource type yet,2027-06-30
 google_eventarc_trigger,eventarc,served,none,served,eventarc is served; no fixture or module case declares this resource type yet,2027-06-30
 google_firestore_backup_schedule,firestoreadmin,served,none,served,firestoreadmin is served; no fixture or module case declares this resource type yet,2027-06-30
 google_firestore_change_stream,firestoreadmin,served,none,served,firestoreadmin is served; no fixture or module case declares this resource type yet,2027-06-30
@@ -367,6 +377,7 @@ google_logging_project_exclusion,logging,served,none,served,logging is served; n
 google_logging_project_sink,logging,served,none,served,logging is served; no fixture or module case declares this resource type yet,2027-06-30
 google_logging_saved_query,logging,unsupported,none,unsupported,savedQueries are not in the operation registry.,2027-06-30
 google_managed_kafka_acl,managedkafka,served,none,served,managedkafka is served; no fixture or module case declares this resource type yet,2027-06-30
+google_managed_kafka_acl_binding,managedkafka,served,none,served,managedkafka is served; no fixture or module case declares this resource type yet,2027-06-30
 google_managed_kafka_cluster,managedkafka,served,none,served,managedkafka is served; no fixture or module case declares this resource type yet,2027-06-30
 google_managed_kafka_connect_cluster,managedkafka,unsupported,none,unsupported,Managed Kafka Connect is a separate surface; the emulator registers cluster/topic/acl operations only.,2027-06-30
 google_managed_kafka_connector,managedkafka,unsupported,none,unsupported,Managed Kafka connectors are not in the operation registry.,2027-06-30
@@ -383,6 +394,7 @@ google_monitoring_monitored_project,monitoring,unsupported,none,unsupported,moni
 google_monitoring_notification_channel,monitoring,served,none,served,monitoring is served; no fixture or module case declares this resource type yet,2027-06-30
 google_monitoring_service,monitoring,served,none,served,monitoring is served; no fixture or module case declares this resource type yet,2027-06-30
 google_monitoring_slo,monitoring,served,none,served,monitoring is served; no fixture or module case declares this resource type yet,2027-06-30
+google_monitoring_snooze,monitoring,unsupported,none,unsupported,Monitoring snoozes (snoozes) are not in the operation registry.,2027-06-30
 google_monitoring_uptime_check_config,monitoring,served,fixture:compat,served,,2027-06-30
 google_project,resourcemanager,served,fixture:billing,served,,2027-06-30
 google_project_access_approval_settings,resourcemanager,unsupported,none,unsupported,Access Approval is a separate API; the emulator registers no accessApprovalSettings operation.,2027-06-30
@@ -410,14 +422,19 @@ google_pubsub_topic_iam_member,pubsub,served,"fixture:publisher,fixture:viewer",
 google_pubsub_topic_iam_policy,pubsub,served,none,served,pubsub is served; no fixture or module case declares this resource type yet,2027-06-30
 google_redis_cluster,memorystore,unsupported,none,unsupported,Redis Cluster (redis.googleapis.com/v1 clusters) is a separate surface; the emulator registers Memorystore v1 instance operations only.,2027-06-30
 google_redis_cluster_acl_policy,memorystore,unsupported,none,unsupported,Redis Cluster ACL policies are not in the operation registry.,2027-06-30
+google_redis_cluster_token_auth_user,memorystore,unsupported,none,unsupported,Redis Cluster token-auth users are not in the operation registry.,2027-06-30
 google_redis_cluster_user_created_connections,memorystore,unsupported,none,unsupported,Redis Cluster user-created connections are not in the operation registry.,2027-06-30
 google_redis_instance,memorystore,limited,none,served,memorystore is served with declared caveats; no fixture or module case declares this resource type yet,2027-06-30
+google_resource_manager_boundary,resourcemanager,unsupported,none,unsupported,Resource Manager v3 liens/capabilities are not in the operation registry (projects.get/update/list only).,2027-06-30
+google_resource_manager_boundary_config,resourcemanager,unsupported,none,unsupported,Resource Manager v3 liens/capabilities are not in the operation registry (projects.get/update/list only).,2027-06-30
 google_resource_manager_capability,resourcemanager,unsupported,none,unsupported,Resource Manager v3 liens/capabilities are not in the operation registry (projects.get/update/list only).,2027-06-30
+google_resource_manager_capability_config,resourcemanager,unsupported,none,unsupported,Resource Manager v3 liens/capabilities are not in the operation registry (projects.get/update/list only).,2027-06-30
 google_resource_manager_lien,resourcemanager,unsupported,none,unsupported,Resource Manager v3 liens/capabilities are not in the operation registry (projects.get/update/list only).,2027-06-30
 google_secret_manager_regional_secret,secretmanager,served,fixture:regional,served,,2027-06-30
 google_secret_manager_regional_secret_iam_binding,secretmanager,served,none,served,secretmanager is served; no fixture or module case declares this resource type yet,2027-06-30
 google_secret_manager_regional_secret_iam_member,secretmanager,served,fixture:regional,served,,2027-06-30
 google_secret_manager_regional_secret_iam_policy,secretmanager,served,none,served,secretmanager is served; no fixture or module case declares this resource type yet,2027-06-30
+google_secret_manager_regional_secret_managed_rotation,secretmanager,served,none,served,secretmanager is served; no fixture or module case declares this resource type yet,2027-06-30
 google_secret_manager_regional_secret_version,secretmanager,served,fixture:regional,served,,2027-06-30
 google_secret_manager_secret,secretmanager,served,"fixture:cmek,fixture:compat,fixture:user_managed",served,,2027-06-30
 google_secret_manager_secret_iam_binding,secretmanager,served,none,served,secretmanager is served; no fixture or module case declares this resource type yet,2027-06-30
@@ -450,6 +467,8 @@ google_storage_control_project_intelligence_config,storage,unsupported,none,unsu
 google_storage_default_object_access_control,storage,served,none,served,storage is served; no fixture or module case declares this resource type yet,2027-06-30
 google_storage_default_object_acl,storage,served,none,served,storage is served; no fixture or module case declares this resource type yet,2027-06-30
 google_storage_folder,storage,unsupported,none,unsupported,Hierarchical-namespace folders (storage/folders) are not in the operation registry; only hierarchicalNamespace on a bucket is served.,2027-06-30
+google_storage_ftp_server,storage,unsupported,none,unsupported,Cloud Storage FTP (storageftp servers/users) is a separate API; the emulator registers no server or user operation.,2027-06-30
+google_storage_ftp_user,storage,unsupported,none,unsupported,Cloud Storage FTP (storageftp servers/users) is a separate API; the emulator registers no server or user operation.,2027-06-30
 google_storage_hmac_key,storage,served,none,served,storage is served; no fixture or module case declares this resource type yet,2027-06-30
 google_storage_insights_dataset_config,storage,unsupported,none,unsupported,Storage Insights (storageinsights) is a separate API; the emulator registers no inventoryReport/datasetConfig operation.,2027-06-30
 google_storage_insights_report_config,storage,unsupported,none,unsupported,Storage Insights (storageinsights) is a separate API; the emulator registers no inventoryReport/datasetConfig operation.,2027-06-30

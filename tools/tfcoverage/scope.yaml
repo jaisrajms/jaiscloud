@@ -104,6 +104,10 @@ rules:
     service: storage
     state: unsupported
     reason: Managed folders (storage/managedFolders) are not in the operation registry.
+  - match: google_storage_ftp_*
+    service: storage
+    state: unsupported
+    reason: Cloud Storage FTP (storageftp servers/users) is a separate API; the emulator registers no server or user operation.
 
   # ── Pub/Sub ────────────────────────────────────────────────────────────────
   - match: google_pubsub_schema*
@@ -227,10 +231,10 @@ rules:
     service: bigquery
     state: unsupported
     reason: BigQuery Connection API is a separate service; the emulator registers no connection operation.
-  - match: google_bigquery_data_transfer_config
+  - match: google_bigquery_data_transfer_*
     service: bigquery
     state: unsupported
-    reason: BigQuery Data Transfer Service is a separate API; the emulator registers no transferConfig operation.
+    reason: BigQuery Data Transfer Service is a separate API; the emulator registers no transferConfig/dataSourceEnrollment operation.
   - match: google_bigquery_datapolicy*
     service: bigquery
     state: unsupported
@@ -327,6 +331,10 @@ rules:
     service: clouddns
     state: unsupported
     reason: DNS response policies (responsePolicies) are not in the operation registry.
+  - match: google_dns_outbound_endpoint
+    service: clouddns
+    state: unsupported
+    reason: DNS outbound endpoints (outboundEndpoints) are not in the operation registry.
 
   # ── GKE (Cloud Container) ──────────────────────────────────────────────────
   - match: google_container_cluster
@@ -364,6 +372,10 @@ rules:
     service: memorystore
     state: unsupported
     reason: Redis Cluster ACL policies are not in the operation registry.
+  - match: google_redis_cluster_token_auth_user
+    service: memorystore
+    state: unsupported
+    reason: Redis Cluster token-auth users are not in the operation registry.
   - match: google_redis_cluster_user_created_connections
     service: memorystore
     state: unsupported
@@ -410,6 +422,10 @@ rules:
     service: monitoring
     state: unsupported
     reason: monitoredProjects is a separate Monitoring surface and is not in the operation registry.
+  - match: google_monitoring_snooze
+    service: monitoring
+    state: unsupported
+    reason: Monitoring snoozes (snoozes) are not in the operation registry.
 
   # ── Cloud Logging ──────────────────────────────────────────────────────────
   - match: google_logging_metric
@@ -471,6 +487,11 @@ rules:
 
   # ── Managed Service for Apache Kafka ───────────────────────────────────────
   - match: google_managed_kafka_acl
+    service: managedkafka
+    state: served
+  # The provider's acl_binding resource owns one entry via AddAclEntry /
+  # RemoveAclEntry on the acls collection the emulator serves.
+  - match: google_managed_kafka_acl_binding
     service: managedkafka
     state: served
   - match: google_managed_kafka_cluster
@@ -632,6 +653,10 @@ rules:
     service: run
     state: unsupported
     reason: Cloud Run Jobs are not served (recorded boundary in the terraform suite README).
+  - match: google_cloud_run_v2_instance*
+    service: run
+    state: unsupported
+    reason: Cloud Run v2 Instances and their IAM are not served; the emulator serves the v2 service control plane only.
   - match: google_cloud_run_v2_worker_pool*
     service: run
     state: unsupported
@@ -705,14 +730,12 @@ out_of_scope:
   - { match: google_lustre_*, reason: "Managed Lustre is not an emulated service." }
   - { match: google_memcache_*, reason: "Memcached is a separate API and is not served (memorystore covers Redis/Memorystore instances)." }
   - { match: google_migration_center_*, reason: "Migration Center is not an emulated service." }
-  - { match: google_ml_engine_*, reason: "Vertex AI / ML Engine is not an emulated service." }
   - { match: google_model_armor_*, reason: "Model Armor is not an emulated service." }
   - { match: google_netapp_*, reason: "NetApp Volumes is not an emulated service." }
   - { match: google_network_connectivity_*, reason: "Network Connectivity Center is not an emulated service." }
   - { match: google_network_management_*, reason: "Network Management is not an emulated service." }
   - { match: google_network_security_*, reason: "Network Security is not an emulated service." }
   - { match: google_network_services_*, reason: "Network Services is not an emulated service." }
-  - { match: google_notebooks_*, reason: "Vertex AI Workbench / Notebooks is not an emulated service." }
   - { match: google_observability_*, reason: "Observability is not an emulated service." }
   - { match: google_oracle_database_*, reason: "Oracle Database@Google Cloud is not an emulated service." }
   - { match: google_org_policy_*, reason: "Organization Policy is not modelled; project-level only (wire-contract §8)." }
