@@ -70,9 +70,18 @@ func (a *api) do(ctx context.Context, method, path string, body []byte, hdr map[
 
 // seed creates the bucket, topic and fan-out subscriptions every scenario
 // needs, so seeding is not part of the measured window.
+//
+// The bucket disables soft delete (`retentionDurationSeconds: "0"`). GCS's
+// default seven-day soft-delete policy retains every overwritten generation as
+// a soft-deleted copy, and the GCS window rewrites its own objects hundreds of
+// times per second, so a default bucket accumulates by-design retained data at
+// hundreds of MB per run and the growth assertion reads that as a leak. The
+// other two hot paths are bounded (one document per worker, a publish cap), so
+// this keeps the gate measuring unbounded growth rather than the policy.
 func seed(ctx context.Context, a *api) error {
 	st, body, err := a.do(ctx, http.MethodPost,
-		"/storage/v1/b?project="+project, []byte(`{"name":"`+gcsBucket+`"}`), nil)
+		"/storage/v1/b?project="+project,
+		[]byte(`{"name":"`+gcsBucket+`","softDeletePolicy":{"retentionDurationSeconds":"0"}}`), nil)
 	if err != nil {
 		return err
 	}
