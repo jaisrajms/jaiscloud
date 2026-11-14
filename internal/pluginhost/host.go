@@ -231,7 +231,8 @@ func (h *Host) connect(ctx context.Context, spec string, d Deps) (*plugin, error
 
 	p.token = randomID(16)
 	p.initReq = sdk.InitRequest{ABI: sdk.ABI,
-		Host:  sdk.InitHost{Cloud: string(d.Cloud), Version: d.Version},
+		Host: sdk.InitHost{Cloud: string(d.Cloud), Version: d.Version,
+			Endpoint: strings.TrimRight(d.CallbackURL, "/")},
 		Store: sdk.StoreEndpoint{URL: strings.TrimRight(d.CallbackURL, "/") + storePath, Token: p.token}}
 	if err := p.do(ctx, http.MethodPost, "/init", p.initReq, nil, d.StartWait); err != nil {
 		return nil, err
@@ -254,7 +255,9 @@ func (h *Host) connectLocal(ctx context.Context, plug sdk.Plugin, where string, 
 	if err := p.adopt(plug.Manifest(), d, hostCapabilities(d, true)); err != nil {
 		return nil, err
 	}
-	if err := plug.Init(ctx, sdk.Host{Cloud: string(d.Cloud), Version: d.Version, Log: slog.Default().With("plugin", p.name)}); err != nil {
+	if err := plug.Init(ctx, sdk.Host{Cloud: string(d.Cloud), Version: d.Version,
+		Endpoint: strings.TrimRight(d.CallbackURL, "/"),
+		Log:      slog.Default().With("plugin", p.name)}); err != nil {
 		return nil, fmt.Errorf("init: %w", err)
 	}
 	p.stateful, _ = plug.(sdk.Stateful)
@@ -868,7 +871,7 @@ func (h *Host) DoctorInfo() any {
 	for _, p := range h.plugins {
 		out = append(out, map[string]any{
 			"name": p.name, "version": p.version, "transport": p.transport(), "url": p.shownURL,
-			"abi": p.abi, "routes": p.routes, "stateful": p.stateful != nil,
+			"abi": p.abi, "routes": p.routes, "services": p.services, "stateful": p.stateful != nil,
 		})
 	}
 	return out

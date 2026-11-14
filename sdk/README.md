@@ -301,4 +301,6 @@ jaiscloud-aws start --plugin http://plugin:9100 --plugin-secret "$PLUGIN_SECRET"
 ## Status
 
 Experimental (ABI 1). Out-of-process and in-process (`.so`) plugins for `jaiscloud-aws` and `jaiscloud-gcp` (GCP REST
-and gRPC). New services, REST path routes and a raw-response escape hatch are planned, not implemented. See [docs/PLUGINS.md](../docs/PLUGINS.md) for the architecture and the full list of limits.
+and gRPC). A plugin can also add wire services the emulator does not have (GCP REST; see
+[Plugin services](../docs/PLUGINS.md#plugin-services)); the raw-response escape hatch is not implemented.
+See [docs/PLUGINS.md](../docs/PLUGINS.md) for the architecture and the full list of limits.

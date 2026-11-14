@@ -188,7 +188,11 @@ type Result struct {
 type Host struct {
 	Cloud   string
 	Version string
-	Log     *slog.Logger
+	// Endpoint is the emulator's base URL (http://127.0.0.1:<port>), for a plugin
+	// that delegates to another service's REST API. It is empty when the host
+	// does not send one.
+	Endpoint string
+	Log      *slog.Logger
 }
 
 // Plugin is implemented by every plugin. Mux provides a ready implementation.

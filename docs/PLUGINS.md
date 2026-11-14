@@ -387,7 +387,7 @@ the built-in never sees it.
 | GCP only | A plugin service is not supported on `jaiscloud-aws`; such a plugin is refused at startup because the host does not provide the `services` capability |
 | No merged operations list | A shared collection's `list` reaches the built-in and does not include the plugin's resources; keep your own list |
 | JSON answers only | `Response` carries a status and a `Data` object; there are no raw media bodies and no response headers of your own |
-| Visible, not hot-reloaded | `GET /_jaiscloud/doctor` lists the plugin and its routes, so a declared service appears as that plugin's wildcard `replace` route; the console has no page for a service the emulator does not know, and loading is startup-only like every other plugin route |
+| Visible, not hot-reloaded | `GET /_jaiscloud/doctor` lists the plugin, its routes and its declared services; the console has no page for a service the emulator does not know, and loading is startup-only like every other plugin route |
 
 ---
 
@@ -747,7 +747,8 @@ sequenceDiagram
 
 - **Startup log.** One `plugin loaded` line per plugin.
 - **Doctor.** `GET /_jaiscloud/doctor` has a `plugins` section (name, version, transport `http` or
-  `in-process`, URL or file, ABI, routes, whether it keeps state of its own) and a `pluginBuild` section
+  `in-process`, URL or file, ABI, routes, declared services, whether it keeps state of its own) and a
+  `pluginBuild` section
   (Go version, cgo, `-trimpath`, SDK) that an in-process plugin must match. Both are absent when no plugin
   is loaded.
 - **Version.** `jaiscloud-<cloud> version` prints whether this build can load in-process plugins and what
