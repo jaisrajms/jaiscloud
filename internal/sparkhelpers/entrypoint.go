@@ -35,9 +35,9 @@ func EntryPointArgs(ep EntryPoint) (preJarArgs []string, jarOrScript string) {
 			// Class-only job (Dataproc's main_class + jar_file_uris encoding):
 			// the first library jar stands in for the managed service's launcher
 			// jar, so spark-submit gets a primary resource and the submitted args
-			// are no longer eaten as positionals. The primary resource is also on
-			// the driver classpath, and Spark orders the primary resource before
-			// `--jars`, so the effective classpath order (L1, L2, …) is unchanged.
+			// are no longer eaten as positionals. The driver classpath order is
+			// unchanged (executors receive the same jars via spark.jars, with the
+			// promoted resource appended after --jars).
 			jarOrScript = e.JarFileURIs[0]
 			if rest := e.JarFileURIs[1:]; len(rest) > 0 {
 				preJarArgs = append(preJarArgs, "--jars", strings.Join(rest, ","))

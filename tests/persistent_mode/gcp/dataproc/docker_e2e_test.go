@@ -71,14 +71,14 @@ func requireDocker(t *testing.T) {
 	if os.Getenv("DATAPROC_DOCKER_E2E") == "" {
 		t.Skip("DATAPROC_DOCKER_E2E not set — skipping Dataproc docker e2e test")
 	}
-	if os.Getenv("DATAPROC_E2E_SPARK_IMAGE") == "" {
-		t.Fatal("DATAPROC_E2E_SPARK_IMAGE is empty — the e2e is enabled, so the Spark image must be named (the Makefile target sets it)")
-	}
 	if _, err := exec.LookPath("docker"); err != nil {
 		t.Skip("docker CLI not found — skipping Dataproc docker e2e test")
 	}
 	if _, err := dockerCLI("info"); err != nil {
 		t.Skipf("local Docker daemon not reachable: %v", err)
+	}
+	if os.Getenv("DATAPROC_E2E_SPARK_IMAGE") == "" {
+		t.Fatal("DATAPROC_E2E_SPARK_IMAGE is empty — the e2e is enabled, so the Spark image must be named (the Makefile target sets it)")
 	}
 }
 
@@ -271,19 +271,22 @@ func dpDataprocContainers(t *testing.T) []string {
 
 // dpExamplesJar extracts the Spark examples jar from the Spark image (the jar
 // the class-only subtests submit as their library). The bytes come straight out
-// of the image so the e2e needs no committed binary fixture.
+// of the image so the e2e needs no committed binary fixture. The shell asserts
+// the glob matched exactly one file, so a missing or duplicated jar fails
+// instead of uploading nothing (or a concatenation of several jars).
 func dpExamplesJar(t *testing.T, image string) []byte {
 	t.Helper()
 	out, err := dockerCLI("run", "--rm", "--entrypoint", "sh", image, "-c",
-		"cat /opt/spark/examples/jars/spark-examples_*.jar")
+		`set -- /opt/spark/examples/jars/spark-examples_*.jar; [ $# -eq 1 ] && cat "$1"`)
 	if err != nil {
 		t.Fatalf("extract the examples jar from %s: %v", image, err)
 	}
 	jar := []byte(out)
-	// A zip (and therefore a jar) starts with "PK". This also catches a glob
-	// that matched nothing (empty output) or several jars (cat concatenation).
+	// A zip (and therefore a jar) starts with "PK". This only catches empty or
+	// garbage output; the single-match assertion above is what rules out a
+	// concatenation of several jars.
 	if len(jar) < 2 || jar[0] != 'P' || jar[1] != 'K' {
-		t.Fatalf("extracted examples jar from %s is not a single zip/jar (%d bytes)", image, len(jar))
+		t.Fatalf("extracted examples jar from %s is not a zip/jar (%d bytes)", image, len(jar))
 	}
 	return jar
 }
@@ -378,11 +381,11 @@ spark.stop()
 			},
 		})
 		final := dpPollJob(t, base, id, 5*time.Minute)
-		out := string(dpDriverOutput(t, final, id))
-		if state := dpStr(final, "status", "state"); state != "DONE" {
-			t.Fatalf("job state = %q (details %q), want DONE; driver output:\n%s",
-				state, dpStr(final, "status", "details"), out)
+		state := dpStr(final, "status", "state")
+		if state != "DONE" {
+			t.Fatalf("job state = %q (details %q), want DONE", state, dpStr(final, "status", "details"))
 		}
+		out := string(dpDriverOutput(t, final, id))
 		if !strings.Contains(out, "Pi is roughly") {
 			t.Fatalf("driver output does not contain \"Pi is roughly\":\n%s", out)
 		}
@@ -408,21 +411,23 @@ spark.stop()
 			},
 		})
 		final := dpPollJob(t, base, id, 5*time.Minute)
+		// The terminal state is checked before fetching driver output so a job
+		// that fails before staging reports its state instead: the state is DONE
+		// today, because the shared classifier's lenient rule 3 (non-zero exit +
+		// "Shutdown hook called" + no "ERROR" line in the tail) treats an
+		// uncaught "Exception in thread main" as success. That classification is
+		// pre-existing and out of scope here, so accept either terminal verdict
+		// rather than pin the test to it.
+		if state := dpStr(final, "status", "state"); state != "DONE" && state != "ERROR" {
+			t.Fatalf("job state = %q (details %q), want DONE or ERROR",
+				state, dpStr(final, "status", "details"))
+		}
 		out := string(dpDriverOutput(t, final, id))
 		// SparkPi parses its slice count with toInt, so a NumberFormatException
 		// is the deterministic proof the arg reached main() (SparkPi itself does
 		// not echo the count).
 		if !strings.Contains(out, "NumberFormatException") {
 			t.Fatalf("driver output does not contain NumberFormatException — the arg did not reach main():\n%s", out)
-		}
-		// The terminal state is DONE today: the shared classifier's lenient rule
-		// 3 (non-zero exit + "Shutdown hook called" + no "ERROR" line in the
-		// tail) treats an uncaught "Exception in thread main" as success. That
-		// classification is pre-existing and out of scope here, so accept either
-		// terminal verdict rather than pin the test to it.
-		if state := dpStr(final, "status", "state"); state != "DONE" && state != "ERROR" {
-			t.Fatalf("job state = %q (details %q), want DONE or ERROR; driver output:\n%s",
-				state, dpStr(final, "status", "details"), out)
 		}
 	})
 

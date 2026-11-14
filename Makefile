@@ -2762,8 +2762,8 @@ _check-iceberg-prereq:
 	  (echo "ERROR: image '$(SPARK_E2E_ICEBERG_IMAGE)' not found — build or pull it first"; exit 1)
 
 _check-iceberg-gcp-prereq:
-	@docker image inspect $(SPARK_E2E_ICEBERG_GCP_IMAGE) > /dev/null 2>&1 || \
-	  (echo "ERROR: image '$(SPARK_E2E_ICEBERG_GCP_IMAGE)' not found — build or pull it first"; exit 1)
+	@docker --context default image inspect $(SPARK_E2E_ICEBERG_GCP_IMAGE) > /dev/null 2>&1 || \
+	  (echo "ERROR: image '$(SPARK_E2E_ICEBERG_GCP_IMAGE)' not found on the local Docker daemon — build or pull it first, then load it: docker save $(SPARK_E2E_ICEBERG_GCP_IMAGE):latest | docker --context default load"; exit 1)
 
 _check-lakehouse-k3d-prereq:
 	@command -v kubectl > /dev/null 2>&1 || (echo "ERROR: kubectl not found — install kubectl and start a k3d cluster"; exit 1)
