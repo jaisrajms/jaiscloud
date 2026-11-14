@@ -475,6 +475,32 @@ func TestBuildDockerArgs(t *testing.T) {
 	}
 }
 
+// TestBuildDockerArgsJARClassOnlyWithLibrary verifies the Docker driver emits
+// the promoted library jar as the primary resource for a class-only JAR job, so
+// the submitted args follow it instead of being taken as spark-submit's app
+// resource. Guards the caller's `if jarOrScript != ""` skip.
+func TestBuildDockerArgsJARClassOnlyWithLibrary(t *testing.T) {
+	job := ClientModeJob{
+		EntryPoint: JarEntryPoint{
+			MainClass:   "Main",
+			JarFileURIs: []string{"gs://b/app.jar", "gs://b/dep.jar"},
+		},
+		JarArgs: []string{"100"},
+	}
+	got := BuildDockerArgs(job)
+	want := []string{
+		"--master", "local[*]",
+		"--deploy-mode", "client",
+		"--class", "Main",
+		"--jars", "gs://b/dep.jar",
+		"gs://b/app.jar",
+		"100",
+	}
+	if strings.Join(got, " ") != strings.Join(want, " ") {
+		t.Errorf("BuildDockerArgs =\n  %v\nwant\n  %v", got, want)
+	}
+}
+
 func TestBuildDockerArgsSQL(t *testing.T) {
 	job := ClientModeJob{
 		SparkSqlPath: "/opt/spark/bin/spark-sql",

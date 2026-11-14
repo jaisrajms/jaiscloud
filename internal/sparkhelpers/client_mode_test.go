@@ -61,6 +61,33 @@ func TestBuildClientModeArgs_JAR(t *testing.T) {
 	assert.Equal(t, "--class", args[n-5])
 }
 
+// TestBuildClientModeArgs_JARClassOnlyWithLibrary verifies a class-only JAR job
+// (mainClass + jarFileUris, no mainJarFileUri — Dataproc's encoding) emits the
+// promoted library jar as the primary resource, so the submitted args stay the
+// program's args. Guards the callers' `if jarOrScript != ""` skip.
+func TestBuildClientModeArgs_JARClassOnlyWithLibrary(t *testing.T) {
+	job := ClientModeJob{
+		JobID:     "class-only-job",
+		Namespace: "default",
+		Image:     "spark:3.5",
+		EntryPoint: JarEntryPoint{
+			MainClass:   "com.example.Main",
+			JarFileURIs: []string{"gs://bucket/app.jar", "gs://bucket/lib.jar"},
+		},
+		JarArgs: []string{"100"},
+	}
+
+	args := BuildClientModeArgs(job)
+
+	n := len(args)
+	assert.Equal(t, "100", args[n-1], "the submitted arg must follow the primary resource")
+	assert.Equal(t, "gs://bucket/app.jar", args[n-2], "first library jar is the primary resource")
+	assert.Equal(t, "gs://bucket/lib.jar", args[n-3], "remaining libraries stay --jars")
+	assert.Equal(t, "--jars", args[n-4])
+	assert.Equal(t, "com.example.Main", args[n-5])
+	assert.Equal(t, "--class", args[n-6])
+}
+
 // TestBuildClientModeArgs_Python verifies argv for a Python entry point.
 func TestBuildClientModeArgs_Python(t *testing.T) {
 	job := ClientModeJob{

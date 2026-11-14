@@ -117,8 +117,12 @@ func sanitizeJobID(jobID string) string {
 //  5. --conf spark.kubernetes.executor.podTemplateFile=file:///jaiscloud/spark/executor-template.yaml
 //  6. --conf spark.driver.bindAddress=0.0.0.0
 //  7. caller's SparkSubmitArgs verbatim
-//  8. entry-point pre-args (e.g. --class MainClass, or the SQL --jars/-e/-f)
-//  9. jarOrScript (empty for SQL)
+//  8. entry-point pre-args (e.g. --class MainClass, --jars libraries, or the
+//     SQL --jars/-e/-f); for a class-only JAR entry point the first
+//     jar_file_uris entry is promoted out of --jars to the primary resource,
+//     so --jars carries only the remaining libraries (omitted when none)
+//  9. the primary resource: JarURI, or the promoted first library jar for a
+//     class-only JAR job (empty for SQL)
 //  10. JarArgs
 func BuildClientModeArgs(job ClientModeJob) []string {
 	args := []string{

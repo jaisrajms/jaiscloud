@@ -2607,6 +2607,7 @@ test-e2e-dataproc-docker: _check-docker-prereq _check-iceberg-gcp-prereq build-g
 	    n=$$((n+1)); if [ $$n -ge 30 ]; then echo "ERROR: jaiscloud-gcp not healthy"; cat /tmp/jaiscloud-gcp-dataproc-docker.log; exit 1; fi; sleep 1; \
 	  done; \
 	  DATAPROC_DOCKER_E2E=1 JAISCLOUD_HOST=http://localhost:8080 \
+	    DATAPROC_E2E_SPARK_IMAGE=$(SPARK_E2E_ICEBERG_GCP_IMAGE) \
 	    go test -v -tags dataproc_docker_e2e -run TestDataprocDockerExecution -timeout 20m ./tests/persistent_mode/gcp/dataproc/
 
 test-e2e-eventarc-k8s: _check-gcp-samples-prereq _refresh-gcp-image ## Eventarc delivery e2e on k3d — tests/persistent_mode/gcp/eventarc/ (tag: eventarc_e2e; SKIP_GCP_IMAGE_REBUILD=1 to reuse the deployed emulator)

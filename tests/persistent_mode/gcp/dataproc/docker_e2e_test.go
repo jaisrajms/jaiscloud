@@ -13,6 +13,10 @@
 //   - assert a labelled Dataproc driver container ran on the local Docker daemon
 //   - submit a long-running driver, cancel it, and assert the job reaches
 //     CANCELLED and its container is reaped
+//   - submit class-only sparkJobs (mainClass + jarFileUris, no
+//     mainJarFileUri) whose promoted first library jar is a gs:// object, and
+//     assert the submitted args reach the program instead of being taken as
+//     spark-submit's primary resource
 //
 // Run with:
 //
@@ -26,7 +30,10 @@
 //
 // Required env:
 //
-//	DATAPROC_DOCKER_E2E — set to a non-empty value to run (else skipped)
+//	DATAPROC_DOCKER_E2E    — set to a non-empty value to run (else skipped)
+//	DATAPROC_E2E_SPARK_IMAGE — the GCS-connector Spark image the emulator runs
+//	                           (the class-only subtests also extract the in-image
+//	                           Spark examples jar from it)
 //
 // Optional env:
 //
@@ -63,6 +70,9 @@ func requireDocker(t *testing.T) {
 	t.Helper()
 	if os.Getenv("DATAPROC_DOCKER_E2E") == "" {
 		t.Skip("DATAPROC_DOCKER_E2E not set — skipping Dataproc docker e2e test")
+	}
+	if os.Getenv("DATAPROC_E2E_SPARK_IMAGE") == "" {
+		t.Fatal("DATAPROC_E2E_SPARK_IMAGE is empty — the e2e is enabled, so the Spark image must be named (the Makefile target sets it)")
 	}
 	if _, err := exec.LookPath("docker"); err != nil {
 		t.Skip("docker CLI not found — skipping Dataproc docker e2e test")
@@ -259,6 +269,25 @@ func dpDataprocContainers(t *testing.T) []string {
 	return strings.Fields(strings.TrimSpace(out))
 }
 
+// dpExamplesJar extracts the Spark examples jar from the Spark image (the jar
+// the class-only subtests submit as their library). The bytes come straight out
+// of the image so the e2e needs no committed binary fixture.
+func dpExamplesJar(t *testing.T, image string) []byte {
+	t.Helper()
+	out, err := dockerCLI("run", "--rm", "--entrypoint", "sh", image, "-c",
+		"cat /opt/spark/examples/jars/spark-examples_*.jar")
+	if err != nil {
+		t.Fatalf("extract the examples jar from %s: %v", image, err)
+	}
+	jar := []byte(out)
+	// A zip (and therefore a jar) starts with "PK". This also catches a glob
+	// that matched nothing (empty output) or several jars (cat concatenation).
+	if len(jar) < 2 || jar[0] != 'P' || jar[1] != 'K' {
+		t.Fatalf("extracted examples jar from %s is not a single zip/jar (%d bytes)", image, len(jar))
+	}
+	return jar
+}
+
 func TestDataprocDockerExecution(t *testing.T) {
 	requireDocker(t)
 	base := "/v1/projects/" + dpProject + "/regions/" + dpRegion
@@ -293,6 +322,14 @@ spark.stop()
 `
 	dpUpload(t, bucket, "sleep.py", "text/x-python", []byte(sleepScript))
 
+	// A gs:// library jar for the class-only sparkJob subtests (DPS1). The jar
+	// is deliberately remote: the promoted library jar is the driver's primary
+	// resource, so this covers the remote-primary-resource path, not just an
+	// in-image local:// launcher.
+	sparkImage := os.Getenv("DATAPROC_E2E_SPARK_IMAGE")
+	dpUpload(t, bucket, "spark-examples.jar", "application/java-archive", dpExamplesJar(t, sparkImage))
+	examplesJarURI := bucketURI + "/spark-examples.jar"
+
 	dpCreateCluster(t, base, cluster)
 
 	jobID := "dp-docker-job-" + run
@@ -324,6 +361,70 @@ spark.stop()
 	if len(dpDataprocContainers(t)) == 0 {
 		t.Fatalf("no jaiscloud.io/service=dataproc container found on the local daemon")
 	}
+
+	// Class-only sparkJob (mainClass + jarFileUris, no mainJarFileUri): the
+	// emulator promotes the first library jar to the primary resource, so the
+	// submitted args reach the program instead of spark-submit taking the first
+	// one as its application resource.
+	t.Run("class-only sparkJob runs with its library jar as the primary resource", func(t *testing.T) {
+		id := "dp-docker-jar-ok-" + run
+		dpSubmit(t, base, map[string]any{
+			"reference": map[string]any{"projectId": dpProject, "jobId": id},
+			"placement": map[string]any{"clusterName": cluster},
+			"sparkJob": map[string]any{
+				"mainClass":   "org.apache.spark.examples.SparkPi",
+				"jarFileUris": []string{examplesJarURI},
+				"args":        []string{"100"},
+			},
+		})
+		final := dpPollJob(t, base, id, 5*time.Minute)
+		out := string(dpDriverOutput(t, final, id))
+		if state := dpStr(final, "status", "state"); state != "DONE" {
+			t.Fatalf("job state = %q (details %q), want DONE; driver output:\n%s",
+				state, dpStr(final, "status", "details"), out)
+		}
+		if !strings.Contains(out, "Pi is roughly") {
+			t.Fatalf("driver output does not contain \"Pi is roughly\":\n%s", out)
+		}
+		// The old symptom: the primary resource was missing and spark-submit
+		// took the first arg ("100") as the app jar.
+		if strings.Contains(out, "does not exist, skipping") {
+			t.Fatalf("driver output carries the missing-primary-resource warning:\n%s", out)
+		}
+		if strings.Contains(out, "DependencyUtils") {
+			t.Fatalf("driver output carries a DependencyUtils warning:\n%s", out)
+		}
+	})
+
+	t.Run("class-only sparkJob delivers its args to main", func(t *testing.T) {
+		id := "dp-docker-jar-badarg-" + run
+		dpSubmit(t, base, map[string]any{
+			"reference": map[string]any{"projectId": dpProject, "jobId": id},
+			"placement": map[string]any{"clusterName": cluster},
+			"sparkJob": map[string]any{
+				"mainClass":   "org.apache.spark.examples.SparkPi",
+				"jarFileUris": []string{examplesJarURI},
+				"args":        []string{"not-a-number"},
+			},
+		})
+		final := dpPollJob(t, base, id, 5*time.Minute)
+		out := string(dpDriverOutput(t, final, id))
+		// SparkPi parses its slice count with toInt, so a NumberFormatException
+		// is the deterministic proof the arg reached main() (SparkPi itself does
+		// not echo the count).
+		if !strings.Contains(out, "NumberFormatException") {
+			t.Fatalf("driver output does not contain NumberFormatException — the arg did not reach main():\n%s", out)
+		}
+		// The terminal state is DONE today: the shared classifier's lenient rule
+		// 3 (non-zero exit + "Shutdown hook called" + no "ERROR" line in the
+		// tail) treats an uncaught "Exception in thread main" as success. That
+		// classification is pre-existing and out of scope here, so accept either
+		// terminal verdict rather than pin the test to it.
+		if state := dpStr(final, "status", "state"); state != "DONE" && state != "ERROR" {
+			t.Fatalf("job state = %q (details %q), want DONE or ERROR; driver output:\n%s",
+				state, dpStr(final, "status", "details"), out)
+		}
+	})
 
 	t.Run("cancel reaps the driver", func(t *testing.T) {
 		longID := "dp-docker-long-" + run
