@@ -186,7 +186,7 @@ JAISCLOUD_IMAGE   ?= jaisraj/jaiscloud-aws:latest
         test-e2e-docker-all test-e2e-k8s-all test-e2e test-all test-all-gcp \
         _build-for-e2e _restart-server-memory _wait-docker _wait-postgres \
         _start-k8s _stop-k8s \
-        _check-docker-prereq _check-k8s-prereq _check-iceberg-prereq _check-iceberg-gcp-prereq \
+        _check-docker-prereq _check-k8s-prereq _check-iceberg-prereq _check-iceberg-gcp-prereq _check-dataproc-docker-prereq \
         _check-lakehouse-k3d-prereq _check-gcp-samples-prereq _check-dataproc-streaming-k8s-prereq _check-dataproc-namespace-k8s-prereq _check-managedkafka-broker-k8s-prereq _refresh-gcp-image \
         _check-iceberg-k3d-prereq _check-dpgke-demo-k3d-prereq \
         test-gcp-wire-conformance record-gcp-wire-conformance test-gcp-grpc-conformance \
@@ -2591,7 +2591,7 @@ demo-crypto-reset: ## Crypto-medallion: tear the demo down (PP=1 also terraform 
 	$(DEMOCTL) reset --port $(DEMO_CRYPTO_PORT) $(if $(filter 1,$(PP)),--pp) $(if $(filter 1,$(FULL)),--full)
 
 
-test-e2e-dataproc-docker: _check-docker-prereq _check-iceberg-gcp-prereq build-gcp ## Dataproc Spark jobs under Docker — tests/persistent_mode/gcp/dataproc/ (tag: dataproc_docker_e2e; needs the local Docker daemon + the docker group, and the GCS-connector Spark image)
+test-e2e-dataproc-docker: _check-docker-prereq _check-dataproc-docker-prereq build-gcp ## Dataproc Spark jobs under Docker — tests/persistent_mode/gcp/dataproc/ (tag: dataproc_docker_e2e; needs the local Docker daemon + the docker group, and the GCS-connector Spark image)
 	go clean -testcache
 	@set -e; \
 	  JAISCLOUD_SPARK_EXECUTOR_MODE=docker \
@@ -2762,8 +2762,15 @@ _check-iceberg-prereq:
 	  (echo "ERROR: image '$(SPARK_E2E_ICEBERG_IMAGE)' not found — build or pull it first"; exit 1)
 
 _check-iceberg-gcp-prereq:
+	@docker image inspect $(SPARK_E2E_ICEBERG_GCP_IMAGE) > /dev/null 2>&1 || \
+	  (echo "ERROR: image '$(SPARK_E2E_ICEBERG_GCP_IMAGE)' not found — build or pull it first"; exit 1)
+
+# The Dataproc docker e2e runs the emulator and its driver containers on the
+# local daemon (/var/run/docker.sock, via `docker --context default`), which can
+# differ from the CLI's active context (e.g. a remote build host).
+_check-dataproc-docker-prereq:
 	@docker --context default image inspect $(SPARK_E2E_ICEBERG_GCP_IMAGE) > /dev/null 2>&1 || \
-	  (echo "ERROR: image '$(SPARK_E2E_ICEBERG_GCP_IMAGE)' not found on the local Docker daemon — build or pull it first, then load it: docker save $(SPARK_E2E_ICEBERG_GCP_IMAGE):latest | docker --context default load"; exit 1)
+	  (echo "ERROR: image '$(SPARK_E2E_ICEBERG_GCP_IMAGE)' not found on the local Docker daemon (/var/run/docker.sock, the emulator's Docker executor daemon) — build or pull it first, then load it: docker save $(SPARK_E2E_ICEBERG_GCP_IMAGE):latest | docker --context default load"; exit 1)
 
 _check-lakehouse-k3d-prereq:
 	@command -v kubectl > /dev/null 2>&1 || (echo "ERROR: kubectl not found — install kubectl and start a k3d cluster"; exit 1)
