@@ -116,7 +116,7 @@ func (s *server) init(w http.ResponseWriter, r *http.Request) {
 	st := in.Store
 	s.store = &st
 	s.mu.Unlock()
-	if err := s.p.Init(r.Context(), Host{Cloud: in.Host.Cloud, Version: in.Host.Version, Log: slog.Default()}); err != nil {
+	if err := s.p.Init(r.Context(), Host{Cloud: in.Host.Cloud, Version: in.Host.Version, Endpoint: in.Host.Endpoint, Log: slog.Default()}); err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}

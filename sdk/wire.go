@@ -32,6 +32,10 @@ type InitRequest struct {
 type InitHost struct {
 	Cloud   string `json:"cloud"`
 	Version string `json:"version"`
+	// Endpoint is the emulator's base URL (http://127.0.0.1:<port>), for a plugin
+	// that delegates to another service's REST API. It is empty when sent by an
+	// older host.
+	Endpoint string `json:"endpoint,omitempty"`
 }
 
 // StoreEndpoint tells the plugin where and how to reach its state.
