@@ -177,12 +177,17 @@ func buildRequest(svc *matchService, p *compiledPath, r *http.Request, segs []st
 		}
 		params["body"] = v
 	}
+	// apiVersion comes from whichever of the first two segments is the version
+	// token, so a product-prefixed path (/<product>/<version>/...) reports it too.
 	params["path"] = r.URL.Path
 	if v, ok := captures["project"]; ok {
 		params["project"] = v
 	}
-	if versionRe().MatchString(segs[0]) {
+	switch {
+	case versionRe().MatchString(segs[0]):
 		params["apiVersion"] = segs[0]
+	case len(segs) > 1 && versionRe().MatchString(segs[1]):
+		params["apiVersion"] = segs[1]
 	}
 	return &model.NormalizedRequest{Service: svc.name, Action: p.action, Raw: r, Params: params}, nil
 }

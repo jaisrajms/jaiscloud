@@ -225,9 +225,7 @@ func (h *Host) connect(ctx context.Context, spec string, d Deps) (*plugin, error
 	if err := p.do(ctx, http.MethodGet, "/manifest", nil, &m, d.StartWait); err != nil {
 		return nil, err
 	}
-	// The host provides CapServices for every transport; an adapter that cannot
-	// encode the declared services rejects them in adopt.
-	if err := p.adopt(m, d, []string{sdk.CapServices}); err != nil {
+	if err := p.adopt(m, d, hostCapabilities(d, false)); err != nil {
 		return nil, err
 	}
 
@@ -253,7 +251,7 @@ func (h *Host) connectLocal(ctx context.Context, plug sdk.Plugin, where string, 
 	p = &plugin{local: plug, shownURL: where, timeout: d.Timeout, retry: d.CallRetry, host: h,
 		// Never empty, so a store callback that sends no token cannot match it.
 		token: randomID(16)}
-	if err := p.adopt(plug.Manifest(), d, []string{sdk.CapInProcess, sdk.CapServices}); err != nil {
+	if err := p.adopt(plug.Manifest(), d, hostCapabilities(d, true)); err != nil {
 		return nil, err
 	}
 	if err := plug.Init(ctx, sdk.Host{Cloud: string(d.Cloud), Version: d.Version, Log: slog.Default().With("plugin", p.name)}); err != nil {
@@ -261,6 +259,21 @@ func (h *Host) connectLocal(ctx context.Context, plug sdk.Plugin, where string, 
 	}
 	p.stateful, _ = plug.(sdk.Stateful)
 	return p, nil
+}
+
+// hostCapabilities lists what this host offers a plugin on the given transport.
+// CapServices is claimed only when the adapter can encode plugin services, so a
+// cloud without that support refuses a service-declaring plugin with the
+// capability error instead of a misleading one later.
+func hostCapabilities(d Deps, inProcess bool) []string {
+	var caps []string
+	if inProcess {
+		caps = append(caps, sdk.CapInProcess)
+	}
+	if _, ok := d.Adapter.(adapter.PluginCodecs); ok {
+		caps = append(caps, sdk.CapServices)
+	}
+	return caps
 }
 
 // adopt checks a manifest and keeps the routes and services for this binary's
@@ -330,12 +343,9 @@ func (p *plugin) adopt(m sdk.Manifest, d Deps, provides []string) error {
 		if len(r.Actions) == 0 {
 			return fmt.Errorf("route %s/%s: no actions", r.Cloud, r.Service)
 		}
-		if !own[r.Service] {
-			prefix := d.Adapter.ServiceToProvider(r.Service)
-			if len(d.Registry.Keys(prefix)) == 0 {
-				return fmt.Errorf("route %s/%s: no such service (adding new services is not supported yet)", r.Cloud, r.Service)
-			}
-		}
+		// Whether the service exists is decided in apply, where every plugin's
+		// declared services are known: that lets a route into another plugin's
+		// service be reported with both names instead of as "no such service".
 		p.routes = append(p.routes, r)
 	}
 
@@ -472,6 +482,19 @@ func (h *Host) apply(d Deps) error {
 		for _, r := range p.routes {
 			if other, ok := owner[r.Service]; ok && other != p {
 				return fmt.Errorf("plugin %q routes service %q, which plugin %q declares", p.name, r.Service, other.name)
+			}
+		}
+	}
+	// A route must name a built-in service or a service a plugin declares; a
+	// name that is neither is almost certainly a typo.
+	for _, p := range h.plugins {
+		for _, r := range p.routes {
+			if owner[r.Service] != nil {
+				continue
+			}
+			prefix := d.Adapter.ServiceToProvider(r.Service)
+			if len(d.Registry.Keys(prefix)) == 0 {
+				return fmt.Errorf("plugin %q: route %s/%s: no such service (declare it in the plugin's Services to add it)", p.name, r.Cloud, r.Service)
 			}
 		}
 	}
