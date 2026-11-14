@@ -42,6 +42,11 @@ before it fails to start, and the error names the plugin address. If the plugin 
 while the emulator runs, calls are retried for `--plugin-retry` (default 30s) and the
 emulator re-sends its `/init` automatically.
 
+`/init` carries the emulator's `cloud` and `version` in `host`, and in `store` the URL and bearer
+token `c.Store` uses. `host.endpoint` is the emulator's base URL (`http://127.0.0.1:<port>`), for a
+plugin that delegates to another service's REST API; it is empty when the host does not send it, and
+the origin of the store URL is the same address.
+
 ## What you can do
 
 | Mode | Meaning |
@@ -81,6 +86,27 @@ A value the emulator cannot show you (a stream) is never touched, even by `null`
 back: if your `SendMessage` keeps messages in your own store, the built-in `ReceiveMessage`
 will not see them. Either replace the actions that share the data together, or let the built-in
 store the message.
+
+### Adding a wire service
+
+A plugin can add a service the emulator does not have, and answer its REST paths:
+
+```go
+m := sdk.NewMux("acme-gcp-widgets", "0.1.0")
+m.Service("gcp", "widgets").
+    Get("/v1/projects/{project}/locations/{location}/widgets/{widget}", "WidgetsGet").
+    Post("/v1/projects/{project}/locations/{location}/widgets", "WidgetsCreate").
+    Replace(handle) // answers every action of the service
+```
+
+`Mux.Service` collects one declaration per service (name `[a-z0-9-]+`, paths with a version and two
+literal leading segments) and `Replace` installs the wildcard route the service is served by.
+`Mux.Manifest` adds `sdk.CapServices` to `Manifest.Requires` for you, so an older host refuses the
+plugin at startup, naming the capabilities it does provide, instead of serving half of it. A built-in
+service name is refused, and every declared action has to be answered by the plugin's own `Replace`.
+See [examples/gcp-widgets](examples/gcp-widgets/main.go) for a complete one, and
+[docs/PLUGINS.md](../docs/PLUGINS.md#plugin-services) for the pattern grammar, the params, the routing
+order and the limits.
 
 ### Overriding a service covers internal flows
 
