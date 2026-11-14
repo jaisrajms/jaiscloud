@@ -44,8 +44,8 @@ emulator re-sends its `/init` automatically.
 
 `/init` carries the emulator's `cloud` and `version` in `host`, and in `store` the URL and bearer
 token `c.Store` uses. `host.endpoint` is the emulator's base URL (`http://127.0.0.1:<port>`), for a
-plugin that delegates to another service's REST API; it is empty when the host does not send it, and
-the origin of the store URL is the same address.
+plugin that delegates to another service's REST API; `Mux.Endpoint()` returns it, it is empty when
+the host does not send it, and the origin of the store URL is the same address.
 
 ## What you can do
 

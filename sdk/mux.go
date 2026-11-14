@@ -23,6 +23,7 @@ type Mux struct {
 	requires      []string
 	services      []Service
 	serviceIndex  map[string]int
+	endpoint      string
 }
 
 type muxKey struct {
@@ -190,7 +191,17 @@ func (m *Mux) OnLifecycle(ctx context.Context, event string) {
 	}
 }
 
-func (m *Mux) Init(context.Context, Host) error { return nil }
+// Init keeps the endpoint the host sends, so a handler can delegate to another
+// service's REST API through Endpoint.
+func (m *Mux) Init(_ context.Context, h Host) error {
+	m.endpoint = h.Endpoint
+	return nil
+}
+
+// Endpoint returns the emulator's base URL (http://127.0.0.1:<port>), for a
+// handler that delegates to another service's REST API. It is empty when the
+// host did not send one (an older emulator).
+func (m *Mux) Endpoint() string { return m.endpoint }
 
 // Handle dispatches to the exact action's function, else to the "*" function.
 // An unregistered Replace is NotHandled; an unregistered Before/After is a no-op.

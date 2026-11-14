@@ -125,3 +125,18 @@ func TestManifestWithoutServicesIsUnchanged(t *testing.T) {
 		t.Fatalf("requires = %v, want [%s]", got, CapInProcess)
 	}
 }
+
+// The host's base URL reaches a Mux through Init, for a handler that delegates
+// to another service's REST API.
+func TestMuxKeepsTheHostEndpoint(t *testing.T) {
+	m := NewMux("t", "1")
+	if m.Endpoint() != "" {
+		t.Fatalf("endpoint before Init = %q, want empty", m.Endpoint())
+	}
+	if err := m.Init(context.Background(), Host{Endpoint: "http://127.0.0.1:8080"}); err != nil {
+		t.Fatal(err)
+	}
+	if got := m.Endpoint(); got != "http://127.0.0.1:8080" {
+		t.Fatalf("endpoint = %q", got)
+	}
+}

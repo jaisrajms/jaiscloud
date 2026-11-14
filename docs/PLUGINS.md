@@ -347,7 +347,7 @@ operations only. Keep a list of your own if a client needs one.
 ### Delegating to another service
 
 A handler may call another service's REST API as a client, at the emulator's own endpoint
-(`InitHost.Endpoint` in the `/init` message, the field for the emulator's base URL; when it is empty,
+(`m.Endpoint()`, from `InitHost.Endpoint` in the `/init` message, the field for the emulator's base URL; when it is empty,
 as it is from a host that does not send it, use the origin of `Store.URL`). Things to know:
 
 - An out-of-process plugin has no `Next`. For its **own** service there is nothing behind the plugin,
