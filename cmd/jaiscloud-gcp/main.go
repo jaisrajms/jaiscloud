@@ -1029,6 +1029,17 @@ func startCmd() *cobra.Command {
 			// One plugin chain serves every caller that bypasses the registry: gRPC and the console.
 			var pluginChain *pluginchain.Chain
 			if pluginHost != nil {
+				// Plugin-declared services are detected by the REST adapter, and the
+				// matcher exists only once the host has finished apply. Only the REST
+				// gateway dispatches those provider keys, so a gRPC-only run would
+				// silently serve them as unknown services.
+				if sm := pluginHost.ServiceMatcher(); sm != nil {
+					cloudAdapter.SetPluginServices(sm)
+					if !transports.REST() {
+						slog.Warn("plugin services declared but the REST gateway is disabled; only REST dispatches their paths",
+							"grpc", transports.GRPC())
+					}
+				}
 				pluginChain = pluginchain.New(pluginHost)
 			}
 			var grpcOpts []grpc.ServerOption
