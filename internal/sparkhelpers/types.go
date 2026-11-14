@@ -14,7 +14,8 @@ type EntryPoint interface{ isEntryPoint() }
 
 // JarEntryPoint describes a JAR-based Spark job. JarFileURIs are additional
 // jars added to the driver/executor classpath (dataproc.v1.SparkJob.jar_file_uris
-// → spark-submit --jars).
+// → spark-submit --jars). For a class-only job (JarURI empty) the first entry
+// becomes the primary resource instead and the rest stay --jars.
 type JarEntryPoint struct {
 	JarURI      string
 	MainClass   string

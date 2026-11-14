@@ -15,7 +15,7 @@ import (
 // TerminalOptions tunes Spark terminal-state classification.
 type TerminalOptions struct {
 	// StrictExitCode disables the lenient "non-zero exit + clean shutdown hook
-	// = success" rule (rule 3). It is set for drivers, like spark-sql, that
+	// = success" rule (rule 4). It is set for drivers, like spark-sql, that
 	// reliably exit non-zero on failure but print the failure without an
 	// "ERROR" log line; for those the exit code is authoritative.
 	StrictExitCode bool
@@ -26,9 +26,11 @@ type TerminalOptions struct {
 // Classification rules (in priority order):
 //  1. Pod Succeeded (exit 0)                                              → SparkSucceeded=true
 //  2. Pod exit 143/129/130 AND logs contain "SparkContext stopped successfully" → SparkSucceeded=true
-//  3. Pod exit non-zero AND logs contain "Shutdown hook called" AND no ERROR in last 200 lines → SparkSucceeded=true
+//  3. Pod exit non-zero AND the last 200 log lines contain `Exception in thread "main"` → SparkSucceeded=false
+//     (reason = that line; fires even when TerminalOptions.StrictExitCode is set)
+//  4. Pod exit non-zero AND logs contain "Shutdown hook called" AND no ERROR in last 200 lines → SparkSucceeded=true
 //     (skipped when TerminalOptions.StrictExitCode is set)
-//  4. Otherwise SparkSucceeded=false, SparkReason from last ERROR line or pod Reason
+//  5. Otherwise SparkSucceeded=false, SparkReason from last ERROR line or pod Reason
 func WaitTerminal(ctx context.Context, k8s kubernetes.Interface, handle k8shelpers.JobHandle) (Final, error) {
 	return WaitTerminalWith(ctx, k8s, handle, TerminalOptions{})
 }
@@ -65,7 +67,23 @@ func Classify(base k8shelpers.Final, logLines []string, opts TerminalOptions) Fi
 		return f
 	}
 
-	// Rule 3: Shutdown hook + no ERROR in last 200 lines. Skipped when the
+	// Rule 3: an uncaught exception on the driver's main thread is a failure,
+	// even when the SparkContext shut down cleanly. Rule 4 would otherwise
+	// accept a non-zero exit whose only failure signal is
+	// `Exception in thread "main" …` (that line carries no "ERROR" token, so
+	// hasErrorInTail does not see it). Deliberately scoped to "main": this
+	// classifier is shared with EMR / EMR-on-EKS and the Docker driver, and
+	// exceptions on other threads (e.g. a pool thread) are routinely logged by
+	// healthy jobs.
+	if base.ExitCode != 0 {
+		if line := lastMainThreadExceptionLine(logLines, 200); line != "" {
+			f.SparkSucceeded = false
+			f.SparkReason = line
+			return f
+		}
+	}
+
+	// Rule 4: Shutdown hook + no ERROR in last 200 lines. Skipped when the
 	// caller declares the exit code authoritative (StrictExitCode): the Spark
 	// SQL CLI prints a failed query's message without any "ERROR" line, so this
 	// rule would otherwise report a failed query as success.
@@ -76,7 +94,7 @@ func Classify(base k8shelpers.Final, logLines []string, opts TerminalOptions) Fi
 		return f
 	}
 
-	// Rule 4: failure.
+	// Rule 5: failure.
 	f.SparkSucceeded = false
 	f.SparkReason = lastErrorLine(logLines)
 	if f.SparkReason == "" {
@@ -137,6 +155,23 @@ func hasErrorInTail(lines []string, n int) bool {
 func lastErrorLine(lines []string) string {
 	for i := len(lines) - 1; i >= 0; i-- {
 		if strings.Contains(lines[i], "ERROR") {
+			return lines[i]
+		}
+	}
+	return ""
+}
+
+// lastMainThreadExceptionLine returns the last of the final n lines that names
+// an uncaught exception on the driver's main thread
+// (`Exception in thread "main" …`), or empty string. Tail-scoped so a stale
+// exception earlier in a long log does not fail a later successful attempt.
+func lastMainThreadExceptionLine(lines []string, n int) string {
+	start := len(lines) - n
+	if start < 0 {
+		start = 0
+	}
+	for i := len(lines) - 1; i >= start; i-- {
+		if strings.Contains(lines[i], `Exception in thread "main"`) {
 			return lines[i]
 		}
 	}
