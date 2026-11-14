@@ -127,11 +127,73 @@ func TestClassify_StrictExitCode_SQLFailure(t *testing.T) {
 	}
 
 	lenient := Classify(base, logs, TerminalOptions{})
-	assert.True(t, lenient.SparkSucceeded, "lenient rule 3 reports success")
+	assert.True(t, lenient.SparkSucceeded, "lenient rule 4 reports success")
 
 	strict := Classify(base, logs, TerminalOptions{StrictExitCode: true})
 	assert.False(t, strict.SparkSucceeded, "strict exit-code classification must report failure")
 	assert.NotEmpty(t, strict.SparkReason)
+}
+
+// TestClassify_MainThreadExceptionFails verifies that an uncaught exception on
+// the driver's main thread is a failure even when the SparkContext shut down
+// cleanly and no "ERROR" line was printed (the lenient shutdown-hook rule would
+// otherwise report success). It must fire with and without StrictExitCode.
+func TestClassify_MainThreadExceptionFails(t *testing.T) {
+	base := k8shelpers.Final{Succeeded: false, ExitCode: 1, Reason: "Error"}
+	exception := `Exception in thread "main" java.lang.NumberFormatException: For input string: "not-a-number"`
+	logs := []string{
+		"24/01/01 12:00:00 INFO SparkContext: Running Spark",
+		exception,
+		"\tat org.apache.spark.examples.SparkPi$.main(SparkPi.scala:32)",
+		"24/01/01 12:00:01 INFO SparkContext: Successfully stopped SparkContext",
+		"24/01/01 12:00:01 INFO ShutdownHookManager: Shutdown hook called",
+	}
+
+	for _, opts := range []TerminalOptions{{}, {StrictExitCode: true}} {
+		f := Classify(base, logs, opts)
+		assert.False(t, f.SparkSucceeded, "uncaught main-thread exception must fail (opts %+v)", opts)
+		assert.Contains(t, f.SparkReason, "NumberFormatException")
+	}
+}
+
+// TestClassify_NonMainThreadExceptionStaysSuccess pins the main-thread scope: a
+// clean shutdown-hook exit with an exception on another thread is still
+// success under the lenient rule.
+func TestClassify_NonMainThreadExceptionStaysSuccess(t *testing.T) {
+	base := k8shelpers.Final{Succeeded: false, ExitCode: 1, Reason: "Error"}
+	logs := []string{
+		"24/01/01 12:00:00 INFO SparkContext: Running Spark",
+		`Exception in thread "pool-1-thread-1" java.io.IOException: connection reset`,
+		"24/01/01 12:00:01 INFO ShutdownHookManager: Shutdown hook called",
+	}
+
+	f := Classify(base, logs, TerminalOptions{})
+	assert.True(t, f.SparkSucceeded, "a non-main-thread exception plus a clean shutdown hook stays success")
+	assert.Equal(t, "Shutdown hook called (no errors in tail)", f.SparkReason)
+}
+
+// TestLastMainThreadExceptionLine verifies the helper is tail-scoped and only
+// matches the main thread.
+func TestLastMainThreadExceptionLine(t *testing.T) {
+	assert.Equal(t,
+		`Exception in thread "main" java.lang.RuntimeException: boom`,
+		lastMainThreadExceptionLine([]string{
+			`Exception in thread "main" java.lang.IllegalStateException: old`,
+			"INFO: done",
+			`Exception in thread "main" java.lang.RuntimeException: boom`,
+		}, 200))
+
+	assert.Equal(t, "", lastMainThreadExceptionLine([]string{
+		`Exception in thread "pool-1-thread-1" java.io.IOException: nope`,
+	}, 200))
+
+	// Outside the tail window: ignored.
+	lines := make([]string, 300)
+	for i := range lines {
+		lines[i] = "INFO: line"
+	}
+	lines[10] = `Exception in thread "main" java.lang.IllegalStateException: stale`
+	assert.Equal(t, "", lastMainThreadExceptionLine(lines, 200))
 }
 
 // TestClassificationHelpers tests internal helpers used for log-based classification.

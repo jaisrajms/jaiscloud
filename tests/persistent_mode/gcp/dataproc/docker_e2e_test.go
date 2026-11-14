@@ -412,14 +412,11 @@ spark.stop()
 		})
 		final := dpPollJob(t, base, id, 5*time.Minute)
 		// The terminal state is checked before fetching driver output so a job
-		// that fails before staging reports its state instead: the state is DONE
-		// today, because the shared classifier's lenient rule 3 (non-zero exit +
-		// "Shutdown hook called" + no "ERROR" line in the tail) treats an
-		// uncaught "Exception in thread main" as success. That classification is
-		// pre-existing and out of scope here, so accept either terminal verdict
-		// rather than pin the test to it.
-		if state := dpStr(final, "status", "state"); state != "DONE" && state != "ERROR" {
-			t.Fatalf("job state = %q (details %q), want DONE or ERROR",
+		// that fails before staging reports its state instead. SparkPi's main
+		// throws, so the classifier's main-thread-exception rule (DPS3) makes the
+		// job ERROR despite the clean SparkContext shutdown.
+		if state := dpStr(final, "status", "state"); state != "ERROR" {
+			t.Fatalf("job state = %q (details %q), want ERROR (an uncaught main-thread exception must fail the driver)",
 				state, dpStr(final, "status", "details"))
 		}
 		out := string(dpDriverOutput(t, final, id))
