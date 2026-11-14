@@ -355,6 +355,16 @@ func (p *plugin) adopt(m sdk.Manifest, d Deps, provides []string) error {
 		if own[r.Service] && r.Mode != sdk.Replace {
 			return fmt.Errorf("route %s/%s: mode %q is not supported for a plugin service (it has no built-in behind it); use replace", r.Cloud, r.Service, r.Mode)
 		}
+		if !own[r.Service] {
+			continue
+		}
+		// A plugin service is reached only through the REST gateway, so a route
+		// that excludes "rest" would never run and is a configuration mistake.
+		for _, t := range r.Transports {
+			if t != "rest" {
+				return fmt.Errorf("route %s/%s: transport %q is not supported for a plugin service (REST only)", r.Cloud, r.Service, t)
+			}
+		}
 	}
 	for _, s := range p.services {
 		for _, pa := range s.Paths {
