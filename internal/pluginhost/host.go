@@ -54,6 +54,11 @@ type Host struct {
 	plugins  []*plugin
 	resource store.ResourceStore
 	registry *provider.Registry
+	adapter  adapter.CloudAdapter
+
+	// matcher routes the requests the plugins' declared services own. It is nil
+	// when no plugin declares a service for this binary's cloud.
+	matcher *matcher
 
 	// The install plan, kept so the same plugins can be attached to another
 	// registry (the gRPC transport's shadow registry, see Attach).
@@ -69,7 +74,8 @@ type plugin struct {
 	name, version, baseURL, shownURL, token string
 	abi                                     int
 	secret                                  string
-	routes                                  []sdk.Route // only entries for this binary's cloud
+	routes                                  []sdk.Route   // only entries for this binary's cloud
+	services                                []sdk.Service // declared services for this binary's cloud
 	client                                  *http.Client
 	timeout, retry                          time.Duration
 	initReq                                 sdk.InitRequest
@@ -129,7 +135,7 @@ func load(ctx context.Context, specs []string, linked []sdk.Plugin, d Deps) (*Ho
 		d.CallRetry = defaultRetry
 	}
 	h := &Host{cloud: string(d.Cloud), resource: d.Resources, registry: d.Registry,
-		calls: map[string]*activeCall{}}
+		adapter: d.Adapter, calls: map[string]*activeCall{}}
 	seen := map[string]bool{}
 	for _, spec := range specs {
 		p, err := h.connect(ctx, spec, d)
@@ -219,7 +225,9 @@ func (h *Host) connect(ctx context.Context, spec string, d Deps) (*plugin, error
 	if err := p.do(ctx, http.MethodGet, "/manifest", nil, &m, d.StartWait); err != nil {
 		return nil, err
 	}
-	if err := p.adopt(m, d, nil); err != nil {
+	// The host provides CapServices for every transport; an adapter that cannot
+	// encode the declared services rejects them in adopt.
+	if err := p.adopt(m, d, []string{sdk.CapServices}); err != nil {
 		return nil, err
 	}
 
@@ -245,7 +253,7 @@ func (h *Host) connectLocal(ctx context.Context, plug sdk.Plugin, where string, 
 	p = &plugin{local: plug, shownURL: where, timeout: d.Timeout, retry: d.CallRetry, host: h,
 		// Never empty, so a store callback that sends no token cannot match it.
 		token: randomID(16)}
-	if err := p.adopt(plug.Manifest(), d, []string{sdk.CapInProcess}); err != nil {
+	if err := p.adopt(plug.Manifest(), d, []string{sdk.CapInProcess, sdk.CapServices}); err != nil {
 		return nil, err
 	}
 	if err := plug.Init(ctx, sdk.Host{Cloud: string(d.Cloud), Version: d.Version, Log: slog.Default().With("plugin", p.name)}); err != nil {
@@ -255,8 +263,8 @@ func (h *Host) connectLocal(ctx context.Context, plug sdk.Plugin, where string, 
 	return p, nil
 }
 
-// adopt checks a manifest and keeps the routes for this binary's cloud. provides
-// are the host capabilities this plugin's transport offers.
+// adopt checks a manifest and keeps the routes and services for this binary's
+// cloud. provides are the host capabilities this plugin's transport offers.
 func (p *plugin) adopt(m sdk.Manifest, d Deps, provides []string) error {
 	if m.ABI != sdk.ABI {
 		return fmt.Errorf("plugin ABI %d, emulator supports %d", m.ABI, sdk.ABI)
@@ -277,6 +285,41 @@ func (p *plugin) adopt(m sdk.Manifest, d Deps, provides []string) error {
 		}
 	}
 	p.name, p.version, p.abi = m.Name, m.Version, m.ABI
+
+	// The services this plugin adds. The adapter decides whether a name is
+	// available (a built-in name is its error) and supplies the codec, so the
+	// host never learns what a plugin's resources are called.
+	codecs, hasCodecs := d.Adapter.(adapter.PluginCodecs)
+	own := map[string]bool{}
+	for _, s := range m.Services {
+		if s.Cloud != string(d.Cloud) {
+			continue // a cross-cloud plugin lists other clouds' entries; ignore them
+		}
+		if !hasCodecs {
+			return fmt.Errorf("cloud %s does not support plugin services yet", d.Cloud)
+		}
+		if !nameRe().MatchString(s.Name) {
+			return fmt.Errorf("invalid service name %q (want [a-z0-9-]+)", s.Name)
+		}
+		if _, err := codecs.PluginCodec(s.Name); err != nil {
+			return err
+		}
+		for _, pa := range s.Paths {
+			method := strings.ToUpper(pa.Method)
+			if !pluginMethods[method] {
+				return fmt.Errorf("service %s: path %s %s: unknown method %q", s.Name, pa.Method, pa.Pattern, pa.Method)
+			}
+			if _, err := compilePattern(pa.Pattern); err != nil {
+				return fmt.Errorf("service %s: path %s: %w", s.Name, method, err)
+			}
+			if !actionRe().MatchString(pa.Action) {
+				return fmt.Errorf("service %s: path %s %s: invalid action %q (want [A-Z][A-Za-z0-9]*)", s.Name, method, pa.Pattern, pa.Action)
+			}
+		}
+		own[s.Name] = true
+		p.services = append(p.services, s)
+	}
+
 	for _, r := range m.Routes {
 		if r.Cloud != string(d.Cloud) {
 			continue // a cross-cloud plugin lists other clouds' entries; ignore them
@@ -287,16 +330,48 @@ func (p *plugin) adopt(m sdk.Manifest, d Deps, provides []string) error {
 		if len(r.Actions) == 0 {
 			return fmt.Errorf("route %s/%s: no actions", r.Cloud, r.Service)
 		}
-		prefix := d.Adapter.ServiceToProvider(r.Service)
-		if len(d.Registry.Keys(prefix)) == 0 {
-			return fmt.Errorf("route %s/%s: no such service (adding new services is not supported yet)", r.Cloud, r.Service)
+		if !own[r.Service] {
+			prefix := d.Adapter.ServiceToProvider(r.Service)
+			if len(d.Registry.Keys(prefix)) == 0 {
+				return fmt.Errorf("route %s/%s: no such service (adding new services is not supported yet)", r.Cloud, r.Service)
+			}
 		}
 		p.routes = append(p.routes, r)
 	}
+
+	// A plugin service has no built-in behind it, so only replace makes sense for
+	// it, and every action its paths name must be answered by one of its routes.
+	for _, r := range p.routes {
+		if own[r.Service] && r.Mode != sdk.Replace {
+			return fmt.Errorf("route %s/%s: mode %q is not supported for a plugin service (it has no built-in behind it); use replace", r.Cloud, r.Service, r.Mode)
+		}
+	}
+	for _, s := range p.services {
+		for _, pa := range s.Paths {
+			if !p.answers(s.Name, pa.Action) {
+				return fmt.Errorf("service %s: action %s is not answered by a replace route of plugin %q (add Replace for it, or for %q)", s.Name, pa.Action, p.name, "*")
+			}
+		}
+	}
+
 	if len(p.routes) == 0 {
 		slog.Warn("plugin declares no routes for this cloud", "name", p.name, "cloud", d.Cloud)
 	}
 	return nil
+}
+
+// answers reports whether one of the plugin's own replace routes serves the
+// action of the named service, either exactly or through the "*" wildcard.
+func (p *plugin) answers(service, action string) bool {
+	for _, r := range p.routes {
+		if r.Service != service || r.Mode != sdk.Replace {
+			continue
+		}
+		if contains(r.Actions, action) || contains(r.Actions, "*") {
+			return true
+		}
+	}
+	return false
 }
 
 // transport names how the plugin is reached.
@@ -379,6 +454,55 @@ func (h *Host) apply(d Deps) error {
 	replaceOwner := map[string]string{}        // exact key -> plugin
 	newKeys := map[string]map[string]bool{}    // prefix -> keys named explicitly by any plugin
 
+	// 0. Plugin-declared services: one owner per name, no route into another
+	// plugin's service, and no two patterns that can match the same request.
+	// Rejecting overlap up front means declaration order is never observable.
+	owner := map[string]*plugin{}
+	var declared []sdk.Service
+	for _, p := range h.plugins {
+		for _, s := range p.services {
+			if other, ok := owner[s.Name]; ok && other != p {
+				return fmt.Errorf("plugins %q and %q both declare service %q", other.name, p.name, s.Name)
+			}
+			owner[s.Name] = p
+			declared = append(declared, s)
+		}
+	}
+	for _, p := range h.plugins {
+		for _, r := range p.routes {
+			if other, ok := owner[r.Service]; ok && other != p {
+				return fmt.Errorf("plugin %q routes service %q, which plugin %q declares", p.name, r.Service, other.name)
+			}
+		}
+	}
+	type claim struct {
+		p    *plugin
+		path *compiledPath
+	}
+	var claims []claim
+	for _, p := range h.plugins {
+		for _, s := range p.services {
+			paths, err := compilePaths(s)
+			if err != nil {
+				return err
+			}
+			for _, cp := range paths {
+				for _, prev := range claims {
+					if !pathsOverlap(cp, prev.path) {
+						continue
+					}
+					if prev.p == p {
+						return fmt.Errorf("plugin %q declares overlapping paths %s %s and %s %s",
+							p.name, prev.path.method, prev.path.raw, cp.method, cp.raw)
+					}
+					return fmt.Errorf("plugins %q and %q declare overlapping paths %s %s and %s %s",
+						prev.p.name, p.name, prev.path.method, prev.path.raw, cp.method, cp.raw)
+				}
+				claims = append(claims, claim{p: p, path: cp})
+			}
+		}
+	}
+
 	// 1. Explicit action claims.
 	for i, p := range h.plugins {
 		keys[i], fallback[i] = map[string]*modeSet{}, map[string]*modeSet{}
@@ -454,6 +578,17 @@ func (h *Host) apply(d Deps) error {
 			h.covered[k] = true
 		}
 	}
+	if len(declared) > 0 {
+		codecs, ok := d.Adapter.(adapter.PluginCodecs)
+		if !ok {
+			return fmt.Errorf("cloud %s does not support plugin services yet", d.Cloud)
+		}
+		m, err := newMatcher(declared, codecs)
+		if err != nil {
+			return err
+		}
+		h.matcher = m
+	}
 	h.Attach(d.Registry)
 	return nil
 }
@@ -495,6 +630,16 @@ func (h *Host) Attach(reg *provider.Registry) {
 // registry key. A transport that bypasses the registry uses it to leave
 // untouched calls on their normal path.
 func (h *Host) Covers(key string) bool { return h != nil && h.covered[key] }
+
+// ServiceMatcher returns the matcher for the services the plugins declared for
+// this binary's cloud, or nil when none declared one. An adapter installs it to
+// route those paths to the plugin before its own path detection runs.
+func (h *Host) ServiceMatcher() adapter.PluginServiceMatcher {
+	if h == nil || h.matcher == nil {
+		return nil
+	}
+	return h.matcher
+}
 
 // CoveredKeys lists the exact registry keys some plugin touches, sorted.
 func (h *Host) CoveredKeys() []string {

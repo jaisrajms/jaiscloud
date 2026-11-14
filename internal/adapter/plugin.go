@@ -22,3 +22,17 @@ type PluginCodecs interface {
 type PluginServiceMatcher interface {
 	Match(r *http.Request, body []byte) (*model.NormalizedRequest, Codec, bool, error)
 }
+
+// PluginPath is one declared method+pattern of a plugin service.
+type PluginPath struct {
+	Service string
+	Method  string
+	Pattern string
+}
+
+// PluginServicePaths is an optional interface a PluginServiceMatcher implements
+// so an adapter can check the declared patterns against its own built-in
+// grammar (for example to warn about a shadowed collection).
+type PluginServicePaths interface {
+	PluginPaths() []PluginPath
+}
