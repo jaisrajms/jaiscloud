@@ -21,6 +21,8 @@ type Mux struct {
 	lifecycle     func(ctx context.Context, event string)
 	transports    []string
 	requires      []string
+	services      []Service
+	serviceIndex  map[string]int
 }
 
 type muxKey struct {
@@ -50,6 +52,74 @@ func (m *Mux) Before(cloud, service, action string, f Func) { m.add(Before, clou
 
 // After runs after the core.
 func (m *Mux) After(cloud, service, action string, f Func) { m.add(After, cloud, service, action, f) }
+
+// Service starts (or continues) the declaration of a wire service the plugin
+// adds. Repeated calls for the same cloud and name return the same declaration,
+// so paths accumulate into one Service. A service that has no paths yet is still
+// declared: use Replace for a service that answers every action itself.
+//
+//	m.Service("gcp", "widgets").
+//		Get("/v1/projects/{project}/widgets/{widget}", "WidgetsGet").
+//		Replace(handle)
+func (m *Mux) Service(cloud, name string) *ServiceBuilder {
+	if m.serviceIndex == nil {
+		m.serviceIndex = map[string]int{}
+	}
+	key := cloud + "\x00" + name
+	i, ok := m.serviceIndex[key]
+	if !ok {
+		i = len(m.services)
+		m.services = append(m.services, Service{Cloud: cloud, Name: name})
+		m.serviceIndex[key] = i
+	}
+	return &ServiceBuilder{m: m, index: i}
+}
+
+// ServiceBuilder collects the paths of one declared service.
+type ServiceBuilder struct {
+	m     *Mux
+	index int
+}
+
+// Get declares a GET path.
+func (b *ServiceBuilder) Get(pattern, action string) *ServiceBuilder {
+	return b.add("GET", pattern, action)
+}
+
+// Post declares a POST path.
+func (b *ServiceBuilder) Post(pattern, action string) *ServiceBuilder {
+	return b.add("POST", pattern, action)
+}
+
+// Put declares a PUT path.
+func (b *ServiceBuilder) Put(pattern, action string) *ServiceBuilder {
+	return b.add("PUT", pattern, action)
+}
+
+// Patch declares a PATCH path.
+func (b *ServiceBuilder) Patch(pattern, action string) *ServiceBuilder {
+	return b.add("PATCH", pattern, action)
+}
+
+// Delete declares a DELETE path.
+func (b *ServiceBuilder) Delete(pattern, action string) *ServiceBuilder {
+	return b.add("DELETE", pattern, action)
+}
+
+func (b *ServiceBuilder) add(method, pattern, action string) *ServiceBuilder {
+	b.m.services[b.index].Paths = append(b.m.services[b.index].Paths, Path{Method: method, Pattern: pattern, Action: action})
+	return b
+}
+
+// Replace answers every action of the service that is not registered for an
+// exact action. It installs the service's wildcard replace route (calling it
+// again replaces that function instead of adding a second route) and leaves the
+// service registered even when it has no paths.
+func (b *ServiceBuilder) Replace(f Func) *ServiceBuilder {
+	s := b.m.services[b.index]
+	b.m.add(Replace, s.Cloud, s.Name, "*", f)
+	return b
+}
 
 // Transports restricts the plugin to the given wire transports ("rest", "grpc"); the
 // default is all of them. Call it when the functions only understand one shape of
@@ -83,12 +153,30 @@ func (m *Mux) Manifest() Manifest {
 		groups[key] = append(groups[key], k.action)
 	}
 	mf := Manifest{ABI: ABI, Name: m.name, Version: m.version, Requires: m.requires}
+	if len(m.services) > 0 {
+		mf.Services = make([]Service, len(m.services))
+		for i, s := range m.services {
+			mf.Services[i] = Service{Cloud: s.Cloud, Name: s.Name, Paths: append([]Path(nil), s.Paths...)}
+		}
+		if !hasCap(mf.Requires, CapServices) {
+			mf.Requires = append(append([]string(nil), m.requires...), CapServices)
+		}
+	}
 	for _, key := range gorder {
 		acts := groups[key]
 		sort.Strings(acts)
 		mf.Routes = append(mf.Routes, Route{Cloud: key.cloud, Service: key.service, Actions: acts, Mode: key.mode, Transports: m.transports})
 	}
 	return mf
+}
+
+func hasCap(list []string, want string) bool {
+	for _, s := range list {
+		if s == want {
+			return true
+		}
+	}
+	return false
 }
 
 // HandleLifecycle registers a function called after the emulator resets or

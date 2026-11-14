@@ -48,6 +48,9 @@ type Manifest struct {
 	// capabilities it has, so a plugin that needs more than an HTTP sidecar gives
 	// (see CapInProcess) fails clearly instead of being silently mis-served.
 	Requires []string `json:"requires,omitempty"`
+	// Services declares wire services the plugin adds. A host that accepts them
+	// provides CapServices; a plugin that declares one lists it in Requires.
+	Services []Service `json:"services,omitempty"`
 }
 
 // Host capabilities a plugin can list in Manifest.Requires.
