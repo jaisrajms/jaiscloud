@@ -55,6 +55,10 @@ type ProviderInterface interface {
 	// CancelJob transitions a running job to CANCELLED.
 	CancelJob(ctx context.Context, project, region, jobID string) (dpstore.Job, error)
 
+	// DriverOutput returns the staged stdout/stderr of a terminal job so the
+	// console can show it; a non-terminal or un-staged job answers an error.
+	DriverOutput(ctx context.Context, project, region, jobID string) ([]byte, error)
+
 	// ListAllWorkflowTemplates lists every workflow template in a project
 	// across all regions, sorted by region then template id.
 	ListAllWorkflowTemplates(ctx context.Context, project string) ([]dpstore.WorkflowTemplate, error)
@@ -148,6 +152,11 @@ func (p *Provider) SubmitJob(ctx context.Context, project, region string, in dat
 // CancelJob implements ProviderInterface.
 func (p *Provider) CancelJob(ctx context.Context, project, region, jobID string) (dpstore.Job, error) {
 	return p.svc.CancelJob(ctx, project, region, jobID)
+}
+
+// DriverOutput implements ProviderInterface.
+func (p *Provider) DriverOutput(ctx context.Context, project, region, jobID string) ([]byte, error) {
+	return p.svc.DriverOutput(ctx, project, region, jobID)
 }
 
 // ListAllWorkflowTemplates implements ProviderInterface.

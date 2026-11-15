@@ -20,6 +20,7 @@ import "encoding/json"
 type StatusEvent struct {
 	State     string `json:"state"`
 	Detail    string `json:"detail,omitempty"`
+	Substate  string `json:"substate,omitempty"`
 	StartTime string `json:"stateStartTime,omitempty"`
 }
 
@@ -28,15 +29,18 @@ type StatusEvent struct {
 // namespace placement (Namespace/NamespaceOwned/KubernetesNamespace) are only
 // populated on the detail read, not the list.
 type Cluster struct {
-	ID            string            `json:"id"`
-	Name          string            `json:"name"`
-	Region        string            `json:"region"`
-	Status        string            `json:"status"`
-	StatusDetail  string            `json:"statusDetail,omitempty"`
-	StatusHistory []StatusEvent     `json:"statusHistory,omitempty"`
-	ClusterUUID   string            `json:"clusterUuid,omitempty"`
-	Labels        map[string]string `json:"labels,omitempty"`
-	GKEBacked     bool              `json:"gkeBacked,omitempty"`
+	ID           string `json:"id"`
+	Name         string `json:"name"`
+	Region       string `json:"region"`
+	Status       string `json:"status"`
+	StatusDetail string `json:"statusDetail,omitempty"`
+	// StatusStartTime is when the current status began; the console uses it for
+	// the relative-duration timeline (the wire field is status.stateStartTime).
+	StatusStartTime string            `json:"statusStartTime,omitempty"`
+	StatusHistory   []StatusEvent     `json:"statusHistory,omitempty"`
+	ClusterUUID     string            `json:"clusterUuid,omitempty"`
+	Labels          map[string]string `json:"labels,omitempty"`
+	GKEBacked       bool              `json:"gkeBacked,omitempty"`
 	// Namespace is the effective Kubernetes namespace the cluster's jobs run in
 	// (the requested kubernetesNamespace when supplied, else a derived
 	// per-cluster name). Empty only in mock execution mode (no k8s client);
@@ -89,15 +93,18 @@ type UpdateClusterRequest struct {
 // the list page. TypeJob carries the type-specific body (sparkJob, pysparkJob,
 // ...) and is only populated on the detail read.
 type Job struct {
-	ID                      string            `json:"id"`
-	Name                    string            `json:"name"`
-	Region                  string            `json:"region"`
-	ClusterName             string            `json:"clusterName,omitempty"`
-	Type                    string            `json:"type,omitempty"`
-	TypeJob                 json.RawMessage   `json:"typeJob,omitempty"`
-	Status                  string            `json:"status"`
-	StatusDetail            string            `json:"statusDetail,omitempty"`
-	Substate                string            `json:"substate,omitempty"`
+	ID           string          `json:"id"`
+	Name         string          `json:"name"`
+	Region       string          `json:"region"`
+	ClusterName  string          `json:"clusterName,omitempty"`
+	Type         string          `json:"type,omitempty"`
+	TypeJob      json.RawMessage `json:"typeJob,omitempty"`
+	Status       string          `json:"status"`
+	StatusDetail string          `json:"statusDetail,omitempty"`
+	Substate     string          `json:"substate,omitempty"`
+	// StatusStartTime is when the current status began; the console uses it for
+	// the relative-duration timeline (the wire field is status.stateStartTime).
+	StatusStartTime         string            `json:"statusStartTime,omitempty"`
 	StatusHistory           []StatusEvent     `json:"statusHistory,omitempty"`
 	Labels                  map[string]string `json:"labels,omitempty"`
 	DriverOutputResourceURI string            `json:"driverOutputResourceUri,omitempty"`

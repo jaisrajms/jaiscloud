@@ -331,6 +331,7 @@ var typedStayOnBuiltIn = map[string]string{
 	"functions.PutSourceArchive":           "writes the source archive through the Cloud Storage seam (main.go passes the seam), which is a registry call",
 	"resourcemanager.ListObservedProjects": "the registry of projects seen on the wire, console discovery only",
 	"projects.ListObservedProjects":        "the registry of projects seen on the wire, console discovery only",
+	"dataproc.DriverOutput":                "reads the job's staged driver-output object through the Cloud Storage seam; not a Dataproc API action",
 }
 
 // allMethods returns every method of a console package's ProviderInterface.

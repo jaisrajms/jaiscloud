@@ -18,8 +18,8 @@ import { Link as RouterLink, useNavigate, useParams } from 'react-router-dom'
 import { deleteWorkflowTemplate, getWorkflowTemplate } from '../../api/gcp/dataproc'
 import { InstantiateTemplateDialog, WorkflowTemplateDialog } from './WorkflowTemplateDialog'
 import { useAccount } from '../../context/AccountContext'
-import { Detail, JsonBlock } from './common'
-import { shortDate } from './util'
+import { ConfirmDialog, CopyButton, Detail, GsUriList, JsonBlock } from './common'
+import { collectGsUris, shortDate } from './util'
 import { GcpPageTitle } from '../common/PageTitle'
 
 /** A single Dataproc workflow template: metadata plus the full definition. */
@@ -30,6 +30,7 @@ export function WorkflowTemplateDetailPage() {
   const navigate = useNavigate()
   const [editing, setEditing] = useState(false)
   const [running, setRunning] = useState(false)
+  const [deleting, setDeleting] = useState(false)
 
   const detail = useQuery({
     queryKey: ['gcp', 'dataproc', 'workflow-template', region, templateID, accountId],
@@ -38,6 +39,7 @@ export function WorkflowTemplateDetailPage() {
   })
 
   const template = detail.data
+  const resources = collectGsUris(template?.definition)
 
   const remove = useMutation({
     mutationFn: () => deleteWorkflowTemplate(region, templateID, template?.version),
@@ -58,7 +60,10 @@ export function WorkflowTemplateDetailPage() {
           <ArrowBackIcon />
         </IconButton>
         <Box sx={{ minWidth: 0 }}>
-          <GcpPageTitle id="dataproc">{templateID}</GcpPageTitle>
+          <Stack direction="row" spacing={0.5} sx={{ alignItems: 'center' }}>
+            <GcpPageTitle id="dataproc">{templateID}</GcpPageTitle>
+            <CopyButton value={templateID} label="template ID" />
+          </Stack>
           <Typography variant="body2" color="text.secondary">
             Workflow template · {region || '—'}
           </Typography>
@@ -75,7 +80,10 @@ export function WorkflowTemplateDetailPage() {
               color="error"
               startIcon={<DeleteOutlineIcon />}
               disabled={remove.isPending}
-              onClick={() => remove.mutate()}
+              onClick={() => {
+                remove.reset()
+                setDeleting(true)
+              }}
             >
               Delete
             </Button>
@@ -110,6 +118,24 @@ export function WorkflowTemplateDetailPage() {
             templateID={templateID}
             version={template.version}
           />
+          <ConfirmDialog
+            open={deleting}
+            title="Delete workflow template"
+            confirmLabel="Delete template"
+            body={
+              <>
+                Delete workflow template <strong>{templateID}</strong> (version {template.version})?
+                This cannot be undone.
+              </>
+            }
+            busy={remove.isPending}
+            error={remove.error?.message}
+            onConfirm={() => remove.mutate()}
+            onClose={() => {
+              remove.reset()
+              setDeleting(false)
+            }}
+          />
           <Box
             sx={{
               display: 'grid',
@@ -123,6 +149,16 @@ export function WorkflowTemplateDetailPage() {
             <Detail label="Created">{shortDate(template.createTime)}</Detail>
             <Detail label="Updated">{shortDate(template.updateTime)}</Detail>
           </Box>
+
+          {resources.length > 0 && (
+            <>
+              <Divider sx={{ mb: 2 }} />
+              <Typography variant="subtitle1" sx={{ mb: 1 }}>
+                Job resources
+              </Typography>
+              <GsUriList resources={resources} />
+            </>
+          )}
 
           <Divider sx={{ mb: 2 }} />
           <Typography variant="subtitle1" sx={{ mb: 1 }}>

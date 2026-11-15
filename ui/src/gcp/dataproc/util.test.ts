@@ -2,14 +2,20 @@ import { describe, expect, it } from 'vitest'
 import {
   buildClusterUpdateMask,
   buildJobBody,
+  buildStatusTimeline,
   buildVirtualClusterConfig,
   changedJsonPaths,
   clusterStateColor,
+  collectGsUris,
+  formatDelta,
+  gcsBucketPath,
   jobStateColor,
   jobTypeLabel,
+  parseGsUri,
   parseJsonObject,
   parseKeyValueLines,
   shortDate,
+  sortableDate,
   splitList,
 } from './util'
 
@@ -189,6 +195,113 @@ describe('changedJsonPaths', () => {
 
   it('returns nothing when unchanged', () => {
     expect(changedJsonPaths({ a: 1 }, { a: 1 }, 'config')).toEqual([])
+  })
+})
+
+describe('sortableDate', () => {
+  it('parses a microsecond timestamp and rejects absent/invalid values', () => {
+    expect(sortableDate('2026-01-01T00:00:00.5Z')?.getTime()).toBe(
+      Date.parse('2026-01-01T00:00:00.500Z'),
+    )
+    expect(sortableDate()).toBeNull()
+    expect(sortableDate('nope')).toBeNull()
+  })
+})
+
+describe('parseGsUri / gcsBucketPath', () => {
+  it('parses a bucket and object', () => {
+    expect(parseGsUri('gs://b/dir/a.jar')).toEqual({
+      uri: 'gs://b/dir/a.jar',
+      bucket: 'b',
+      object: 'dir/a.jar',
+    })
+  })
+
+  it('accepts a bucket-only URI and rejects non-GCS values', () => {
+    expect(parseGsUri('gs://b')).toMatchObject({ bucket: 'b', object: '' })
+    expect(parseGsUri('https://b/a')).toBeNull()
+    expect(parseGsUri('gs://')).toBeNull()
+    expect(parseGsUri(undefined)).toBeNull()
+  })
+
+  it('opens the bucket at the containing folder', () => {
+    expect(gcsBucketPath('b', 'dir/a.jar')).toBe('/gcp/storage/buckets/b?prefix=dir%2F')
+    expect(gcsBucketPath('b', 'dir/')).toBe('/gcp/storage/buckets/b?prefix=dir%2F')
+    expect(gcsBucketPath('b', 'a.jar')).toBe('/gcp/storage/buckets/b')
+    expect(gcsBucketPath('b')).toBe('/gcp/storage/buckets/b')
+  })
+})
+
+describe('collectGsUris', () => {
+  it('collects known fields only, from nested bodies and arrays', () => {
+    const job = {
+      mainClass: 'Main',
+      mainJarFileUri: 'gs://b/app.jar',
+      mainRFileUri: 'gs://b/main.R',
+      queryFileUri: 'gs://b/query.sql',
+      jarFileUris: ['gs://b/a.jar', 'gs://b/b.jar'],
+      args: ['gs://not-a-resource'],
+      nested: { executableFile: 'gs://b/init.sh' },
+      description: 'gs://free-text',
+    }
+    expect(collectGsUris(job).map((u) => [u.key, u.uri])).toEqual([
+      ['mainJarFileUri', 'gs://b/app.jar'],
+      ['mainRFileUri', 'gs://b/main.R'],
+      ['queryFileUri', 'gs://b/query.sql'],
+      ['jarFileUris', 'gs://b/a.jar'],
+      ['jarFileUris', 'gs://b/b.jar'],
+      ['executableFile', 'gs://b/init.sh'],
+    ])
+  })
+
+  it('dedupes the same URI and ignores malformed values', () => {
+    expect(collectGsUris({ fileUris: ['gs://b/x', 'gs://b/x', 'https://b/x'] })).toHaveLength(1)
+  })
+})
+
+describe('formatDelta', () => {
+  it('renders sub-second, seconds, minutes and hours', () => {
+    expect(formatDelta(400)).toBe('0.4s')
+    expect(formatDelta(1500)).toBe('1.5s')
+    expect(formatDelta(9_949)).toBe('9.9s')
+    expect(formatDelta(9_950)).toBe('10s')
+    expect(formatDelta(12_000)).toBe('12s')
+    expect(formatDelta(65_000)).toBe('1m 5s')
+    expect(formatDelta(3_600_000)).toBe('1h')
+    expect(formatDelta(0)).toBe('0s')
+  })
+})
+
+describe('buildStatusTimeline', () => {
+  it('appends the current row and computes relative durations', () => {
+    const history = [
+      { state: 'PENDING', stateStartTime: '2026-01-01T00:00:00.000000Z' },
+      { state: 'RUNNING', stateStartTime: '2026-01-01T00:00:00.400000Z' },
+    ]
+    const current = { state: 'DONE', stateStartTime: '2026-01-01T00:00:01.000000Z' }
+    const now = Date.parse('2026-01-01T00:00:02.000000Z')
+    expect(buildStatusTimeline(history, current, now).map((r) => [r.state, r.current, r.durationMs])).toEqual([
+      ['PENDING', false, 400],
+      ['RUNNING', false, 600],
+      ['DONE', true, 1000],
+    ])
+  })
+
+  it('omits durations when timestamps are missing', () => {
+    const rows = buildStatusTimeline([], { state: 'ERROR' }, 0)
+    expect(rows).toHaveLength(1)
+    const row = rows[0]
+    expect(row?.current).toBe(true)
+    expect(row?.durationMs).toBeUndefined()
+  })
+
+  it('omits a negative duration when the timestamps are out of order', () => {
+    const rows = buildStatusTimeline(
+      [{ state: 'RUNNING', stateStartTime: '2026-01-01T00:00:02.000000Z' }],
+      { state: 'DONE', stateStartTime: '2026-01-01T00:00:01.000000Z' },
+      Date.parse('2026-01-01T00:00:03.000000Z'),
+    )
+    expect(rows[0]?.durationMs).toBeUndefined()
   })
 })
 

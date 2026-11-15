@@ -8,7 +8,7 @@ import {
   type DataprocWorkflowTemplate,
 } from '../../api/gcp/dataproc'
 import { useAccount } from '../../context/AccountContext'
-import { shortDate } from './util'
+import { shortDate, sortableDate } from './util'
 import { WorkflowTemplateDialog } from './WorkflowTemplateDialog'
 import { GcpDataTable, type GcpColumn } from '../common/GcpDataTable'
 import { GcpPageHeader } from '../common/GcpPageHeader'
@@ -65,14 +65,14 @@ export function WorkflowTemplatesPage() {
       key: 'created',
       header: 'Created',
       sortable: true,
-      sortValue: (template) => template.createTime ?? '',
+      sortValue: (template) => sortableDate(template.createTime),
       render: (template) => shortDate(template.createTime),
     },
     {
       key: 'updated',
       header: 'Updated',
       sortable: true,
-      sortValue: (template) => template.updateTime ?? '',
+      sortValue: (template) => sortableDate(template.updateTime),
       render: (template) => shortDate(template.updateTime),
     },
   ]

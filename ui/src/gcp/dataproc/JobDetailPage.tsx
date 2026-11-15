@@ -1,3 +1,4 @@
+import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   Alert,
@@ -5,23 +6,44 @@ import {
   Button,
   Chip,
   CircularProgress,
+  Dialog,
+  DialogActions,
+  DialogContent,
+  DialogTitle,
   Divider,
   IconButton,
+  Link,
   Stack,
+  Tooltip,
   Typography,
 } from '@mui/material'
 import ArrowBackIcon from '@mui/icons-material/ArrowBack'
 import CancelOutlinedIcon from '@mui/icons-material/CancelOutlined'
 import { Link as RouterLink, useParams } from 'react-router-dom'
-import { cancelJob, getJob } from '../../api/gcp/dataproc'
+import { cancelJob, getJob, getJobDriverOutput } from '../../api/gcp/dataproc'
 import { useAccount } from '../../context/AccountContext'
-import { Detail, JsonBlock } from './common'
-import { jobStateColor, jobTypeLabel, shortDate } from './util'
+import {
+  ConfirmDialog,
+  CopyButton,
+  Detail,
+  GsUriLink,
+  GsUriList,
+  JsonBlock,
+  StatusTimeline,
+} from './common'
+import {
+  collectGsUris,
+  gcsBucketPath,
+  jobStateColor,
+  jobTypeLabel,
+  parseGsUri,
+  shortDate,
+} from './util'
 import { GcpPageTitle } from '../common/PageTitle'
 
-/** True for a job that has reached a terminal state and cannot be cancelled. */
+/** True for a job that has reached a terminal state (dataproc.v1 Job.done). */
 function isTerminal(state?: string): boolean {
-  return ['DONE', 'ERROR', 'CANCELLED', 'ATTEMPT_FAILURE'].includes(state ?? '')
+  return ['DONE', 'ERROR', 'CANCELLED'].includes(state ?? '')
 }
 
 /** A single Dataproc job: overview, type-specific body and status history. */
@@ -29,6 +51,8 @@ export function JobDetailPage() {
   const { region = '', job: jobID = '' } = useParams()
   const { accountId } = useAccount()
   const queryClient = useQueryClient()
+  const [logsOpen, setLogsOpen] = useState(false)
+  const [canceling, setCanceling] = useState(false)
 
   const detail = useQuery({
     queryKey: ['gcp', 'dataproc', 'job', region, jobID, accountId],
@@ -36,11 +60,45 @@ export function JobDetailPage() {
     enabled: Boolean(region && jobID),
   })
 
+  const logs = useQuery({
+    queryKey: ['gcp', 'dataproc', 'job', region, jobID, 'driver-output', accountId],
+    queryFn: () => getJobDriverOutput(region, jobID),
+    enabled: logsOpen,
+    retry: false,
+  })
+
   const invalidate = () => void queryClient.invalidateQueries({ queryKey: ['gcp', 'dataproc'] })
 
-  const cancel = useMutation({ mutationFn: () => cancelJob(region, jobID), onSuccess: invalidate })
+  const cancel = useMutation({
+    mutationFn: () => cancelJob(region, jobID),
+    onSuccess: () => {
+      invalidate()
+      setCanceling(false)
+    },
+  })
 
   const job = detail.data
+  const resources = collectGsUris(job?.typeJob)
+  const outputGs = parseGsUri(job?.driverOutputResourceUri)
+  const syntheticOutput =
+    logs.data?.startsWith(`Dataproc job ${jobID} finished with state `) ?? false
+
+  const downloadLogs = () => {
+    if (logs.data === undefined) return
+    const blob = new Blob([logs.data], { type: 'text/plain;charset=utf-8' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `${jobID}-driver-output.txt`
+    document.body.appendChild(a)
+    a.click()
+    a.remove()
+    // Some browsers cancel the download if the blob URL is revoked in the same
+    // turn as the click; release it on the next task.
+    setTimeout(() => URL.revokeObjectURL(url), 0)
+  }
+
+  const errorState = job?.status === 'ERROR' || job?.status === 'ATTEMPT_FAILURE'
 
   return (
     <Box>
@@ -49,7 +107,10 @@ export function JobDetailPage() {
           <ArrowBackIcon />
         </IconButton>
         <Box sx={{ flexGrow: 1, minWidth: 0 }}>
-          <GcpPageTitle id="dataproc">{jobID}</GcpPageTitle>
+          <Stack direction="row" spacing={0.5} sx={{ alignItems: 'center' }}>
+            <GcpPageTitle id="dataproc">{jobID}</GcpPageTitle>
+            <CopyButton value={jobID} label="job ID" />
+          </Stack>
           <Typography variant="body2" color="text.secondary">
             Dataproc job · {region || '—'}
           </Typography>
@@ -59,7 +120,10 @@ export function JobDetailPage() {
             color="error"
             startIcon={<CancelOutlinedIcon />}
             disabled={cancel.isPending}
-            onClick={() => cancel.mutate()}
+            onClick={() => {
+              cancel.reset()
+              setCanceling(true)
+            }}
           >
             Cancel
           </Button>
@@ -85,7 +149,7 @@ export function JobDetailPage() {
             {job.substate && <Chip size="small" variant="outlined" label={job.substate} />}
           </Stack>
           {job.statusDetail && (
-            <Alert severity="info" sx={{ mb: 2 }}>
+            <Alert severity={errorState ? 'error' : 'info'} sx={{ mb: 2 }}>
               {job.statusDetail}
             </Alert>
           )}
@@ -99,9 +163,22 @@ export function JobDetailPage() {
             }}
           >
             <Detail label="Region">{job.region}</Detail>
-            <Detail label="Cluster">{job.clusterName}</Detail>
+            <Detail label="Cluster">
+              {job.clusterName ? (
+                <Link
+                  component={RouterLink}
+                  to={`/gcp/dataproc/clusters/${encodeURIComponent(job.region)}/${encodeURIComponent(job.clusterName)}`}
+                >
+                  {job.clusterName}
+                </Link>
+              ) : (
+                '—'
+              )}
+            </Detail>
             <Detail label="Type">{jobTypeLabel(job.type)}</Detail>
-            <Detail label="Job UUID">{job.jobUuid}</Detail>
+            <Detail label="Job UUID">
+              {job.jobUuid || '—'} <CopyButton value={job.jobUuid} label="job UUID" />
+            </Detail>
             <Detail label="Created">{shortDate(job.createTime)}</Detail>
           </Box>
 
@@ -118,6 +195,16 @@ export function JobDetailPage() {
             </>
           )}
 
+          {resources.length > 0 && (
+            <>
+              <Divider sx={{ mb: 2 }} />
+              <Typography variant="subtitle1" sx={{ mb: 1 }}>
+                Job resources
+              </Typography>
+              <GsUriList resources={resources} />
+            </>
+          )}
+
           <Divider sx={{ mb: 2 }} />
           <Typography variant="subtitle1" sx={{ mb: 1 }}>
             Job details
@@ -127,9 +214,20 @@ export function JobDetailPage() {
           {(job.driverOutputResourceUri || job.driverControlFilesUri) && (
             <>
               <Divider sx={{ my: 3 }} />
-              <Typography variant="subtitle1" sx={{ mb: 1 }}>
-                Driver output
-              </Typography>
+              <Stack direction="row" spacing={1} sx={{ alignItems: 'center', mb: 1 }}>
+                <Typography variant="subtitle1">Driver output</Typography>
+                <Tooltip title={isTerminal(job.status) ? '' : 'Available when the job finishes'}>
+                  <span>
+                    <Button
+                      size="small"
+                      disabled={!isTerminal(job.status) || !job.driverOutputResourceUri}
+                      onClick={() => setLogsOpen(true)}
+                    >
+                      View driver output
+                    </Button>
+                  </span>
+                </Tooltip>
+              </Stack>
               <Box
                 sx={{
                   display: 'grid',
@@ -137,31 +235,102 @@ export function JobDetailPage() {
                   gap: 2,
                 }}
               >
-                <Detail label="Output URI">{job.driverOutputResourceUri}</Detail>
-                <Detail label="Control files URI">{job.driverControlFilesUri}</Detail>
+                <Detail label="Output URI">
+                  <GsUriLink uri={job.driverOutputResourceUri} />
+                </Detail>
+                <Detail label="Control files URI">
+                  <GsUriLink uri={job.driverControlFilesUri} />
+                </Detail>
               </Box>
             </>
           )}
 
-          {(job.statusHistory?.length ?? 0) > 0 && (
-            <>
-              <Divider sx={{ my: 3 }} />
-              <Typography variant="subtitle1" sx={{ mb: 1 }}>
-                Status history
-              </Typography>
-              <Stack spacing={1}>
-                {job.statusHistory?.map((event, i) => (
-                  <Stack key={`${event.state}-${i}`} direction="row" spacing={2} sx={{ alignItems: 'baseline' }}>
-                    <Chip size="small" label={event.state} color={jobStateColor(event.state)} />
-                    <Typography variant="body2" color="text.secondary">
-                      {shortDate(event.stateStartTime)}
-                    </Typography>
-                    {event.detail && <Typography variant="body2">{event.detail}</Typography>}
-                  </Stack>
-                ))}
-              </Stack>
-            </>
-          )}
+          <Divider sx={{ my: 3 }} />
+          <Typography variant="subtitle1" sx={{ mb: 1 }}>
+            Status timeline
+          </Typography>
+          <StatusTimeline
+            history={job.statusHistory ?? []}
+            current={{
+              state: job.status,
+              detail: job.statusDetail,
+              substate: job.substate,
+              stateStartTime: job.statusStartTime,
+            }}
+            colorFor={jobStateColor}
+          />
+
+          <ConfirmDialog
+            open={canceling}
+            title="Cancel job"
+            confirmLabel="Cancel job"
+            body={
+              <>
+                Cancel job <strong>{jobID}</strong>? The driver is stopped and the job becomes
+                CANCELLED.
+              </>
+            }
+            busy={cancel.isPending}
+            error={cancel.error?.message}
+            onConfirm={() => cancel.mutate()}
+            onClose={() => {
+              cancel.reset()
+              setCanceling(false)
+            }}
+          />
+
+          <Dialog open={logsOpen} onClose={() => setLogsOpen(false)} fullWidth maxWidth="lg">
+            <DialogTitle>Driver output</DialogTitle>
+            <DialogContent dividers>
+              {logs.isLoading && (
+                <Box sx={{ display: 'flex', justifyContent: 'center', py: 4 }}>
+                  <CircularProgress />
+                </Box>
+              )}
+              {logs.isError && (
+                <Alert severity="error">
+                  Could not load the driver output: {(logs.error as Error).message}
+                </Alert>
+              )}
+              {syntheticOutput && (
+                <Alert severity="info" sx={{ mb: 2 }}>
+                  This is the emulator&apos;s synthetic mock-mode output (no Spark driver ran),
+                  not a real driver log.
+                </Alert>
+              )}
+              {logs.data !== undefined && (
+                <Box
+                  component="pre"
+                  sx={{
+                    m: 0,
+                    fontSize: 12,
+                    whiteSpace: 'pre-wrap',
+                    overflowWrap: 'anywhere',
+                    maxHeight: 480,
+                    overflow: 'auto',
+                  }}
+                >
+                  {logs.data || 'No output was captured.'}
+                </Box>
+              )}
+            </DialogContent>
+            <DialogActions>
+              {outputGs && (
+                <Button
+                  component={RouterLink}
+                  to={gcsBucketPath(outputGs.bucket, outputGs.object)}
+                  target="_blank"
+                  rel="noreferrer"
+                >
+                  Open in Cloud Storage
+                </Button>
+              )}
+              <Button onClick={downloadLogs} disabled={logs.data === undefined}>
+                Download
+              </Button>
+              <Button onClick={() => setLogsOpen(false)}>Close</Button>
+            </DialogActions>
+          </Dialog>
         </>
       )}
     </Box>

@@ -6,6 +6,8 @@ const BASE = '/api/ui/v1/gcp/dataproc'
 export interface DataprocStatusEvent {
   state: string
   detail?: string
+  /** Agent-reported progress substate (job history only). */
+  substate?: string
   stateStartTime?: string
 }
 
@@ -16,6 +18,8 @@ export interface DataprocCluster {
   region: string
   status: string
   statusDetail?: string
+  /** When the current status began (microseconds). */
+  statusStartTime?: string
   statusHistory?: DataprocStatusEvent[]
   clusterUuid?: string
   labels?: Record<string, string>
@@ -65,6 +69,8 @@ export interface DataprocJob {
   status: string
   statusDetail?: string
   substate?: string
+  /** When the current status began (microseconds). */
+  statusStartTime?: string
   statusHistory?: DataprocStatusEvent[]
   labels?: Record<string, string>
   driverOutputResourceUri?: string
@@ -166,6 +172,10 @@ export const submitJob = (input: DataprocSubmitJobInput) =>
   api.post<DataprocJob>(`${BASE}/jobs`, input)
 
 export const getJob = (region: string, job: string) => api.get<DataprocJob>(jobPath(region, job))
+
+/** Terminal driver stdout/stderr, as staged by the emulator (plain text). */
+export const getJobDriverOutput = (region: string, job: string) =>
+  api.getText(`${jobPath(region, job)}/driver-output`)
 
 export const cancelJob = (region: string, job: string) =>
   api.post<DataprocJob>(`${jobPath(region, job)}/cancel`)

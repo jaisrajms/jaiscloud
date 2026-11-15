@@ -22,6 +22,7 @@ func BuildRouter(p ProviderInterface, cfg *config.Config) chi.Router {
 	r.Get("/jobs", h.ListJobs)
 	r.Post("/jobs", h.SubmitJob)
 	r.Get("/jobs/{region}/{job}", h.GetJob)
+	r.Get("/jobs/{region}/{job}/driver-output", h.GetJobDriverOutput)
 	r.Post("/jobs/{region}/{job}/cancel", h.CancelJob)
 
 	r.Get("/workflow-templates", h.ListWorkflowTemplates)

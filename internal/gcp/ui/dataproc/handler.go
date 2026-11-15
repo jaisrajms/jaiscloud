@@ -11,6 +11,7 @@ import (
 	"jaiscloud/internal/config"
 	dataproccore "jaiscloud/internal/gcp/service/dataproc"
 	dpstore "jaiscloud/internal/gcp/store/dataproc"
+	"jaiscloud/internal/gcp/timestamp"
 	"jaiscloud/internal/gcp/ui/uihelper"
 )
 
@@ -34,12 +35,15 @@ func (h *Handler) account(r *http.Request) string {
 	return h.cfg.AccountID
 }
 
-// formatTime renders a stored timestamp as RFC3339, or "" when zero.
+// formatTime renders a stored timestamp the way the REST/gRPC adapters do (the
+// protojson google-datetime spelling, truncated to microseconds), or "" when
+// zero. Keeping the console on the same helper preserves the sub-second detail
+// the status timeline needs to compute relative durations.
 func formatTime(t time.Time) string {
 	if t.IsZero() {
 		return ""
 	}
-	return t.UTC().Format(time.RFC3339)
+	return timestamp.Canonical(t)
 }
 
 // clusterHistory converts a stored cluster status history for the console.
@@ -61,7 +65,7 @@ func jobHistory(h []dpstore.JobStatus) []StatusEvent {
 	}
 	out := make([]StatusEvent, 0, len(h))
 	for _, s := range h {
-		out = append(out, StatusEvent{State: s.State, Detail: s.Details, StartTime: formatTime(s.StateStartTime)})
+		out = append(out, StatusEvent{State: s.State, Detail: s.Details, Substate: s.Substate, StartTime: formatTime(s.StateStartTime)})
 	}
 	return out
 }
@@ -72,17 +76,18 @@ func jobHistory(h []dpstore.JobStatus) []StatusEvent {
 // payload small.
 func renderCluster(project string, c dpstore.Cluster, full bool) Cluster {
 	out := Cluster{
-		ID:            c.Name,
-		Name:          dataproccore.ClusterName(project, c.Region, c.Name),
-		Region:        c.Region,
-		Status:        c.Status.State,
-		StatusDetail:  c.Status.Detail,
-		StatusHistory: clusterHistory(c.StatusHistory),
-		ClusterUUID:   c.ClusterUUID,
-		Labels:        c.Labels,
-		GKEBacked:     c.IsGKEBacked(),
-		CreateTime:    formatTime(c.CreateTime),
-		UpdateTime:    formatTime(c.UpdateTime),
+		ID:              c.Name,
+		Name:            dataproccore.ClusterName(project, c.Region, c.Name),
+		Region:          c.Region,
+		Status:          c.Status.State,
+		StatusDetail:    c.Status.Detail,
+		StatusStartTime: formatTime(c.Status.StateStartTime),
+		StatusHistory:   clusterHistory(c.StatusHistory),
+		ClusterUUID:     c.ClusterUUID,
+		Labels:          c.Labels,
+		GKEBacked:       c.IsGKEBacked(),
+		CreateTime:      formatTime(c.CreateTime),
+		UpdateTime:      formatTime(c.UpdateTime),
 	}
 	if full {
 		out.Config = renderedClusterConfig(c)
@@ -141,6 +146,7 @@ func renderJob(project string, j dpstore.Job, full bool) Job {
 		Status:                  j.Status.State,
 		StatusDetail:            j.Status.Details,
 		Substate:                j.Status.Substate,
+		StatusStartTime:         formatTime(j.Status.StateStartTime),
 		StatusHistory:           jobHistory(j.StatusHistory),
 		Labels:                  j.Labels,
 		DriverOutputResourceURI: j.DriverOutputResourceURI,
@@ -346,6 +352,29 @@ func (h *Handler) SubmitJob(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	uihelper.WriteJSON(w, renderJob(project, j, true))
+}
+
+// GET /jobs/{region}/{job}/driver-output
+//
+// The body is the job's staged driver stdout/stderr (text/plain), not JSON: the
+// console's log dialog reads it as text. The core resolves the advertised
+// `<driverOutputResourceUri>.000000000` object, so the UI does not need to know
+// the attempt suffix.
+func (h *Handler) GetJobDriverOutput(w http.ResponseWriter, r *http.Request) {
+	region, id, ok := h.target(w, r, "job")
+	if !ok {
+		return
+	}
+	project := h.account(r)
+	data, err := h.provider.DriverOutput(r.Context(), project, region, id)
+	if err != nil {
+		uihelper.WriteError(w, err)
+		return
+	}
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-store")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(data)
 }
 
 // POST /jobs/{region}/{job}/cancel
