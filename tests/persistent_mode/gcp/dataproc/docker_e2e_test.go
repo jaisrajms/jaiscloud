@@ -419,6 +419,11 @@ spark.stop()
 			t.Fatalf("job state = %q (details %q), want ERROR (an uncaught main-thread exception must fail the driver)",
 				state, dpStr(final, "status", "details"))
 		}
+		// The classifier's SparkReason is surfaced as status.details, so this
+		// pins the reason path end to end.
+		if details := dpStr(final, "status", "details"); !strings.Contains(details, "NumberFormatException") {
+			t.Fatalf("status.details = %q, want it to contain NumberFormatException", details)
+		}
 		out := string(dpDriverOutput(t, final, id))
 		// SparkPi parses its slice count with toInt, so a NumberFormatException
 		// is the deterministic proof the arg reached main() (SparkPi itself does

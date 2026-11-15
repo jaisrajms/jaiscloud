@@ -154,6 +154,20 @@ func TestClassify_MainThreadExceptionFails(t *testing.T) {
 		assert.False(t, f.SparkSucceeded, "uncaught main-thread exception must fail (opts %+v)", opts)
 		assert.Contains(t, f.SparkReason, "NumberFormatException")
 	}
+
+	// Rule precedence: rule 1 (successful exit) is checked first, so a main
+	// exception in the logs can never flip a successful driver to failure.
+	exitedZero := Classify(k8shelpers.Final{Succeeded: true, ExitCode: 0}, logs, TerminalOptions{})
+	assert.True(t, exitedZero.SparkSucceeded, "rule 1 (exit 0) wins over the main-exception rule")
+	assert.Equal(t, "exit 0", exitedZero.SparkReason)
+
+	// Rule precedence: rule 2 (signal exit + SparkContext stopped successfully)
+	// is checked before the main-exception rule, so a cancelled-then-cleaned
+	// driver still succeeds.
+	signalLogs := append(append([]string{}, logs...), "INFO SparkContext: SparkContext stopped successfully")
+	signalled := Classify(k8shelpers.Final{Succeeded: false, ExitCode: 143}, signalLogs, TerminalOptions{})
+	assert.True(t, signalled.SparkSucceeded, "rule 2 (signal exit + stopped marker) wins over the main-exception rule")
+	assert.Equal(t, "SparkContext stopped successfully", signalled.SparkReason)
 }
 
 // TestClassify_NonMainThreadExceptionStaysSuccess pins the main-thread scope: a
