@@ -28,18 +28,19 @@ type mockProvider struct {
 	template  dpstore.WorkflowTemplate
 	err       error
 
-	gotRegion   string
-	gotID       string
-	gotInput    dataproccore.ClusterInput
-	gotMask     []string
-	gotJob      dataproccore.JobInput
-	gotTemplate dataproccore.WorkflowTemplateInput
-	gotVersion  int32
-	gotParams   map[string]string
-	gotOp       dpstore.Operation
-	deleted     bool
-	created     bool
-	action      string
+	gotRegion    string
+	gotID        string
+	gotInput     dataproccore.ClusterInput
+	gotMask      []string
+	gotJob       dataproccore.JobInput
+	gotTemplate  dataproccore.WorkflowTemplateInput
+	gotVersion   int32
+	gotParams    map[string]string
+	gotOp        dpstore.Operation
+	driverOutput []byte
+	deleted      bool
+	created      bool
+	action       string
 }
 
 func (m *mockProvider) ListAllClusters(_ context.Context, _ string) ([]dpstore.Cluster, error) {
@@ -96,6 +97,11 @@ func (m *mockProvider) SubmitJob(_ context.Context, _, region string, in datapro
 func (m *mockProvider) CancelJob(_ context.Context, _, region, id string) (dpstore.Job, error) {
 	m.action, m.gotRegion, m.gotID = "cancel", region, id
 	return m.job, m.err
+}
+
+func (m *mockProvider) DriverOutput(_ context.Context, _, region, id string) ([]byte, error) {
+	m.gotRegion, m.gotID = region, id
+	return m.driverOutput, m.err
 }
 
 func (m *mockProvider) ListAllWorkflowTemplates(_ context.Context, _ string) ([]dpstore.WorkflowTemplate, error) {
@@ -519,6 +525,59 @@ func TestGetJob_IncludesTypeJob(t *testing.T) {
 	}
 	if body.TypeJob == nil || !strings.Contains(string(body.TypeJob), "mainClass") {
 		t.Fatalf("typeJob not rendered: %s", body.TypeJob)
+	}
+}
+
+// The console API must preserve the microsecond precision the wire adapters
+// render (a second-truncated timeline cannot show sub-second transitions) and
+// carry a status-history entry's substate.
+func TestGetJob_RendersSubsecondTimestampsAndHistorySubstate(t *testing.T) {
+	start := time.Date(2026, 1, 1, 0, 0, 0, 123456000, time.UTC)
+	j := jobStore("j1", "us-central1", "alpha", "sparkJob")
+	j.Status = dpstore.JobStatus{State: "RUNNING", Substate: "QUEUED", StateStartTime: start}
+	j.StatusHistory = []dpstore.JobStatus{{State: "RUNNING", Substate: "QUEUED", StateStartTime: start.Add(-500 * time.Millisecond)}}
+	w := do(t, &mockProvider{job: j}, http.MethodGet, "/jobs/us-central1/j1")
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", w.Code, w.Body.String())
+	}
+	var body Job
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if body.StatusStartTime != "2026-01-01T00:00:00.123456Z" {
+		t.Fatalf("statusStartTime = %q, want microsecond spelling", body.StatusStartTime)
+	}
+	if len(body.StatusHistory) != 1 || body.StatusHistory[0].Substate != "QUEUED" {
+		t.Fatalf("history substate lost: %+v", body.StatusHistory)
+	}
+}
+
+func TestGetJobDriverOutput_ServesText(t *testing.T) {
+	mock := &mockProvider{driverOutput: []byte("driver stdout\n")}
+	w := do(t, mock, http.MethodGet, "/jobs/us-central1/j1/driver-output")
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", w.Code, w.Body.String())
+	}
+	if got := w.Header().Get("Content-Type"); got != "text/plain; charset=utf-8" {
+		t.Fatalf("content-type = %q", got)
+	}
+	if w.Body.String() != "driver stdout\n" {
+		t.Fatalf("body = %q", w.Body.String())
+	}
+	if mock.gotRegion != "us-central1" || mock.gotID != "j1" {
+		t.Fatalf("resolved region/job = %q/%q", mock.gotRegion, mock.gotID)
+	}
+}
+
+func TestGetJobDriverOutput_PropagatesErrors(t *testing.T) {
+	mock := &mockProvider{err: model.NewProviderError("FailedPrecondition",
+		"driver output is available after the job finishes", 400).WithStatus("FAILED_PRECONDITION")}
+	w := do(t, mock, http.MethodGet, "/jobs/us-central1/j1/driver-output")
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400: %s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "FailedPrecondition") {
+		t.Fatalf("body = %s", w.Body.String())
 	}
 }
 

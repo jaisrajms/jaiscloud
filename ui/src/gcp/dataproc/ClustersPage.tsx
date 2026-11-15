@@ -15,7 +15,8 @@ import {
 } from '../../api/gcp/dataproc'
 import { useAccount } from '../../context/AccountContext'
 import { ClusterDialog } from './ClusterDialog'
-import { clusterStateColor, shortDate } from './util'
+import { ConfirmDialog } from './common'
+import { clusterStateColor, shortDate, sortableDate } from './util'
 import { GcpDataTable, type GcpColumn } from '../common/GcpDataTable'
 import { GcpPageHeader } from '../common/GcpPageHeader'
 import { GcpRowDetail } from '../common/GcpRowDetail'
@@ -33,6 +34,7 @@ export function ClustersPage() {
   const [createOpen, setCreateOpen] = useState(false)
   const [filter, setFilter] = useState('')
   const [selected, setSelected] = useState<string[]>([])
+  const [confirmDelete, setConfirmDelete] = useState<DataprocCluster | null>(null)
 
   const invalidate = () => void queryClient.invalidateQueries({ queryKey: ['gcp', 'dataproc'] })
 
@@ -44,7 +46,10 @@ export function ClustersPage() {
   const remove = useMutation({
     mutationFn: ({ region, cluster }: { region: string; cluster: string }) =>
       deleteCluster(region, cluster),
-    onSuccess: invalidate,
+    onSuccess: () => {
+      invalidate()
+      setConfirmDelete(null)
+    },
   })
   const start = useMutation({
     mutationFn: ({ region, cluster }: { region: string; cluster: string }) =>
@@ -106,7 +111,7 @@ export function ClustersPage() {
       key: 'created',
       header: 'Created',
       sortable: true,
-      sortValue: (cluster) => cluster.createTime ?? '',
+      sortValue: (cluster) => sortableDate(cluster.createTime),
       render: (cluster) => shortDate(cluster.createTime),
     },
     {
@@ -147,7 +152,10 @@ export function ClustersPage() {
               <IconButton
                 size="small"
                 disabled={busy}
-                onClick={() => remove.mutate(target(cluster))}
+                onClick={() => {
+                  remove.reset()
+                  setConfirmDelete(cluster)
+                }}
                 aria-label={`Delete ${cluster.id}`}
               >
                 <DeleteOutlineIcon fontSize="small" />
@@ -204,6 +212,26 @@ export function ClustersPage() {
       />
 
       <ClusterDialog open={createOpen} onClose={() => setCreateOpen(false)} />
+      <ConfirmDialog
+        open={confirmDelete !== null}
+        title="Delete cluster"
+        confirmLabel="Delete cluster"
+        body={
+          <>
+            Delete cluster <strong>{confirmDelete?.id}</strong>? Its record is removed after the
+            emulator finishes the delete operation. This cannot be undone.
+          </>
+        }
+        busy={remove.isPending}
+        error={remove.error?.message}
+        onConfirm={() => {
+          if (confirmDelete) remove.mutate(target(confirmDelete))
+        }}
+        onClose={() => {
+          remove.reset()
+          setConfirmDelete(null)
+        }}
+      />
     </Stack>
   )
 }

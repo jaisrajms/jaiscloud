@@ -4,10 +4,13 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"log/slog"
 	"strings"
 
 	dpstore "jaiscloud/internal/gcp/store/dataproc"
+	"jaiscloud/internal/gcp/store/gcs"
+	"jaiscloud/internal/model"
 )
 
 // BlobSink writes bytes into the emulated GCS so the Dataproc core can stage a
@@ -25,6 +28,15 @@ type BlobSink interface {
 
 // WithBlobSink wires the GCS object sink used to materialize driver output.
 func WithBlobSink(s BlobSink) Option { return func(svc *Service) { svc.blobSink = s } }
+
+// BlobSource reads an object's bytes back from the emulated GCS. It is
+// satisfied by the same seam that implements BlobSink (internal/gcp/seams), so
+// the console can serve a job's staged driver output without importing the
+// storage provider. A sink that cannot read (a test double, a mock deployment)
+// only fails the read path, never staging.
+type BlobSource interface {
+	FetchObjectBytes(ctx context.Context, bucket, object string) ([]byte, error)
+}
 
 // stagingBucketDefaultPrefix is the base name of the Cloud Storage bucket the
 // emulator provisions for a cluster's ephemeral data, matching real Dataproc's
@@ -218,4 +230,53 @@ func (s *Service) materializeDriverOutput(ctx context.Context, j dpstore.Job, ou
 func driverControlSummary(j dpstore.Job) string {
 	return "jobId: " + j.JobID + "\nclusterName: " + j.PlacementClusterName +
 		"\nstate: " + j.Status.State + "\n"
+}
+
+// DriverOutput is a console read, not a Dataproc RPC: it returns the
+// stdout/stderr the emulator staged for a terminal job, which the UI serves as
+// the job's driver output. The advertised DriverOutputResourceURI is a prefix;
+// real readers append the attempt suffix (.000000000), so this reads the same
+// object. A non-terminal job, a job with no staged output, and a deployment
+// whose sink cannot read all answer a clear error rather than an empty body.
+func (s *Service) DriverOutput(ctx context.Context, project, region, jobID string) ([]byte, error) {
+	if region == "" || jobID == "" {
+		return nil, invalidArgument("missing region or jobId")
+	}
+	j, err := s.store.GetJob(ctx, project, region, jobID)
+	if err != nil {
+		return nil, mapErr(err)
+	}
+	if !jobTerminal(j.Status.State) {
+		return nil, model.NewProviderError("FailedPrecondition",
+			"driver output is available after the job finishes", 400).WithStatus("FAILED_PRECONDITION")
+	}
+	if j.DriverOutputResourceURI == "" {
+		return nil, model.NewProviderError("NotFound",
+			"job has no driver output", 404).WithStatus("NOT_FOUND")
+	}
+	bucket, object, ok := splitGSURI(j.DriverOutputResourceURI)
+	if !ok {
+		return nil, model.NewProviderError("FailedPrecondition",
+			"job has an invalid driverOutputResourceUri", 400).WithStatus("FAILED_PRECONDITION")
+	}
+	src, ok := s.blobSink.(BlobSource)
+	if !ok {
+		// A deployment with no readable sink is a server-side gap, not a bad
+		// request: fail loud with UNIMPLEMENTED (the checklist's rule) rather
+		// than pretending the job's output is a client precondition.
+		return nil, model.NewProviderError("Unimplemented",
+			"driver output storage is not configured", 501).WithStatus("UNIMPLEMENTED")
+	}
+	data, err := src.FetchObjectBytes(ctx, bucket, object+driverOutputAttemptSuffix)
+	if err != nil {
+		if errors.Is(err, gcs.ErrNoSuchObject) {
+			return nil, model.NewProviderError("NotFound",
+				"driver output is not available", 404).WithStatus("NOT_FOUND")
+		}
+		return nil, err
+	}
+	// The staged object is already capped at driverLogLimit by the executor's
+	// capture, so the read returns it as stored (including the multi-byte
+	// boundaries a second clip could split).
+	return data, nil
 }

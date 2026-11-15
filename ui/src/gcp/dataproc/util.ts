@@ -5,7 +5,18 @@ export function shortDate(value?: string): string {
   return Number.isNaN(d.getTime()) ? value : d.toLocaleString()
 }
 
-type ChipColor = 'success' | 'default' | 'warning' | 'error' | 'info'
+/**
+ * A date for table sorting, or null when absent/unparseable. Microsecond
+ * timestamps have a variable-width fraction, so a raw string comparison is not
+ * chronological; the table compares Date values instead.
+ */
+export function sortableDate(value?: string): Date | null {
+  if (!value) return null
+  const d = new Date(value)
+  return Number.isNaN(d.getTime()) ? null : d
+}
+
+export type ChipColor = 'success' | 'default' | 'warning' | 'error' | 'info'
 
 /** clusterStateColor maps a Dataproc cluster state onto an MUI Chip color. */
 export function clusterStateColor(state: string): ChipColor {
@@ -258,4 +269,184 @@ export function buildClusterUpdateMask(
   const mask = labelsChanged ? ['labels'] : []
   mask.push(...changedJsonPaths(beforeConfig ?? {}, afterConfig ?? {}, 'config'))
   return [...new Set(mask)]
+}
+
+// ─── Cloud Storage URI links ────────────────────────────────────────────────
+
+/** A parsed gs://bucket/object reference. */
+export interface ParsedGsUri {
+  uri: string
+  bucket: string
+  object: string
+}
+
+/** A known Dataproc field carrying a GCS URI. */
+export interface GsUri extends ParsedGsUri {
+  /** The leaf field the URI came from, e.g. mainJarFileUri. */
+  key: string
+}
+
+/** Known Dataproc fields that carry a GCS URI. */
+export const GS_URI_KEYS = new Set([
+  'mainJarFileUri',
+  'mainPythonFileUri',
+  'mainRFileUri',
+  'queryFileUri',
+  'jarFileUris',
+  'fileUris',
+  'archiveUris',
+  'pythonFileUris',
+  'executableFile',
+])
+
+/** Human labels for the known URI fields. */
+export const GS_URI_LABELS: Record<string, string> = {
+  mainJarFileUri: 'Main jar',
+  mainPythonFileUri: 'Main Python file',
+  mainRFileUri: 'Main R file',
+  queryFileUri: 'Query file',
+  jarFileUris: 'Jars',
+  fileUris: 'Files',
+  archiveUris: 'Archives',
+  pythonFileUris: 'Python files',
+  executableFile: 'Executable',
+}
+
+/** Parse a gs://bucket/object URI; null when it is not a well-formed GCS URI. */
+export function parseGsUri(uri?: string | null): ParsedGsUri | null {
+  if (!uri) return null
+  const s = uri.trim()
+  if (!s.startsWith('gs://')) return null
+  const rest = s.slice('gs://'.length)
+  const slash = rest.indexOf('/')
+  const bucket = slash === -1 ? rest : rest.slice(0, slash)
+  if (!bucket) return null
+  return { uri: s, bucket, object: slash === -1 ? '' : rest.slice(slash + 1) }
+}
+
+/** Directory prefix of an object ('' for the bucket root). */
+export function gsDirectory(object: string): string {
+  if (!object) return ''
+  if (object.endsWith('/')) return object
+  const i = object.lastIndexOf('/')
+  return i >= 0 ? object.slice(0, i + 1) : ''
+}
+
+/**
+ * Console path for the containing GCS bucket, opened at the object's folder.
+ * The bucket page lists objects under `?prefix=`, so this puts the referenced
+ * object (and its siblings) on screen instead of an empty bucket root.
+ */
+export function gcsBucketPath(bucket: string, object = ''): string {
+  const base = `/gcp/storage/buckets/${encodeURIComponent(bucket)}`
+  const dir = gsDirectory(object)
+  return dir ? `${base}?prefix=${encodeURIComponent(dir)}` : base
+}
+
+/**
+ * Collect the known gs:// fields from a job body, cluster config or workflow
+ * definition. Key-based on purpose: raw JSON stays verbatim and free-text
+ * fields are never scanned for linkable URIs.
+ */
+export function collectGsUris(value: unknown): GsUri[] {
+  const seen = new Set<string>()
+  const out: GsUri[] = []
+  const add = (key: string, raw: unknown) => {
+    if (typeof raw !== 'string') return
+    const parsed = parseGsUri(raw)
+    if (!parsed || seen.has(parsed.uri)) return
+    seen.add(parsed.uri)
+    out.push({ ...parsed, key })
+  }
+  const walk = (node: unknown) => {
+    if (Array.isArray(node)) {
+      node.forEach(walk)
+      return
+    }
+    if (!node || typeof node !== 'object') return
+    for (const [key, child] of Object.entries(node)) {
+      if (GS_URI_KEYS.has(key)) {
+        if (Array.isArray(child)) child.forEach((v) => add(key, v))
+        else add(key, child)
+      } else {
+        walk(child)
+      }
+    }
+  }
+  walk(value)
+  return out
+}
+
+// ─── Status timeline ────────────────────────────────────────────────────────
+
+/** One row of the console's status timeline (previous state or current). */
+export interface StatusTimelineRow {
+  state: string
+  detail?: string
+  substate?: string
+  stateStartTime?: string
+  /** How long the resource stayed in this state (current: so far). */
+  durationMs?: number
+  current: boolean
+}
+
+function parseTime(value?: string): number | undefined {
+  if (!value) return undefined
+  const t = Date.parse(value)
+  return Number.isNaN(t) ? undefined : t
+}
+
+function durationBetween(from?: string, to?: string): number | undefined {
+  const a = parseTime(from)
+  const b = parseTime(to)
+  if (a === undefined || b === undefined || b < a) return undefined
+  return b - a
+}
+
+/** Render a duration as 0.4s / 1.5s / 12s / 1m 5s / 1h 2m. */
+export function formatDelta(ms: number): string {
+  if (!Number.isFinite(ms) || ms < 0) return '—'
+  if (ms === 0) return '0s'
+  if (ms < 9_950) {
+    const tenths = Math.round(ms / 100) / 10
+    return `${tenths.toFixed(1)}s`
+  }
+  const seconds = Math.round(ms / 1000)
+  if (seconds < 60) return `${seconds}s`
+  const minutes = Math.floor(seconds / 60)
+  const restSeconds = seconds % 60
+  if (minutes < 60) return restSeconds ? `${minutes}m ${restSeconds}s` : `${minutes}m`
+  const hours = Math.floor(minutes / 60)
+  const restMinutes = minutes % 60
+  return restMinutes ? `${hours}h ${restMinutes}m` : `${hours}h`
+}
+
+/**
+ * Build the console timeline: every previous status (from statusHistory) plus
+ * the current status as its own row. The wire history is never mutated; the
+ * current row is a presentation-only addition (Discovery says statusHistory is
+ * "the previous status").
+ */
+export function buildStatusTimeline(
+  history: Array<Omit<StatusTimelineRow, 'durationMs' | 'current'>>,
+  current: Omit<StatusTimelineRow, 'durationMs' | 'current'>,
+  now: number = Date.now(),
+): StatusTimelineRow[] {
+  const rows = history.map((row, i) => {
+    const next = history[i + 1] ?? current
+    return {
+      ...row,
+      current: false,
+      durationMs: durationBetween(row.stateStartTime, next.stateStartTime),
+    }
+  })
+  const started = parseTime(current.stateStartTime)
+  return [
+    ...rows,
+    {
+      ...current,
+      current: true,
+      durationMs: started === undefined ? undefined : Math.max(0, now - started),
+    },
+  ]
 }

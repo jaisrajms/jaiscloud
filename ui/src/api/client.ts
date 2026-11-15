@@ -65,12 +65,17 @@ async function parseError(res: Response): Promise<APIError> {
   return new APIError(res.status, code, message)
 }
 
-async function request<T>(
+/**
+ * Send one request with the account query, session cookie and a once-only 401
+ * retry, and throw `APIError` on a non-2xx response. JSON and plain-text
+ * callers share this so the auth/error path cannot drift.
+ */
+async function sendRequest(
   method: string,
   path: string,
   body?: unknown,
   params?: Record<string, string | number>,
-): Promise<T> {
+): Promise<Response> {
   const url = new URL(`${BASE}${path}`, window.location.origin)
   if (_currentAccount) {
     url.searchParams.set('account', _currentAccount)
@@ -84,7 +89,7 @@ async function request<T>(
     headers['Content-Type'] = 'application/json'
   }
 
-  const send = () =>
+  const sendOnce = () =>
     fetch(url.toString(), {
       method,
       headers,
@@ -92,25 +97,41 @@ async function request<T>(
       body: body !== undefined ? JSON.stringify(body) : undefined,
     })
 
-  let res = await send()
+  let res = await sendOnce()
   if (res.status === 401) {
     await refreshSession()
-    res = await send()
+    res = await sendOnce()
   }
-
   if (!res.ok) {
     throw await parseError(res)
   }
+  return res
+}
 
+async function request<T>(
+  method: string,
+  path: string,
+  body?: unknown,
+  params?: Record<string, string | number>,
+): Promise<T> {
+  const res = await sendRequest(method, path, body, params)
   if (res.status === 204) {
     return undefined as T
   }
   return res.json() as Promise<T>
 }
 
+/** GET a plain-text response (e.g. a job's driver output). */
+async function requestText(path: string, params?: Record<string, string | number>): Promise<string> {
+  const res = await sendRequest('GET', path, undefined, params)
+  return res.text()
+}
+
 export const api = {
   get: <T>(path: string, params?: Record<string, string | number>) =>
     request<T>('GET', path, undefined, params),
+  getText: (path: string, params?: Record<string, string | number>) =>
+    requestText(path, params),
   post: <T>(path: string, body?: unknown, params?: Record<string, string | number>) =>
     request<T>('POST', path, body, params),
   put: <T>(path: string, body?: unknown) => request<T>('PUT', path, body),

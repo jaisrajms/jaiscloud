@@ -17,6 +17,8 @@ import (
 
 	"jaiscloud/internal/gcp/sparkgcp"
 	dataprocstore "jaiscloud/internal/gcp/store/dataproc"
+	"jaiscloud/internal/gcp/store/gcs"
+	"jaiscloud/internal/model"
 	"jaiscloud/internal/store"
 )
 
@@ -52,6 +54,18 @@ func (f *fakeBlobSink) PutObjectBytes(_ context.Context, _ /*project*/, bucket, 
 	f.objects[key] = append([]byte(nil), data...)
 	f.contents[key] = contentType
 	return nil
+}
+
+// FetchObjectBytes makes the fake a BlobSource too, so the driver-output read
+// path can be tested without the real storage provider.
+func (f *fakeBlobSink) FetchObjectBytes(_ context.Context, bucket, object string) ([]byte, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	b, ok := f.objects[bucket+"/"+object]
+	if !ok {
+		return nil, gcs.ErrNoSuchObject
+	}
+	return append([]byte(nil), b...), nil
 }
 
 func (f *fakeBlobSink) get(bucket, object string) ([]byte, bool) {
@@ -217,6 +231,106 @@ func TestMaterializeDriverOutputOnError(t *testing.T) {
 	require.True(t, ok, "uri = %q", j.DriverOutputResourceURI)
 	_, found := sink.get(bucket, object+driverOutputAttemptSuffix)
 	require.True(t, found, "driver output object not written for a failed job")
+}
+
+// TestDriverOutput verifies the console read path returns the staged object and
+// refuses a non-terminal job or a missing object with a clear error.
+func TestDriverOutput(t *testing.T) {
+	sink := newFakeBlobSink()
+	p := newProviderWithSink(t, sink)
+	ctx := context.Background()
+
+	_, _, err := p.CreateCluster(ctx, "proj", "us-central1", "c1", gceInput())
+	require.NoError(t, err)
+	_, err = p.SubmitJob(ctx, "proj", "us-central1", JobInputFromMap(map[string]any{
+		"reference":  map[string]any{"jobId": "j-out"},
+		"placement":  map[string]any{"clusterName": "c1"},
+		"pysparkJob": map[string]any{"mainPythonFileUri": "gs://b/main.py"},
+	}))
+	require.NoError(t, err)
+
+	// A live job is a precondition failure, not an empty body.
+	_, err = p.DriverOutput(ctx, "proj", "us-central1", "j-out")
+	var pe *model.ProviderError
+	require.ErrorAs(t, err, &pe)
+	require.Equal(t, 400, pe.HTTPStatus)
+	require.Equal(t, "FAILED_PRECONDITION", pe.Status)
+
+	final := advanceJobToTerminal(t, p, "proj", "us-central1", "j-out")
+	require.Equal(t, "DONE", final.Status.State)
+	data, err := p.DriverOutput(ctx, "proj", "us-central1", "j-out")
+	require.NoError(t, err)
+	require.Contains(t, string(data), "j-out")
+
+	// Removing the staged object answers NotFound rather than an empty body.
+	bucket, object, ok := splitGSURI(final.DriverOutputResourceURI)
+	require.True(t, ok)
+	sink.mu.Lock()
+	delete(sink.objects, bucket+"/"+object+driverOutputAttemptSuffix)
+	sink.mu.Unlock()
+	_, err = p.DriverOutput(ctx, "proj", "us-central1", "j-out")
+	require.ErrorAs(t, err, &pe)
+	require.Equal(t, 404, pe.HTTPStatus)
+}
+
+// TestDriverOutputMissingJob verifies an unknown job is a 404, not an empty
+// body (the console turns it into "not found", matching clusters.get).
+func TestDriverOutputMissingJob(t *testing.T) {
+	p := newProviderWithSink(t, newFakeBlobSink())
+	_, err := p.DriverOutput(context.Background(), "proj", "us-central1", "nope")
+	var pe *model.ProviderError
+	require.ErrorAs(t, err, &pe)
+	require.Equal(t, 404, pe.HTTPStatus)
+}
+
+// TestDriverOutputMalformedURI verifies a stored URI that is not a well-formed
+// gs://bucket/object is rejected as a precondition failure.
+func TestDriverOutputMalformedURI(t *testing.T) {
+	p := newProviderWithSink(t, newFakeBlobSink())
+	ctx := context.Background()
+	require.NoError(t, p.store.CreateJob(ctx, "proj", "us-central1", dataprocstore.Job{
+		ProjectID:               "proj",
+		Region:                  "us-central1",
+		JobID:                   "j-bad-uri",
+		Status:                  dataprocstore.JobStatus{State: jobStateDone},
+		DriverOutputResourceURI: "gs://",
+	}))
+	_, err := p.DriverOutput(ctx, "proj", "us-central1", "j-bad-uri")
+	var pe *model.ProviderError
+	require.ErrorAs(t, err, &pe)
+	require.Equal(t, 400, pe.HTTPStatus)
+}
+
+// writeOnlySink is a BlobSink that cannot read: the console read path must fail
+// loud (501) rather than fabricate an empty output.
+type writeOnlySink struct{}
+
+func (writeOnlySink) EnsureBucket(context.Context, string, string, string) error { return nil }
+func (writeOnlySink) PutObjectBytes(context.Context, string, string, string, string, []byte) error {
+	return nil
+}
+
+// TestDriverOutputWithoutAReadableSink verifies a write-only sink answers
+// UNIMPLEMENTED instead of an empty body.
+func TestDriverOutputWithoutAReadableSink(t *testing.T) {
+	p := newProviderWithSink(t, writeOnlySink{})
+	ctx := context.Background()
+	_, _, err := p.CreateCluster(ctx, "proj", "us-central1", "c1", gceInput())
+	require.NoError(t, err)
+	_, err = p.SubmitJob(ctx, "proj", "us-central1", JobInputFromMap(map[string]any{
+		"reference":  map[string]any{"jobId": "j-no-read"},
+		"placement":  map[string]any{"clusterName": "c1"},
+		"pysparkJob": map[string]any{"mainPythonFileUri": "gs://b/main.py"},
+	}))
+	require.NoError(t, err)
+	final := advanceJobToTerminal(t, p, "proj", "us-central1", "j-no-read")
+	require.Equal(t, "DONE", final.Status.State)
+
+	_, err = p.DriverOutput(ctx, "proj", "us-central1", "j-no-read")
+	var pe *model.ProviderError
+	require.ErrorAs(t, err, &pe)
+	require.Equal(t, 501, pe.HTTPStatus)
+	require.Equal(t, "UNIMPLEMENTED", pe.Status)
 }
 
 // TestCallerPropertiesCannotStripConnectorConfs verifies a caller's job
