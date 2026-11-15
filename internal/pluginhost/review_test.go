@@ -109,7 +109,9 @@ func TestRequiresIsRefusedWithTheHostCapabilities(t *testing.T) {
 	}))
 	defer s.Close()
 	_, err := e.load(t, s.URL)
-	if err == nil || !strings.Contains(err.Error(), "atomic-store") || !strings.Contains(err.Error(), "provides: none") {
+	// CapServices is provided by this host for every transport; an adapter that
+	// cannot encode a declared service rejects it in adopt instead.
+	if err == nil || !strings.Contains(err.Error(), "atomic-store") || !strings.Contains(err.Error(), "provides: services") {
 		t.Fatalf("err = %v, want the requirement and what the host provides", err)
 	}
 }

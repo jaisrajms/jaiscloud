@@ -25,6 +25,7 @@ plugins behaves as it did before plugins existed.
 - [How it works](#how-it-works)
 - [Every caller goes through the plugin](#every-caller-goes-through-the-plugin)
 - [GCP: REST, gRPC and the console](#gcp-rest-grpc-and-the-console)
+- [Plugin services](#plugin-services)
 - [In-process plugins](#in-process-plugins)
 - [Configuration](#configuration)
 - [State](#state)
@@ -214,6 +215,179 @@ Dataproc output to Storage, Metastore attachment checks, Cloud Run delivery) go 
 `internal/gcp/seams`, which are ordinary registry clients, so a plugin that replaces Pub/Sub also sees
 the emulator's own publishes. If a service is switched off with `--transport-overrides X=none`, the
 seams still reach its built-in provider, so dependent services keep working.
+
+---
+
+## Plugin services
+
+A plugin can add a **wire service the emulator does not have**: an API surface jaiscloud does not
+implement. The plugin declares the service and one path per HTTP method, and the emulator routes
+those requests to the plugin. The answer is encoded by the GCP codec like any other, so a client sees
+Google's field names and the `{"error": {"code", "message", "status"}}` envelope.
+
+One declaration per service, with the method, the path pattern and the action it dispatches to, and
+one `replace` route that answers the whole service:
+
+```json
+{
+  "abi": 1,
+  "name": "acme-gcp-widgets",
+  "version": "0.1.0",
+  "routes": [
+    {"cloud": "gcp", "service": "widgets", "actions": ["*"], "mode": "replace"}
+  ],
+  "requires": ["services"],
+  "services": [
+    {
+      "cloud": "gcp",
+      "name": "widgets",
+      "paths": [
+        {"method": "GET",    "pattern": "/v1/projects/{project}/locations/{location}/widgets/{widget}", "action": "WidgetsGet"},
+        {"method": "POST",   "pattern": "/v1/projects/{project}/locations/{location}/widgets", "action": "WidgetsCreate"},
+        {"method": "DELETE", "pattern": "/v1/projects/{project}/locations/{location}/widgets/{widget}", "action": "WidgetsDelete"},
+        {"method": "POST",   "pattern": "/v1/projects/{project}/locations/{location}/widgets/{widget}:start", "action": "WidgetsStart"}
+      ]
+    }
+  ]
+}
+```
+
+The Go SDK writes that manifest from the builder. `Mux.Service` accumulates the paths of one service
+(repeated calls continue the same declaration), `Replace` installs its wildcard `replace` route, and
+`Mux.Manifest` adds `"services"` to `Requires` by itself
+([sdk/services.go](../sdk/services.go), [sdk/mux.go](../sdk/mux.go)):
+
+```go
+m := sdk.NewMux("acme-gcp-widgets", "0.1.0")
+m.Service("gcp", "widgets").
+	Get("/v1/projects/{project}/locations/{location}/widgets/{widget}", "WidgetsGet").
+	Post("/v1/projects/{project}/locations/{location}/widgets", "WidgetsCreate").
+	Delete("/v1/projects/{project}/locations/{location}/widgets/{widget}", "WidgetsDelete").
+	Post("/v1/projects/{project}/locations/{location}/widgets/{widget}:start", "WidgetsStart").
+	Replace(handle) // answers every action of the service
+```
+
+The service name is `[a-z0-9-]+` and must not be one the emulator already serves; an action is
+`[A-Z][A-Za-z0-9]*`; the methods are `GET`, `POST`, `PUT`, `PATCH` and `DELETE`. A complete runnable
+plugin is [sdk/examples/gcp-widgets](../sdk/examples/gcp-widgets/main.go).
+
+### Pattern grammar
+
+A pattern is a sequence of `/`-separated segments. Matching is per segment: repeated leading slashes
+collapse and one trailing slash is ignored, and captures are URL-unescaped before they reach you.
+
+| Piece | Matches | Example |
+|---|---|---|
+| `widgets` | That literal segment | `/v1/projects/p/locations/l/widgets` |
+| `{widget}` | Exactly one non-empty segment, captured under that name | `…/widgets/w%2F1` → `widget: "w/1"` |
+| `{widget=widget-*}` | One segment that starts with the prefix, captured **whole**, prefix included | `…/widgets/widget-42` → `widget: "widget-42"` |
+| `:start` | A trailing verb on the **last** segment only, after the literal or capture | `…/widgets/w1:start` |
+
+A pattern without `:verb` does not match a request whose last segment has one: `GET
+…/widgets/{widget}` and `POST …/widgets/{widget}:start` are two routes, not one. A stray `{` or `}` is
+a load error, never a literal.
+
+### Path constraints
+
+| Rule | Reason |
+|---|---|
+| Starts with `/`, at least two segments | A pattern is a path, not a URL |
+| At least two literal leading segments, and no variable first | A plugin path must not look like a built-in's variable head, and a request must be attributable to a collection before a capture |
+| The first **or** second segment is an API version: `vN`, `vNbetaM`, `vNalphaM`, `vNpM` | It is the shape the built-in grammar expects, it is where the emulator reads `apiVersion`, and it keeps a plugin out of the host-detected surfaces, whose paths (a Functions trigger, a Cloud Run invocation) carry no version at all |
+
+### What the handler receives
+
+Inside `replace`, `c.Req.Service` is the declared service and `c.Req.Action` is the action of the
+matching path. `Params` holds:
+
+| Param | Value |
+|---|---|
+| Each path capture | One entry per `{name}` / `{name=prefix*}`: the segment, URL-unescaped (`widget`, `project`, `location`, …) |
+| Query parameters | Each query key with its **first** value, as a string (`widgetId`, `pageSize`, …) |
+| `body` | The request body decoded as JSON, when there is one |
+| `path` | The request path |
+| `project` | The `project` capture, when the pattern has one |
+| `apiVersion` | The version token, from the first or the second segment |
+
+`name` and `resourceType` are **not** synthesised: the built-in resource-type tables do not know these
+resources, so build a resource name from `project`, `location` and your captures.
+
+### Routing precedence
+
+| Order | What answers the request |
+|---|---|
+| 1 | A service-specific host: a Functions HTTPS trigger (`{location}-{project}.cloudfunctions.net`), a Cloud Run invocation (`*.run.app`), the `container` host, and the Managed Kafka / Datastore Metastore operations hosts |
+| 2 | A path a plugin declared |
+| 3 | The built-in path grammar |
+
+So a plugin path may sit in a built-in's URL space and the plugin wins there. That is how a plugin
+claims a slice of a collection the emulator also serves; it is legal, and startup logs a warning
+naming both sides (`plugin service path overlaps a built-in`, with the service, method, pattern and
+the built-in it shadows) so the operator is not surprised.
+
+A plugin service is not registered under a hostname: it is answered on the emulator's own origin,
+after host detection has declined the request. Point DNS and TLS at the emulator yourself, and do not
+send the request to a service-specific host.
+
+### Sharing a collection
+
+Claim only the slice you own by resource ID prefix:
+
+```go
+m.Service("gcp", "widgets").
+	Get("/v1/projects/{project}/locations/{location}/operations/{operation=widgets-*}", "WidgetsOperationGet").
+	Replace(handle)
+```
+
+`…/operations/widgets-<widget>` now reaches the plugin; every other operation ID still reaches the
+built-in that owns the rest of the collection. The collection's `list` is **not** merged: a list
+request is not one of your declared paths, so it goes to the built-in and shows the built-in's
+operations only. Keep a list of your own if a client needs one.
+
+### Delegating to another service
+
+A handler may call another service's REST API as a client, at the emulator's own endpoint
+(`m.Endpoint()`, from `InitHost.Endpoint` in the `/init` message, the field for the emulator's base URL; when it is empty,
+as it is from a host that does not send it, use the origin of `Store.URL`). Things to know:
+
+- An out-of-process plugin has no `Next`. For its **own** service there is nothing behind the plugin,
+  so it must not replace a key and delegate to that same key: answer it, or have the client call the
+  other service directly.
+- A built-in long-running operation advances only when it is polled. If you delegate an LRO, rename it
+  into your own shape and poll `…/operations/{id}` until `done` is true.
+- Page tokens are opaque: pass one back exactly as you received it, and do not parse or construct one.
+- `c.Store` is scoped to the configured account and region, not to the region in the path. Two
+  locations in the path share one store namespace unless your `id` distinguishes them.
+
+### Validation and conflict errors
+
+All of these are refused at startup, with the plugin and the declaration named:
+
+| Refused | Message says |
+|---|---|
+| A built-in service name | `service "storage" is built in; a plugin can only add services the emulator does not have` |
+| A declared action that no `replace` route of the same plugin answers | `service widgets: action WidgetsStart is not answered by a replace route of plugin "…" (add Replace for it, or for "*")` |
+| A route on an own service that is not `replace` | `mode "before" is not supported for a plugin service (it has no built-in behind it); use replace` |
+| A route on an own service that names a transport other than `rest` | `transport "grpc" is not supported for a plugin service (REST only)` |
+| Two plugins declaring the same service name | `plugins "a" and "b" both declare service "widgets"` |
+| Two declared paths that can match the same request | `plugin "a" declares overlapping paths GET … and GET …` (or both plugins, by name) |
+| A route into a service another plugin declares | `plugin "a" routes service "widgets", which plugin "b" declares` |
+
+Overlap is decided by what can match, not by string equality: a literal matches `{var}`, two
+`{name=prefix*}` captures overlap when one prefix starts with the other, and two `{var}` captures
+always overlap. Rejecting it up front means declaration order is never visible to a client. A request
+whose path shape a plugin owns but whose method no declared path uses is answered `404` by the plugin;
+the built-in never sees it.
+
+### Limits
+
+| Limit | Detail |
+|---|---|
+| REST only | A plugin service has no gRPC surface: the declared paths are answered by the REST gateway, and a route on it may list only the `rest` transport |
+| GCP only | A plugin service is not supported on `jaiscloud-aws`; such a plugin is refused at startup because the host does not provide the `services` capability |
+| No merged operations list | A shared collection's `list` reaches the built-in and does not include the plugin's resources; keep your own list |
+| JSON answers only | `Response` carries a status and a `Data` object; there are no raw media bodies and no response headers of your own |
+| Visible, not hot-reloaded | `GET /_jaiscloud/doctor` lists the plugin, its routes and its declared services; the console has no page for a service the emulator does not know, and loading is startup-only like every other plugin route |
 
 ---
 
@@ -573,7 +747,8 @@ sequenceDiagram
 
 - **Startup log.** One `plugin loaded` line per plugin.
 - **Doctor.** `GET /_jaiscloud/doctor` has a `plugins` section (name, version, transport `http` or
-  `in-process`, URL or file, ABI, routes, whether it keeps state of its own) and a `pluginBuild` section
+  `in-process`, URL or file, ABI, routes, declared services, whether it keeps state of its own) and a
+  `pluginBuild` section
   (Go version, cgo, `-trimpath`, SDK) that an in-process plugin must match. Both are absent when no plugin
   is loaded.
 - **Version.** `jaiscloud-<cloud> version` prints whether this build can load in-process plugins and what
@@ -592,7 +767,7 @@ sequenceDiagram
 
 | Limit | Detail |
 |---|---|
-| Not built yet | New services, new REST path routes and a raw-response escape hatch are designed but not implemented. The SDK is experimental (ABI 1) |
+| Not built yet | The raw-response escape hatch is not implemented: an answer is a JSON `Data` object (with an optional status), without raw media or response headers of its own. New services and REST path routes are available, see [Plugin services](#plugin-services). The SDK is experimental (ABI 1) |
 | JSON only (out-of-process) | Everything crosses as JSON. Bytes arrive as `{"$base64": "…"}` under `_` keys. A value that cannot be JSON (a stream, such as a built-in `GetObject` body) is never shown to the plugin and is always preserved, so such a response can be **observed** with `after` but not replaced (`501 PluginUnsupportedPayload`). A wire `GetObject` cannot be replaced by an out-of-process plugin; an [in-process plugin](#in-process-plugins) can |
 | Payload size (out-of-process) | A request or response over 32 MiB once encoded is refused with `PluginUnsupportedPayload` before it reaches the plugin; an S3 `PutObject` is therefore limited to about 24 MiB on a route with a plugin |
 | Fail-closed | An out-of-process plugin that is down for longer than `--plugin-retry` makes the keys it covers fail with `503 PluginUnavailable`. The built-in is never used as a fallback |

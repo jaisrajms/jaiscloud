@@ -13,6 +13,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"strings"
 
@@ -50,6 +51,10 @@ type GCPAdapter struct {
 	// Managed-Kafka ownership.
 	containerClusterProbe    func(ctx context.Context, project, location string) bool
 	managedKafkaClusterProbe func(ctx context.Context, project, location string) bool
+	// pluginServices is the optional matcher for services a plugin declares.
+	// It sits between host detection and the path grammar (host > plugin >
+	// path), and nil keeps the pipeline byte-identical to the pre-plugin one.
+	pluginServices adapter.PluginServiceMatcher
 }
 
 // New returns a GCPAdapter with the default codec set and a blank default
@@ -92,6 +97,69 @@ func (a *GCPAdapter) SetManagedKafkaClusterProbe(probe func(ctx context.Context,
 	a.managedKafkaClusterProbe = probe
 }
 
+// SetPluginServices installs the matcher for plugin-declared services. It is
+// called after the plugin host has loaded, so nil (no declared services) is the
+// common case and leaves routing untouched. Installing it also audits the
+// declared patterns against the built-in grammar: a pattern whose literals a
+// built-in would otherwise resolve is legal (the plugin still wins, because the
+// matcher runs before path detection) but it shadows that collection, so the
+// operator hears about it at startup rather than through a misrouted request.
+// The audit is advisory only and never fails the load.
+func (a *GCPAdapter) SetPluginServices(m adapter.PluginServiceMatcher) {
+	a.pluginServices = m
+	if m == nil {
+		return
+	}
+	declared, ok := m.(adapter.PluginServicePaths)
+	if !ok {
+		return
+	}
+	for _, p := range declared.PluginPaths() {
+		r, err := http.NewRequest(p.Method, pluginPatternSample(p.Pattern), nil)
+		if err != nil {
+			// A malformed declared pattern is the host's to reject; the adapter
+			// only warns, so an unusable sample is simply not audited.
+			continue
+		}
+		if builtin, _ := DetectService(r); builtin != "" {
+			slog.Warn("plugin service path overlaps a built-in",
+				"service", p.Service, "method", p.Method, "pattern", p.Pattern, "builtin", builtin)
+		}
+	}
+}
+
+// pluginPatternSample renders the shortest concrete path a declared pattern
+// matches: {name} becomes "x" and {name=prefix*} becomes "prefix" + "x". It is
+// only used for the overlap audit, so it need not reproduce every capture.
+func pluginPatternSample(pattern string) string {
+	var b strings.Builder
+	for i := 0; i < len(pattern); {
+		open := strings.IndexByte(pattern[i:], '{')
+		if open < 0 {
+			b.WriteString(pattern[i:])
+			break
+		}
+		b.WriteString(pattern[i : i+open])
+		rest := pattern[i+open+1:]
+		end := strings.IndexByte(rest, '}')
+		if end < 0 {
+			// An unterminated capture: keep the remainder verbatim and stop,
+			// since there is no further pattern left to sample.
+			b.WriteString(pattern[i+open:])
+			break
+		}
+		capture := rest[:end]
+		if eq := strings.IndexByte(capture, '='); eq >= 0 {
+			capture = strings.TrimSuffix(capture[eq+1:], "*") + "x"
+		} else {
+			capture = "x"
+		}
+		b.WriteString(capture)
+		i += open + 1 + end + 1
+	}
+	return b.String()
+}
+
 // Cloud implements adapter.CloudAdapter.
 func (a *GCPAdapter) Cloud() model.Cloud { return model.CloudGCP }
 
@@ -123,7 +191,22 @@ func (a *GCPAdapter) DetectAndDecode(r *http.Request, body []byte) (*model.Norma
 	if err != nil {
 		return nil, nil, err
 	}
-	service, source := DetectService(r)
+	service, source := detectHost(r)
+	if service == "" {
+		// A plugin-declared service is reached at the emulator origin, never at
+		// a service-specific host, so it is consulted only after host detection
+		// declined the request. A match carries its own codec and is returned as
+		// is: the plugin path intentionally beats the built-in path grammar, so
+		// a prefixed operation ID is not claimed by the built-in that owns the
+		// rest of the collection. An error still carries the plugin codec so the
+		// gateway can encode it in the cloud's own envelope.
+		if a.pluginServices != nil {
+			if nr, codec, ok, err := a.pluginServices.Match(r, body); ok {
+				return nr, codec, err
+			}
+		}
+		service, source = detectServiceByPath(r)
+	}
 	if service == "" {
 		return nil, nil, model.NewProviderError("UnknownService", "cannot detect target GCP service", 404)
 	}

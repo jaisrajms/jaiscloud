@@ -18,9 +18,23 @@ const (
 	SourceHost                    // request host matched a service (Function URL)
 )
 
-// DetectService identifies the GCP service from the HTTP request path.
-// GCP has no SigV4 scope; the path is the sole reliable discriminator.
+// DetectService identifies the GCP service from the HTTP request.
+// Host rules win over the path vocabulary because a service-specific host is an
+// explicit statement of intent, and because the data-plane hosts (Functions
+// triggers, Cloud Run invocations) carry arbitrary paths that the JSON-API
+// grammar would otherwise mis-serve.
 func DetectService(r *http.Request) (service string, source DetectionSource) {
+	if service, source := detectHost(r); service != "" {
+		return service, source
+	}
+	return detectServiceByPath(r)
+}
+
+// detectHost applies the rules that identify a service from the request Host
+// alone. It returns ("", SourceUnknown) when no host rule claims the request, so
+// a caller can fall through to the path grammar (or to a plugin matcher that
+// sits between the two).
+func detectHost(r *http.Request) (service string, source DetectionSource) {
 	// A request addressed to a deployed function's synthesized HTTPS-trigger
 	// host ({location}-{project}.cloudfunctions.net) is a data-plane invocation,
 	// not a control-plane API call. It must be detected by host: the trigger
@@ -65,6 +79,13 @@ func DetectService(r *http.Request) (service string, source DetectionSource) {
 	if svc := operationsHostService(firstHostLabel(r.Host), r.URL.EscapedPath()); svc != "" {
 		return svc, SourceHost
 	}
+	return "", SourceUnknown
+}
+
+// detectServiceByPath applies the path vocabulary, which is the only reliable
+// discriminator for GCP requests on the bare emulator origin. It is the fallback
+// after detectHost, and the whole of DetectService when no host rule matched.
+func detectServiceByPath(r *http.Request) (service string, source DetectionSource) {
 	p := r.URL.Path
 	// SDK test clients concatenate an endpoint that may already end in "/" with
 	// "/v1/..." paths, yielding a leading "//". Collapse redundant leading

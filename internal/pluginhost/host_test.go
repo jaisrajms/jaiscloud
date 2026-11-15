@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -42,6 +43,15 @@ func (fakeAdapter) EnrichRequest(*http.Request, string, string) (string, string,
 	return "", "", ""
 }
 func (fakeAdapter) ResourceIDFor(string, string) func(string, string) string { return nil }
+
+// PluginCodec encodes a plugin-declared service for the fake adapter. "sqs" is a
+// built-in name, so it is rejected exactly as a real adapter would.
+func (fakeAdapter) PluginCodec(service string) (adapter.Codec, error) {
+	if service == "sqs" {
+		return nil, fmt.Errorf("service %q is built in; a plugin can only add services the emulator does not have", service)
+	}
+	return fakeCodec{service}, nil
+}
 
 type env struct {
 	reg   *provider.Registry

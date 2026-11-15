@@ -48,6 +48,9 @@ type Manifest struct {
 	// capabilities it has, so a plugin that needs more than an HTTP sidecar gives
 	// (see CapInProcess) fails clearly instead of being silently mis-served.
 	Requires []string `json:"requires,omitempty"`
+	// Services declares wire services the plugin adds. A host that accepts them
+	// provides CapServices; a plugin that declares one lists it in Requires.
+	Services []Service `json:"services,omitempty"`
 }
 
 // Host capabilities a plugin can list in Manifest.Requires.
@@ -185,7 +188,11 @@ type Result struct {
 type Host struct {
 	Cloud   string
 	Version string
-	Log     *slog.Logger
+	// Endpoint is the emulator's base URL (http://127.0.0.1:<port>), for a plugin
+	// that delegates to another service's REST API. It is empty when the host
+	// does not send one.
+	Endpoint string
+	Log      *slog.Logger
 }
 
 // Plugin is implemented by every plugin. Mux provides a ready implementation.
