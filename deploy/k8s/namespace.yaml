@@ -1,4 +1,35 @@
+---
+# Namespace topology — one namespace per concern so that deleting a substrate
+# namespace never destroys the shared store:
+#
+#   jaiscloud       AWS substrate  (Deployment jaiscloud, blobs PVC, Service :4566)
+#   jaiscloud-gcp   GCP substrate  (Deployment jaiscloud-gcp, its own blobs PVC)
+#   jaiscloud-data  PostgreSQL     (postgres-pvc + Services :5432 / :30543)
+#
+# Labels are load-bearing: `kubectl get ns -l jaiscloud.io/role` is the
+# documented way to inspect the topology, and tooling selects on them.
 apiVersion: v1
 kind: Namespace
 metadata:
   name: jaiscloud
+  labels:
+    app.kubernetes.io/part-of: jaiscloud
+    jaiscloud.io/role: substrate
+    jaiscloud.io/substrate: aws
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: jaiscloud-gcp
+  labels:
+    app.kubernetes.io/part-of: jaiscloud
+    jaiscloud.io/role: substrate
+    jaiscloud.io/substrate: gcp
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: jaiscloud-data
+  labels:
+    app.kubernetes.io/part-of: jaiscloud
+    jaiscloud.io/role: data

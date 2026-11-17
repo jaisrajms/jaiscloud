@@ -1,35 +1,62 @@
 ---
-# PersistentVolumeClaim — postgres data survives pod restarts
+# PersistentVolumeClaim — postgres data survives pod restarts, and survives
+# deletion of either substrate namespace (this manifest alone owns the PVC).
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
   name: postgres-pvc
-  namespace: jaiscloud
+  namespace: jaiscloud-data
 spec:
   accessModes: [ReadWriteOnce]
   resources:
     requests:
       storage: 1Gi
 ---
-# Secret — postgres credentials
+# Secret — postgres server environment (consumed with envFrom by the Deployment,
+# so it must live in the same namespace as the pod). The bootstrap init script
+# mounts the credentials file below too.
+#
+# `dsn` is a convenience value only (nothing here consumes it): each substrate
+# namespace owns its own DSN secret, because `env.valueFrom.secretKeyRef` cannot
+# cross namespaces. The AWS one is `jaiscloud/jaiscloud-dsn`.
 apiVersion: v1
 kind: Secret
 metadata:
   name: postgres-secret
-  namespace: jaiscloud
+  namespace: jaiscloud-data
 type: Opaque
 stringData:
   POSTGRES_USER: jaiscloud
   POSTGRES_PASSWORD: jaiscloud
   POSTGRES_DB: jaiscloud
-  dsn: "postgresql://jaiscloud:jaiscloud@postgres.jaiscloud.svc.cluster.local:5432/jaiscloud"
+  dsn: "postgresql://jaiscloud:jaiscloud@postgres.jaiscloud-data.svc.cluster.local:5432/jaiscloud"
+---
+# ConfigMap — database bootstrap scripts for the postgres entrypoint.
+#
+# Scripts under /docker-entrypoint-initdb.d run ONLY when the entrypoint has to
+# initialise an empty data directory, i.e. on a fresh PVC. On an existing
+# `postgres-pvc` they are ignored, so adding a database later needs a manual
+# `CREATE DATABASE` (see the Makefile's `postgres-gcp-db` target).
+#
+# One postgres server hosts one database per cloud: schema isolation
+# (`search_path=<cloud>`) means one database serves exactly one instance per
+# cloud, so AWS uses `jaiscloud` and GCP uses `jaiscloud_gcp`.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: postgres-init
+  namespace: jaiscloud-data
+data:
+  01-gcp-db.sql: |
+    -- GCP substrate database (the GCP DSN secret points at this one).
+    CREATE DATABASE jaiscloud_gcp;
 ---
 # Deployment
 apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: postgres
-  namespace: jaiscloud
+  namespace: jaiscloud-data
 spec:
   replicas: 1
   selector:
@@ -51,6 +78,10 @@ spec:
           volumeMounts:
             - name: data
               mountPath: /var/lib/postgresql/data
+            # Fresh-PVC-only bootstrap: creates the `jaiscloud_gcp` database.
+            - name: init
+              mountPath: /docker-entrypoint-initdb.d
+              readOnly: true
           readinessProbe:
             exec:
               command: [pg_isready, -U, jaiscloud]
@@ -68,13 +99,17 @@ spec:
         - name: data
           persistentVolumeClaim:
             claimName: postgres-pvc
+        - name: init
+          configMap:
+            name: postgres-init
 ---
-# ClusterIP Service — reachable inside the cluster
+# ClusterIP Service — reachable inside the cluster at
+# postgres.jaiscloud-data.svc.cluster.local:5432
 apiVersion: v1
 kind: Service
 metadata:
   name: postgres
-  namespace: jaiscloud
+  namespace: jaiscloud-data
 spec:
   selector:
     app: postgres
@@ -87,7 +122,7 @@ apiVersion: v1
 kind: Service
 metadata:
   name: postgres-external
-  namespace: jaiscloud
+  namespace: jaiscloud-data
 spec:
   type: NodePort
   selector:

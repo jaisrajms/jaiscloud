@@ -2,8 +2,8 @@
 
 An **application-level** end-to-end for `jaiscloud-gcp`: the official
 [Spring Cloud GCP](https://github.com/GoogleCloudPlatform/spring-cloud-gcp) sample
-applications, deployed into the `jaiscloud` k3d namespace and pointed at the
-in-cluster emulator. They exercise the emulator through the real Google Java
+applications, deployed into the `jaiscloud-gcp` k3d namespace (the GCP
+substrate) and pointed at the in-cluster emulator. They exercise the emulator through the real Google Java
 client libraries — not raw HTTP — and are the counterpart to the per-service
 SDK suites under `tests/integration/gcp/`.
 
@@ -18,7 +18,7 @@ Three samples, chosen because their starters document emulator support and need
 | `gcp-sample-firestore` | `spring-cloud-gcp-data-firestore-sample` | Firestore (Native) | 33/33 `ga`, Full data plane |
 | `gcp-sample-datastore` | `spring-cloud-gcp-data-datastore-basic-sample` | Datastore mode | 8/8 `ga`, Full data plane |
 
-Each runs as a Deployment + ClusterIP Service in `namespace: jaiscloud` (see
+Each runs as a Deployment + ClusterIP Service in `namespace: jaiscloud-gcp` (see
 [`samples.yaml`](samples.yaml)). They are stateless web apps; the test drives
 their HTTP endpoints and asserts the data round-trips through the emulator.
 
@@ -38,6 +38,7 @@ so no credentials and no source edits are required.
 make docker-gcp-samples
 
 # 2. Deploy the emulator (if not already) and run the suite
+#    (the one-file install also creates the jaiscloud-gcp namespace)
 kubectl apply -f deploy/k8s/jaiscloud-gcp.yaml
 make test-e2e-gcp-samples-k3d
 
@@ -45,8 +46,8 @@ make test-e2e-gcp-samples-k3d
 make test-e2e-gcp-samples-k3d SKIP_GCP_IMAGE_REBUILD=1
 ```
 
-The suite skips cleanly when `kubectl` or `svc/jaiscloud-gcp` is absent, so it
-is inert in plain `go test ./...`.
+The suite skips cleanly when `kubectl` or the `jaiscloud-gcp` Service (in the
+`jaiscloud-gcp` namespace) is absent, so it is inert in plain `go test ./...`.
 
 `make docker-gcp-samples` builds one image per sample from
 [`deploy/docker/gcp-samples/Dockerfile`](../../docker/gcp-samples/Dockerfile),
@@ -69,8 +70,8 @@ few per-deployment variables):
 | `SPRING_CLOUD_GCP_DATASTORE_NAMESPACE` | `""` | **Required override.** The sample's `application.properties` hardcodes `spring-demo`; the emulator rejects namespaced keys (see below). |
 | `SPRING_CLOUD_GCP_METRICS_ENABLED` | `false` | Monitoring has no endpoint property in the starter, so the export is disabled. |
 
-Emulator endpoints: REST `http://jaiscloud-gcp.jaiscloud.svc.cluster.local:8080`,
-gRPC (h2c) `jaiscloud-gcp.jaiscloud.svc.cluster.local:8081`.
+Emulator endpoints: REST `http://jaiscloud-gcp.jaiscloud-gcp.svc.cluster.local:8080`,
+gRPC (h2c) `jaiscloud-gcp.jaiscloud-gcp.svc.cluster.local:8081`.
 
 ## Emulator gaps surfaced by this suite
 
