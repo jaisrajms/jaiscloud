@@ -318,6 +318,11 @@ kubectl apply -f deploy/k8s/istio/gateway.yaml \
 scripts/istio-smoke.sh
 ```
 
+Skip the `istioctl install` line when the cluster already runs `istiod`; that
+command is a full install and can replace the existing IOP. Add only the gateway
+with `istioctl install -f deploy/k8s/istio/istiooperator-gateway-only.yaml`
+(or `istioctl manifest generate -f … | kubectl apply -f -`).
+
 Trust the CA from `gen.sh` (`SSL_CERT_FILE`, `AWS_CA_BUNDLE`, `NODE_EXTRA_CA_CERTS`,
 `--cacert`), or put a publicly trusted certificate in the `jaiscloud-wildcard`
 secret.

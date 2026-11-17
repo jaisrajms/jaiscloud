@@ -106,6 +106,11 @@ Everything below is idempotent; run from the repo root.
    `istio-ingressgateway`, and the Service reports `80:…/TCP,443:…/TCP`
    (`443` targets the proxy's `8443`).
 
+   **Do not run this on a cluster that already has Istio.** `istioctl install`
+   is a full install request: with an existing istiod it can replace that
+   cluster's IstioOperator configuration and `meshConfig` and prune components
+   other teams rely on. See "Existing Istio install" below.
+
    `istioctl install` also installs the Istio CRDs (`Gateway`,
    `VirtualService`, `DestinationRule`, …), so no separate CRD step is needed —
    but the CRDs must be present *before* `kubectl apply -f
@@ -197,6 +202,48 @@ Everything below is idempotent; run from the repo root.
    ```bash
    scripts/istio-smoke.sh
    ```
+
+### Existing Istio install
+
+When `istiod` is already running (another application's mesh, a platform
+install), add only the gateway JaisCloud needs — do **not** re-run
+`istioctl install --set profile=minimal`:
+
+```bash
+# merge with the cluster's existing operator configuration when you have it
+istioctl install -f <existing-operator.yaml> -f deploy/k8s/istio/istiooperator-gateway-only.yaml
+
+# no existing operator file: render the standalone gateway and apply it
+istioctl manifest generate -f deploy/k8s/istio/istiooperator-gateway-only.yaml \
+  | kubectl apply -f -
+kubectl -n istio-system rollout status deploy/istio-ingressgateway
+```
+
+[`istiooperator-gateway-only.yaml`](istiooperator-gateway-only.yaml) is an
+`IstioOperator` with `profile: empty` that enables **only** the
+`istio-ingressgateway` component (`LoadBalancer`, Istio's default 80/443). It
+renders no control plane. `deploy/deploy.sh --check` warns whenever `istiod`
+exists (`mesh.existingInstall` in the JSON) and names this overlay.
+
+Be aware of the ports: the gateway's `LoadBalancer` binds **80 and 443**, which
+competes with any other gateway on those ports — on Docker Desktop a
+LoadBalancer binds the host directly, so a second gateway wanting 443
+(`localhost:443`) cannot be published at the same time. Either stop the other
+gateway or give this one distinct ports.
+
+Changing the gateway name, namespace or ports is a coordinated edit:
+
+- the `Gateway` resource (`gateway.yaml`: `metadata.name` / `metadata.namespace`)
+  and its `selector` (`istio: ingressgateway`, the label the gateway Deployment
+  carries — a second gateway installed under another name needs its own label and
+  its own `Gateway` resource);
+- the `VirtualServices`' `spec.gateways` reference, which must name the same
+  `namespace/name` (the shipped files use `istio-system/jaiscloud`);
+- the `Gateway.spec.servers[].port.number` values, and anything that points
+  clients at 80/443 (the smoke script discovers the Service's ports).
+
+A mismatch is silent in the worst way: Istio accepts a `VirtualService` that
+references a nonexistent gateway and simply never programs the route.
 
 ## Never rewrite authority
 

@@ -58,6 +58,7 @@ records the intent in ConfigMap `jaiscloud-install` in `jaiscloud-data`.
 | `schema` | `1` |
 | `installed` | comma list of clouds that were installed, e.g. `aws,gcp` |
 | `desired` | comma list of `cloud=state`, e.g. `aws=running,gcp=parked` |
+| `store` | `bundled` (PostgreSQL Deployment in `jaiscloud-data`) or `external` (a server the operator brought) |
 
 The record lives with the store, so a substrate reset (which deletes only its own
 namespace) never loses it. **`deploy.sh` owns this object; no static manifest
@@ -197,12 +198,43 @@ unless `PARK_FORCE=1`, which warns and continues with the scale/teardown.
     server-side dry runs. An operator's own `kubectl` is not matched, so the
     documented reset paths (`--reset` deletes the `jaiscloud` namespace) keep
     working.
-11. **Upgrade is a data move.** The pre-split layout ran Postgres and the GCP
-    emulator in `jaiscloud`; a PVC cannot change namespace. `--migrate-store`
-    dumps the old store into both databases, copies the old GCP blob PVC into
-    `jaiscloud-gcp`, removes the legacy workloads and keeps both old PVCs as
-    rollback copies. Running the new manifests without it silently starts
-    against an empty store.
+    The policy matches the literal usernames
+    `system:serviceaccount:jaiscloud:jaiscloud` and
+    `system:serviceaccount:jaiscloud-gcp:jaiscloud-gcp`, so renaming a namespace
+    means editing the policy too.
+11. **Upgrade is a data move, not a teardown.** The pre-split layout ran Postgres
+    and the GCP emulator in `jaiscloud`; a PVC cannot change namespace.
+    `--migrate-store` dumps the old store (a `Deployment` or `StatefulSet`,
+    `LEGACY_POSTGRES_WORKLOAD`, or the server in `LEGACY_DSN` — dumped from the
+    new store pod) into both databases, copies the GCP blob claim when the legacy
+    GCP emulator exists and the AWS claim when the legacy namespace differs, and
+    **keeps** the legacy workload, Services and PVCs by default — the Postgres is
+    only scaled to 0. `--delete-legacy` removes the workload and the
+    `postgres`/`postgres-external` Services after checking `app=postgres`
+    (`LEGACY_DELETE_FORCE=1` overrides); a PVC is never deleted by the migration.
+    The preflight reports a retained, scaled-to-0 legacy object as
+    `legacy.*Retained` instead of re-recommending the migration. Running the new
+    manifests without the migration silently starts against an empty store.
+12. **Namespace names are literal in the manifests.** Each Namespace `name`, every
+    `namespace:` field, the DSN hostnames and the VAP usernames spell out
+    `jaiscloud`, `jaiscloud-gcp` and `jaiscloud-data`. `NS_AWS` / `NS_GCP` /
+    `NS_DATA` let the gate scripts run against scratch names; every mutating
+    `deploy.sh` mode verifies the manifests agree with the configured names
+    (`check_namespace_overrides`) and refuses a partial override rather than
+    operating on a half-renamed install. A custom layout requires editing those
+    fields together.
+13. **The store may be bundled or external.** `--store-dsn` /
+    `JAISCLOUD_STORE_DSN` (or the per-substrate `JAISCLOUD_AWS_DSN` /
+    `JAISCLOUD_GCP_DSN`) installs against a server the operator runs:
+    `postgres.yaml` is **not** applied, the databases are created through a
+    short-lived `psql` pod in `jaiscloud-data`, and the substrate DSN Secrets are
+    overwritten with the external DSN (the base DSN's database component is
+    replaced per cloud; per-substrate overrides are verbatim). The choice is
+    recorded as `store` in the install record (`bundled|external`) and reported
+    by the preflight as `store.mode`. An external store is not probeable from the
+    cluster, so `store.ready` / `store.databases.*` are `false` (unknown, not
+    missing), and `--migrate-store` into an external target is unsupported (it
+    refuses).
 
 ## Where each fact lives
 

@@ -154,6 +154,7 @@ func TestAgentGuideFiles(t *testing.T) {
 		"deploy/k8s/jaiscloud.yaml",
 		"deploy/k8s/jaiscloud-gcp.yaml",
 		"deploy/k8s/istio/gateway.yaml",
+		"deploy/k8s/istio/istiooperator-gateway-only.yaml",
 		"deploy/k8s/istio/virtualservices.yaml",
 		"deploy/k8s/istio/destinationrule.yaml",
 		"deploy/k8s/istio/certs/gen.sh",

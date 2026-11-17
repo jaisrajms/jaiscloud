@@ -724,10 +724,11 @@ Migrate once, before (or instead of) a fresh deploy:
 
 ```bash
 ./deploy/deploy.sh --migrate-store --yes
-# stops every legacy writer, dumps database `jaiscloud` from
-# jaiscloud/deployment/postgres, starts the new store in jaiscloud-data and
-# restores the dump into BOTH databases (so the pre-split GCP schema travels),
-# then brings both substrates back.
+# stops every legacy writer, dumps database `jaiscloud` from the legacy store
+# (deployment/postgres or statefulset/postgres in LEGACY_NAMESPACE, default
+# jaiscloud), starts the new store in jaiscloud-data and restores the dump into
+# BOTH databases (so the pre-split GCP schema travels), then brings both
+# substrates back.
 ```
 
 If the old install also ran the **GCP emulator in the `jaiscloud` namespace**
@@ -739,24 +740,62 @@ If the old install also ran the **GCP emulator in the `jaiscloud` namespace**
   (a PVC cannot be mounted across namespaces). The helper image defaults to
   `busybox:1.36` — preload it if the cluster cannot pull from Docker Hub
   (`BLOB_MIGRATE_IMAGE=<image>` overrides it), or set `SKIP_BLOB_MIGRATE=1` to
-  copy the claim yourself;
-- it removes the old `deployment/jaiscloud-gcp` and `service/jaiscloud-gcp` from
-  `jaiscloud`, so only the new substrate in `jaiscloud-gcp` remains.
+  copy the claim yourself.
 
-Both old volumes (`postgres-pvc` and, when present, `jaiscloud-gcp-blobs-pvc`)
-are kept in `jaiscloud` as **rollback copies**. Verify both substrates — the
-GCP bucket/object reads back through the new pod, the AWS and GCP databases both
-answer — then delete them:
+The legacy workloads are **kept by default**: the legacy Postgres is scaled to 0
+and its Deployment/StatefulSet, the `postgres`/`postgres-external` Services and
+both volumes (`postgres-pvc` and, when present, `jaiscloud-gcp-blobs-pvc`) stay
+in the legacy namespace as rollback copies. Verify both substrates — the GCP
+bucket/object reads back through the new pod, the AWS and GCP databases both
+answer — then remove what is left:
 
 ```bash
+kubectl -n jaiscloud delete deployment postgres service postgres postgres-external
+kubectl -n jaiscloud delete deployment jaiscloud-gcp service jaiscloud-gcp   # when the legacy GCP workload exists
 kubectl -n jaiscloud delete pvc postgres-pvc jaiscloud-gcp-blobs-pvc
 ```
 
+`--delete-legacy` (or `DELETE_LEGACY=1`) performs the workload/Service removal
+as part of the migration. It deletes only when the object carries
+`app=postgres`; otherwise it refuses and names `LEGACY_DELETE_FORCE=1`. **No PVC
+is ever deleted by the migration**, and a workload or claim it cannot recognise
+is left alone. Use `LEGACY_POSTGRES_WORKLOAD=statefulset/postgres` for a
+StatefulSet, and `LEGACY_DSN=postgres://…` when the old store is outside the
+cluster: the dump then runs from the *new* store pod (it ships `pg_dump`) after
+that pod is up, and no legacy store workload is scaled or deleted. The AWS blob
+claim is copied when `LEGACY_NAMESPACE` differs from the AWS namespace (a claim
+cannot move namespaces); `LEGACY_AWS_BLOBS_PVC` / `NEW_AWS_BLOBS_PVC` /
+`LEGACY_GCP_BLOBS_PVC` / `NEW_GCP_BLOBS_PVC` override the claim names.
+
 The new `jaiscloud-data/postgres-pvc` must not exist yet (the command refuses to
 overwrite it), so run the migration before applying the new manifests; it
-applies the namespaces and manifests it needs itself. A pre-split install's
-instance IDs and TLS certificates are not migrated: the new manifests pin
-`aws-substrate-1`/`gcp-substrate-1` and regenerate the certificate.
+applies the namespaces and manifests it needs itself (`MIGRATE_FORCE=1`
+overrides the refusal, and the restore then overwrites the schema in that
+volume). A pre-split install's instance IDs and TLS certificates are not
+migrated: the new manifests pin `aws-substrate-1`/`gcp-substrate-1` and
+regenerate the certificate.
+
+**Bring your own store.** Instead of the bundled PostgreSQL, point the install
+at a server you run:
+
+```bash
+./deploy/deploy.sh --yes --store-dsn 'postgres://user:pass@db.example.com:5432/postgres'
+./deploy/deploy.sh --gcp --yes --store-dsn 'postgres://user:pass@db.example.com:5432/postgres'
+# or: JAISCLOUD_STORE_DSN=… (JAISCLOUD_AWS_DSN / JAISCLOUD_GCP_DSN override per substrate)
+```
+
+`postgres.yaml` is not applied. `namespace-data.yaml` still is (the install
+record lives there), the `jaiscloud` / `jaiscloud_gcp` databases are created
+through a short-lived `psql` pod (`STORE_INIT_IMAGE`, default
+`postgres:16-alpine`), and each substrate's DSN Secret is overwritten with the
+external DSN followed by a rollout restart. The base DSN's database component is
+replaced with `jaiscloud` / `jaiscloud_gcp` for those Secrets (one database per
+cloud); `JAISCLOUD_AWS_DSN` / `JAISCLOUD_GCP_DSN` are used verbatim for an exact
+per-substrate DSN. `deploy.sh --check --json` reports
+`store.mode=bundled|external`; for an external store `store.ready` and
+`store.databases.*` are `false`, meaning "not probeable" (there is no pod to
+exec), not "missing". Migrating the pre-split store into an external target is
+not supported yet — the command refuses before touching anything.
 
 The old **sample workloads** are left to you: if you had applied
 `deploy/k8s/gcp-samples/samples.yaml` or `deploy/k8s/lakehouse/pipeline.yaml` in

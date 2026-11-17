@@ -343,8 +343,22 @@ namespace-isolation boundary is in place from the first namespace.
   namespace-scoped, so run `./deploy/deploy.sh --migrate-store` once. It moves
   the existing store into `jaiscloud-data` (restoring into both databases) and,
   if the old GCP emulator ran in the `jaiscloud` namespace, copies its object
-  bytes into `jaiscloud-gcp` and removes the old workload. See
+  bytes into `jaiscloud-gcp`. The legacy Postgres is only **scaled to 0** and
+  kept with its Services and PVCs as a rollback copy; `--delete-legacy` also
+  removes the workload and Services (never a PVC), and a `StatefulSet` or an
+  out-of-cluster `LEGACY_DSN` source is supported. See
   [the Developer Guide](DEVELOPER_GUIDE.md#setup-3--jaiscloud-on-kubernetes).
+- **Bring your own store.** `./deploy/deploy.sh --yes --store-dsn
+  'postgres://user:pass@db.example.com:5432/postgres'` (or
+  `JAISCLOUD_STORE_DSN=…`) skips `postgres.yaml`, creates `jaiscloud` /
+  `jaiscloud_gcp` through a short-lived `psql` pod in `jaiscloud-data`, and
+  points each substrate's DSN Secret at your server. The base DSN's database
+  component is replaced with `jaiscloud` / `jaiscloud_gcp` for those Secrets
+  (one database per cloud); `JAISCLOUD_AWS_DSN` / `JAISCLOUD_GCP_DSN` are used
+  verbatim for an exact per-substrate DSN. The install record stores
+  `store=external`, which `deploy.sh --check --json` reports as `store.mode`;
+  database probes are skipped (`false` = not probeable). The pre-split
+  migration into an external store is not supported yet.
 
 ### Istio front door (optional)
 
@@ -354,7 +368,10 @@ to the emulator directly. Install order, CA generation, DNS and the host routes
 live in [`deploy/k8s/istio/README.md`](deploy/k8s/istio/README.md); the rule to
 keep in mind is that `:authority` is **never rewritten**, because GKE vs Managed
 Kafka, the Cloud Run/Cloud Functions hosts and S3 virtual-hosted requests all
-route on it. `scripts/istio-smoke.sh` asserts the gateway paths.
+route on it. `scripts/istio-smoke.sh` asserts the gateway paths. On a cluster
+that already runs istiod, add only the gateway with
+`deploy/k8s/istio/istiooperator-gateway-only.yaml` — do not re-run
+`istioctl install --set profile=minimal`, which can replace the existing IOP.
 
 Resets are database-scoped: `./deploy/deploy.sh --gcp-reset` drops only
 `jaiscloud_gcp` and the GCP blobs PVC, while `--reset` drops only the AWS

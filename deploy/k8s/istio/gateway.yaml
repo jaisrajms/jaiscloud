@@ -13,7 +13,9 @@
 #       --set components.ingressGateways[0].k8s.service.type=LoadBalancer
 #     (`profile=minimal` alone installs istiod only — no gateway — so the
 #     ingress gateway component must be enabled explicitly; this is the
-#     selector below.)
+#     selector below.) On a cluster that ALREADY has istiod, do not run that
+#     (it can replace the existing IOP): use
+#     istiooperator-gateway-only.yaml and the README's "Existing Istio install".
 #   - certs/gen.sh                             (creates the jaiscloud-wildcard
 #                                               TLS secret in istio-system)
 #

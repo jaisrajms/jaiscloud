@@ -65,17 +65,19 @@ lifecycle:
       schema: "1"
       installed: "comma list of clouds that were installed, e.g. aws,gcp"
       desired: "comma list of cloud=state, e.g. aws=running,gcp=parked"
+      store: "bundled (PostgreSQL in jaiscloud-data) or external (a server the operator brought: --store-dsn / JAISCLOUD_STORE_DSN)"
     written_by:
       - "(default) aws install: installed += aws, desired aws=running"
       - "--gcp: installed += gcp, desired gcp=running"
       - "--delete: installed kept, desired aws=absent"
       - "--reset: desired aws=running (after the reinstall)"
       - "--gcp-reset: desired gcp=running"
-      - "--migrate-store: installed aws,gcp, desired both running"
+      - "--migrate-store: installed aws,gcp, desired both running (the legacy workload is kept scaled to 0)"
       - "--park <cloud>: desired <cloud>=parked"
       - "--resume <cloud>: desired <cloud>=running"
       - "--switch <target>: desired other=parked, target=running"
       - "--delete <cloud>: installed kept, desired <cloud>=absent (an uninstalled cloud is not added)"
+      - "--store-dsn / JAISCLOUD_STORE_DSN: store=external on every install path (the key is preserved by later intent writes)"
     skipped_when: "jaiscloud-data does not exist (a warning, not a reason to create the store)"
   states:
     running: "Deployment present, spec.replicas > 0, availableReplicas >= 1"
@@ -143,7 +145,11 @@ scenarios:
     steps:
       - id: install-istio
         run: "istioctl install -y --set profile=minimal --set 'components.ingressGateways[0].enabled=true' --set 'components.ingressGateways[0].name=istio-ingressgateway'"
-        note: "profile=minimal installs istiod only; the component flag adds the gateway."
+        note: "profile=minimal installs istiod only; the component flag adds the gateway. Skip this step on a cluster that already has istiod."
+      - id: existing-istio
+        when: "kubectl -n istio-system get deployment istiod succeeds"
+        run: "istioctl install -f deploy/k8s/istio/istiooperator-gateway-only.yaml   # profile: empty + only istio-ingressgateway; or: istioctl manifest generate -f deploy/k8s/istio/istiooperator-gateway-only.yaml | kubectl apply -f -"
+        note: "Never run istioctl install --set profile=minimal on this cluster: it is a full install and can replace the existing IOP/meshConfig and prune components. The gateway's LoadBalancer binds 80/443, so it competes with any other gateway there (Docker Desktop localhost:443); change the Gateway name/namespace/ports in gateway.yaml + virtualservices.yaml together."
       - id: certs
         run: "deploy/k8s/istio/certs/gen.sh"
         note: "Writes the dev CA in $HOME/.cache/jaiscloud/istio-ca, the TLS secret and the CA ConfigMaps. --force rotates the CA (clients must re-trust)."
@@ -162,6 +168,8 @@ scenarios:
     detect:
       - check: "kubectl -n jaiscloud get deployment postgres"
         means: "legacy store still in the AWS namespace"
+      - check: "kubectl -n jaiscloud get statefulset postgres"
+        means: "legacy store as a StatefulSet (--migrate-store supports it too)"
       - check: "kubectl -n jaiscloud-data get pvc postgres-pvc"
         means: "new store already exists; --migrate-store refuses (drop the new PVC only if it is disposable)"
       - check: "kubectl -n jaiscloud get deployment jaiscloud-gcp"
@@ -169,7 +177,7 @@ scenarios:
     steps:
       - id: preflight
         run: "deploy/deploy.sh --check --json"
-        note: "legacy.* predicates and recommended[] tell you whether this scenario applies."
+        note: "legacy.pending and recommended[] say whether the migration applies; a scaled-to-0 legacy object with the new store ready is legacy.*Retained (a rollback copy), not pending work."
       - id: stop
         run: "Ask the operator before running --migrate-store: it stops both emulators and rewrites the store."
         destructive: false
@@ -177,11 +185,15 @@ scenarios:
         run: "SKIP_IMAGE_BUILD=1 deploy/deploy.sh --migrate-store --yes"
         destructive: true
         deletes:
-          - "the legacy postgres and jaiscloud-gcp Deployments/Services in jaiscloud (PVCs are kept)"
+          - "nothing by default: the legacy Postgres is scaled to 0 and kept (Deployment/StatefulSet, Services, PVCs)"
         keeps:
-          - "jaiscloud/postgres-pvc and jaiscloud/jaiscloud-gcp-blobs-pvc as rollback copies"
-        note: "Needs a pullable busybox for the byte copy; preload it or set SKIP_BLOB_MIGRATE=1 and copy the PVC yourself."
-        expect: "exit 0; both databases restored, GCP bytes copied, both substrates rolled out"
+          - "the legacy workload, jaiscloud/postgres-pvc and jaiscloud/jaiscloud-gcp-blobs-pvc as rollback copies"
+        note: "LEGACY_DSN=postgres://… dumps an out-of-cluster store from the new store pod (no legacy workload touched); LEGACY_POSTGRES_WORKLOAD=statefulset/postgres names a StatefulSet. Needs a pullable busybox for the byte copy; preload it or set SKIP_BLOB_MIGRATE=1 and copy the PVC yourself."
+        expect: "exit 0; both databases restored, GCP bytes copied, both substrates rolled out, legacy Postgres scaled to 0"
+      - id: delete-legacy
+        optional: true
+        run: "SKIP_IMAGE_BUILD=1 deploy/deploy.sh --migrate-store --yes --delete-legacy"
+        note: "Only with --delete-legacy: removes the legacy workload and the postgres/postgres-external Services after verifying label app=postgres (LEGACY_DELETE_FORCE=1 overrides). Never deletes a PVC."
       - id: verify-store
         run: "kubectl -n jaiscloud-data exec deploy/postgres -- psql -U jaiscloud -d jaiscloud -tAc \"select count(*) from aws.migration_probe\""
         note: "Substitute a table/row you know should have survived."
@@ -189,9 +201,9 @@ scenarios:
         run: "Read an existing GCS object through the new substrate (port-forward 8080 and GET /storage/v1/b/<bucket>/o/<object>?alt=media)."
       - id: verify
         run: "deploy/deploy.sh --check --json"
-        expect: "legacy.postgresInAws=false, legacy.gcpInAws=false, both substrates ready"
+        expect: "legacy.pending=false, legacy.postgresRetained=true (until cleanup), both substrates ready"
       - id: cleanup
-        run: "kubectl -n jaiscloud delete pvc postgres-pvc jaiscloud-gcp-blobs-pvc"
+        run: "kubectl -n jaiscloud delete deployment postgres service postgres postgres-external; kubectl -n jaiscloud delete pvc postgres-pvc jaiscloud-gcp-blobs-pvc"
         note: "Only after verifying both substrates. A later --reset deletes them with the namespace anyway."
 
   custom-images:
@@ -207,6 +219,28 @@ scenarios:
       - id: spark
         run: "kubectl -n jaiscloud-gcp set env deploy/jaiscloud-gcp JAISCLOUD_K8S_SPARK_IMAGE=<spark image with the GCS connector>"
         note: "Dataproc jobs cannot run without it; plain apache/spark cannot read gs://."
+
+  external-store:
+    summary: "Install both substrates against a PostgreSQL server you already run (no postgres.yaml, no postgres-pvc)."
+    preconditions:
+      - "the server is reachable from a pod in the cluster's jaiscloud-data namespace"
+      - "the DSN role can CREATE DATABASE (needed once for jaiscloud / jaiscloud_gcp)"
+    steps:
+      - id: plan
+        run: "deploy/deploy.sh --plan --store-dsn postgres://user:pass@db.example.com:5432/postgres"
+        expect: "postgres.yaml is absent from the plan; the databases are created through a psql pod; the DSN Secret is overwritten"
+      - id: apply
+        run: "deploy/deploy.sh --yes --store-dsn postgres://user:pass@db.example.com:5432/postgres"
+        note: "JAISCLOUD_STORE_DSN does the same. The base DSN's database component is replaced with jaiscloud / jaiscloud_gcp for the substrate Secrets (one database per cloud); JAISCLOUD_AWS_DSN / JAISCLOUD_GCP_DSN are used verbatim for an exact per-substrate DSN."
+      - id: gcp
+        run: "deploy/deploy.sh --gcp --yes --store-dsn postgres://user:pass@db.example.com:5432/postgres"
+      - id: verify
+        run: "deploy/deploy.sh --check --json"
+        expect: "store.mode=external, store.present=true, store.ready=false (not probeable), substrates ready, recommended=[]"
+        note: "store.ready/store.databases=false mean 'not probeable', not 'missing': there is no postgres Deployment to exec psql in."
+    limits:
+      - "migrate-store into an external target is unsupported: the command refuses before doing anything; dump/restore that server yourself."
+      - "the preflight cannot verify the external databases; probe them with your own psql."
 
   park-resume-switch:
     summary: "Stop the compute without losing the data: park one substrate, resume it, or switch between them."
@@ -319,6 +353,8 @@ do_not:
     why: "TLS terminates at the front door; the pod's own HTTPS listener is REST-only and cluster-internal"
   - action: "Remove, weaken or bypass the jaiscloud-namespace-isolation policy"
     why: "both substrate ServiceAccounts hold cluster-wide namespace delete; the ValidatingAdmissionPolicy is the only boundary between their per-cluster namespaces"
+  - action: "Run istioctl install --set profile=minimal on a cluster that already has istiod"
+    why: "it is a full install request: it can replace the existing IstioOperator/meshConfig and prune other components; add only the gateway with deploy/k8s/istio/istiooperator-gateway-only.yaml"
   - action: "Edit a manifest in a running cluster by hand"
     why: "deploy.sh/up-k8s apply the repository manifests; changes drift and check-deploy-images/contract checks will not see them"
 
@@ -330,9 +366,10 @@ destructive:
     deletes: ["database jaiscloud_gcp", "pvc jaiscloud-gcp-blobs-pvc"]
     keeps: ["jaiscloud-gcp-state-pvc", "jaiscloud-data"]
   - command: "deploy/deploy.sh --migrate-store"
-    deletes: ["legacy postgres/jaiscloud-gcp Deployments and Services in jaiscloud"]
-    keeps: ["legacy PVCs as rollback copies"]
-    guards: ["refuses when jaiscloud-data/postgres-pvc exists"]
+    deletes: ["nothing by default: the legacy Postgres is scaled to 0 and kept"]
+    optional_deletes: ["with --delete-legacy: the legacy postgres Deployment/StatefulSet and the postgres/postgres-external Services, only when labelled app=postgres (LEGACY_DELETE_FORCE=1 overrides)"]
+    keeps: ["legacy PVCs, Services and workloads as rollback copies", "the legacy GCP workload (scaled to 0) unless --delete-legacy"]
+    guards: ["refuses when jaiscloud-data/postgres-pvc exists unless MIGRATE_FORCE=1", "never deletes a PVC", "refuses an external store target"]
   - command: "make test-dual-substrate-k8s"
     deletes: ["database jaiscloud (through --reset)"]
     guards: ["ALLOW_RESET=1"]
@@ -347,7 +384,7 @@ tooling:
     note: "The binary embeds this pack; --emit writes the deployment kit (manifests, deploy.sh, preflight, Istio/CI assets, docs) for users who only have an image or a release binary. In-cluster: kubectl -n <ns> exec deploy/<workload> -- /jaiscloud agent-guide."
   deploy_sh:
     entry: "deploy/deploy.sh"
-    modes: ["(default) aws install", "--gcp", "--migrate-store", "--delete [aws|gcp|both]", "--park <aws|gcp>", "--resume <aws|gcp>", "--switch <aws|gcp>", "--reset", "--gcp-reset", "--check [--substrate aws|gcp|both] [--desired aws=running,gcp=parked]", "--plan", "--skip-build", "--yes"]
+    modes: ["(default) aws install", "--gcp", "--migrate-store [--delete-legacy]", "--delete [aws|gcp|both]", "--park <aws|gcp>", "--resume <aws|gcp>", "--switch <aws|gcp>", "--reset", "--gcp-reset", "--check [--substrate aws|gcp|both] [--desired aws=running,gcp=parked]", "--plan", "--skip-build", "--store-dsn <dsn>", "--yes"]
     exit_codes: {0: success, 1: failure, 2: usage/refused}
   make:
     entry: "make help"

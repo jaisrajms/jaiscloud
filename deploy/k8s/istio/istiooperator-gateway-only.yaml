@@ -1,0 +1,40 @@
+# IstioOperator overlay — add ONLY the JaisCloud ingress gateway to an existing
+# Istio control plane.
+#
+# `istioctl install --set profile=minimal` is a full install: on a cluster that
+# already runs istiod it can replace the IstioOperator configuration and the
+# meshConfig and prune components another team put there. Use this overlay when
+# istiod is already installed and you only need the gateway that
+# deploy/k8s/istio/gateway.yaml selects (`istio: ingressgateway`):
+#
+#   # merge with the cluster's existing operator configuration, if you have it
+#   istioctl install -f <existing-operator.yaml> -f deploy/k8s/istio/istiooperator-gateway-only.yaml
+#
+#   # or, no existing operator file: render the standalone gateway and apply it
+#   istioctl manifest generate -f deploy/k8s/istio/istiooperator-gateway-only.yaml \
+#     | kubectl apply -f -
+#
+# `profile: empty` renders no control plane and no istiod Deployment: the
+# overlay only enables the ingress gateway component (when merged with an
+# existing operator file, the two documents are combined by istioctl). The
+# gateway Service is a LoadBalancer with Istio's default 80/443 ports — on a
+# cluster with another gateway on 443 (for example Docker Desktop, where a
+# LoadBalancer binds localhost:443) either stop that gateway first or give this
+# one distinct ports and update deploy/k8s/istio/gateway.yaml to match.
+#
+# Do not point `kubectl apply -f` at this file directly: it is an IstioOperator
+# (an installation request), not a Kubernetes object to apply.
+apiVersion: install.istio.io/v1alpha1
+kind: IstioOperator
+metadata:
+  name: jaiscloud-gateway-only
+  namespace: istio-system
+spec:
+  profile: empty
+  components:
+    ingressGateways:
+      - name: istio-ingressgateway
+        enabled: true
+        k8s:
+          service:
+            type: LoadBalancer

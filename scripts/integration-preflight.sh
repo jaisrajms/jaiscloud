@@ -36,12 +36,22 @@
 #   a warning plus a non-optional install-rbac-policy recommendation (so --strict
 #   fails).
 #
+# The store:
+#   store.mode is bundled (PostgreSQL Deployment in NS_DATA) or external (a
+#   server the operator brought: deploy.sh --store-dsn / JAISCLOUD_STORE_DSN, no
+#   postgres.yaml). The mode comes from the install record's `store` key, then
+#   falls back to bundled when the record or the Deployment exists, and to
+#   external when a substrate exists without a bundled postgres Deployment. For
+#   an external store, store.ready=false and store.databases.*=false mean "not
+#   probeable from here", not "missing": there is no pod to exec psql in.
+#
 # Also reachable as: deploy/deploy.sh --check [--json] [--strict]
 #                    [--substrate ...] [--desired ...]
 #
 # Env:
 #   KUBE_CONTEXT   kubectl context (default: the current context)
-#   NS_AWS/NS_GCP/NS_DATA   override the namespace names (default from the manifests)
+#   NS_AWS/NS_GCP/NS_DATA   override the namespace names (default from the manifests;
+#                 deploy.sh refuses a mutating mode unless the manifests agree)
 #
 # Exit codes:
 #   0  probe completed (read `recommended` / `warnings`)
@@ -207,6 +217,15 @@ deployment_replicas() {
 #   spec.replicas == 0     -> parked  (deliberately scaled down, data kept)
 #   availableReplicas >= 1 -> running
 #   otherwise              -> degraded (present but not serving)
+# sts_replicas <ns> <name> <present 1|0> — desired replicas for a StatefulSet
+# (the same semantics as deployment_replicas: unset means 1).
+sts_replicas() {
+  local n
+  if [[ "$3" != "1" ]]; then echo 0; return; fi
+  n=$(kc -n "$1" get statefulset "$2" -o jsonpath='{.spec.replicas}' 2>/dev/null || true)
+  echo "${n:-1}"
+}
+
 substrate_state() {
   if [[ "$3" != "1" ]]; then echo absent; return; fi
   if [[ "$(deployment_replicas "$1" "$2" "$3")" -eq 0 ]]; then echo parked; return; fi
@@ -296,7 +315,14 @@ SUB_AWS=$(field "" namespace "$NS_AWS" '{{index .metadata.labels "jaiscloud.io/s
 ROLE_GCP=$(field "" namespace "$NS_GCP" '{{index .metadata.labels "jaiscloud.io/role"}}' 2>/dev/null || true)
 ROLE_DATA=$(field "" namespace "$NS_DATA" '{{index .metadata.labels "jaiscloud.io/role"}}' 2>/dev/null || true)
 
-LEGACY_PG=$(deployment_present "$NS_AWS" postgres)
+# The pre-split store was a Deployment; --migrate-store also accepts a
+# StatefulSet, so both count as the legacy store here.
+LEGACY_PG_DEPLOY=$(deployment_present "$NS_AWS" postgres)
+LEGACY_PG_STS=$(probe_ok kc -n "$NS_AWS" get statefulset postgres)
+LEGACY_PG=0
+[[ "$LEGACY_PG_DEPLOY" == "1" || "$LEGACY_PG_STS" == "1" ]] && LEGACY_PG=1
+LEGACY_PG_OBJECT="deployment/postgres"
+[[ "$LEGACY_PG_STS" == "1" && "$LEGACY_PG_DEPLOY" != "1" ]] && LEGACY_PG_OBJECT="statefulset/postgres"
 LEGACY_GCP=$(deployment_present "$NS_AWS" jaiscloud-gcp)
 STORE_DEPLOY=$(deployment_present "$NS_DATA" postgres)
 STORE_PVC=$(pvc_status "$NS_DATA" postgres-pvc)
@@ -331,10 +357,56 @@ SUBSTRATE_PRESENT=0
 RECORD_PRESENT=$(probe_ok kc -n "$NS_DATA" get configmap jaiscloud-install)
 RECORD_INSTALLED=""
 RECORD_DESIRED=""
+RECORD_STORE=""
 if [[ "$RECORD_PRESENT" == "1" ]]; then
   RECORD_INSTALLED=$(field "$NS_DATA" configmap jaiscloud-install '{{index .data "installed"}}')
   RECORD_DESIRED=$(field "$NS_DATA" configmap jaiscloud-install '{{index .data "desired"}}')
+  RECORD_STORE=$(field "$NS_DATA" configmap jaiscloud-install '{{index .data "store"}}')
 fi
+
+# The store is either bundled (a postgres Deployment in NS_DATA) or external (a
+# server the operator brought; deploy.sh --store-dsn). The record is
+# authoritative; otherwise a Deployment/record means bundled, and a substrate
+# without one means external. For an external store there is no pod to exec, so
+# ready/databases are reported false = "not probeable", never "missing".
+STORE_MODE="bundled"
+if [[ -n "$RECORD_STORE" ]]; then
+  case "$RECORD_STORE" in
+    bundled|external) STORE_MODE="$RECORD_STORE" ;;
+  esac
+elif [[ "$STORE_DEPLOY" != "1" && "$RECORD_PRESENT" != "1" && "$SUBSTRATE_PRESENT" == "1" ]]; then
+  STORE_MODE="external"
+fi
+if [[ "$STORE_MODE" == "external" ]]; then
+  STORE_PRESENT=1
+  STORE_READY=0
+  DB_AWS=0
+  DB_GCP=0
+else
+  STORE_PRESENT="$STORE_DEPLOY"
+fi
+
+# A pre-split object that is scaled to 0 while the new store serves is a
+# retained rollback copy (deploy.sh --migrate-store keeps it by default), not a
+# pending migration: re-recommending migrate-store forever would be noise. With
+# an external store the new store has no Deployment, so the record mode is the
+# evidence that the migration already happened.
+LEGACY_PG_REPLICAS=$(deployment_replicas "$NS_AWS" postgres "$LEGACY_PG_DEPLOY")
+[[ "$LEGACY_PG_DEPLOY" == "1" ]] || LEGACY_PG_REPLICAS=$(sts_replicas "$NS_AWS" postgres "$LEGACY_PG_STS")
+LEGACY_PG_RETAINED=0
+if [[ "$LEGACY_PG" == "1" && "$LEGACY_PG_REPLICAS" == "0" ]]; then
+  if [[ "$STORE_DEPLOY" == "1" || "$STORE_MODE" == "external" ]]; then LEGACY_PG_RETAINED=1; fi
+fi
+LEGACY_GCP_REPLICAS=$(deployment_replicas "$NS_AWS" jaiscloud-gcp "$LEGACY_GCP")
+LEGACY_GCP_RETAINED=0
+if [[ "$LEGACY_GCP" == "1" && "$LEGACY_GCP_REPLICAS" == "0" ]]; then
+  if [[ "$GCP_PRESENT" == "1" || "$STORE_DEPLOY" == "1" || "$STORE_MODE" == "external" ]]; then
+    LEGACY_GCP_RETAINED=1
+  fi
+fi
+LEGACY_PENDING=0
+[[ "$LEGACY_PG" == "1" && "$LEGACY_PG_RETAINED" == "0" ]] && LEGACY_PENDING=1
+[[ "$LEGACY_GCP" == "1" && "$LEGACY_GCP_RETAINED" == "0" ]] && LEGACY_PENDING=1
 
 INTENT_SOURCE="inferred"
 if [[ -n "$SUBSTRATE_FLAG" ]]; then
@@ -425,8 +497,12 @@ RECOMMENDED=() # "action|command|why|optional"
 warn_add() { WARNINGS+=("$1"); }
 rec_add() { RECOMMENDED+=("$1|$2|$3|$4"); }
 
-[[ "$LEGACY_PG" == "1" || "$LEGACY_GCP" == "1" ]] && \
+[[ "$LEGACY_PENDING" == "1" ]] && \
   warn_add "legacy pre-split layout detected in $NS_AWS; the store and GCP bytes must be migrated"
+[[ "$LEGACY_PG_RETAINED" == "1" ]] && \
+  warn_add "legacy postgres retained in $NS_AWS (scaled to 0, not serving) as a rollback copy; remove it once verified: kubectl -n $NS_AWS delete $LEGACY_PG_OBJECT service postgres postgres-external pvc postgres-pvc"
+[[ "$LEGACY_GCP_RETAINED" == "1" ]] && \
+  warn_add "legacy GCP workload retained in $NS_AWS (scaled to 0, not serving); remove it once verified: kubectl -n $NS_AWS delete deployment jaiscloud-gcp service jaiscloud-gcp pvc jaiscloud-gcp-blobs-pvc"
 [[ "$AWS_PRESENT" == "1" && "$AWS_PRIVATE" == "1" ]] && \
   warn_add "the AWS substrate image '$AWS_IMAGE' points at a private/local registry"
 [[ "$GCP_PRESENT" == "1" && "$GCP_PRIVATE" == "1" ]] && \
@@ -437,6 +513,8 @@ SKEW_GCP=$(migration_skew_warning "$NS_GCP" jaiscloud-gcp)
 [[ -n "$SKEW_GCP" ]] && warn_add "GCP substrate crash-loops on store version skew: $SKEW_GCP"
 [[ "$MESH_NS" == "1" && "$MESH_GW" == "0" ]] && \
   warn_add "istio-system exists but Gateway/jaiscloud is missing; run the mesh scenario"
+[[ "$MESH_ISTIOD" == "1" ]] && \
+  warn_add "istiod is already installed; do not run \`istioctl install --set profile=minimal\` (it can replace the existing IOP); use the gateway-only overlay in deploy/k8s/istio/istiooperator-gateway-only.yaml"
 [[ "$STORE_DEPLOY" == "0" && -n "$STORE_PVC" ]] && \
   warn_add "pvc postgres-pvc exists in $NS_DATA but deployment/postgres is missing"
 for leak in ${LEAKS+"${LEAKS[@]}"}; do warn_add "$leak"; done
@@ -474,10 +552,10 @@ desired_state() {
   return 0
 }
 
-if [[ "$LEGACY_PG" == "1" || "$LEGACY_GCP" == "1" ]]; then
+if [[ "$LEGACY_PENDING" == "1" ]]; then
   rec_add "migrate-store" "SKIP_IMAGE_BUILD=1 deploy/deploy.sh --migrate-store --yes" \
-    "pre-split layout: move the store and the legacy GCP bytes (destructive; confirm first)" "false"
-elif [[ "$STORE_DEPLOY" == "0" && -z "$INSTALLED" ]]; then
+    "pre-split layout: move the store and the legacy GCP bytes (the legacy workload is kept scaled to 0)" "false"
+elif [[ "$STORE_PRESENT" == "0" && "$STORE_MODE" == "bundled" && -z "$INSTALLED" ]]; then
   # No recorded or inferred install: keep the original guidance.
   if [[ "$GCP_PRESENT" == "1" && "$AWS_PRESENT" == "0" ]]; then
     rec_add "deploy-gcp" "deploy/deploy.sh --gcp --yes" "store missing; install the GCP substrate (and the store)" "false"
@@ -486,7 +564,7 @@ elif [[ "$STORE_DEPLOY" == "0" && -z "$INSTALLED" ]]; then
     [[ "$GCP_PRESENT" == "0" ]] && \
       rec_add "deploy-gcp" "deploy/deploy.sh --gcp --yes" "install the GCP substrate as well (optional)" "true"
   fi
-elif [[ "$STORE_DEPLOY" == "0" ]]; then
+elif [[ "$STORE_PRESENT" == "0" && "$STORE_MODE" == "bundled" ]]; then
   # Installing either substrate brings the store; start with the first intended
   # cloud that the operator actually wants running (desired=absent is a
   # deliberate teardown, not a missing install).
@@ -540,9 +618,11 @@ if [[ "$JSON" == "1" ]]; then
   printf '    "%s": {"present": %s, "role": "%s"},\n' "$NS_GCP" "$(b "$NS_GCP_P")" "$(json_escape "$ROLE_GCP")"
   printf '    "%s": {"present": %s, "role": "%s"}\n' "$NS_DATA" "$(b "$NS_DATA_P")" "$(json_escape "$ROLE_DATA")"
   printf '  },\n'
-  printf '  "legacy": {"postgresInAws": %s, "gcpInAws": %s},\n' "$(b "$LEGACY_PG")" "$(b "$LEGACY_GCP")"
+  printf '  "legacy": {"postgresInAws": %s, "postgresStatefulSetInAws": %s, "gcpInAws": %s, "pending": %s, "postgresRetained": %s, "gcpRetained": %s},\n' \
+    "$(b "$LEGACY_PG")" "$(b "$LEGACY_PG_STS")" "$(b "$LEGACY_GCP")" "$(b "$LEGACY_PENDING")" "$(b "$LEGACY_PG_RETAINED")" "$(b "$LEGACY_GCP_RETAINED")"
   printf '  "store": {\n'
-  printf '    "present": %s, "ready": %s,\n' "$(b "$STORE_DEPLOY")" "$(b "$STORE_READY")"
+  printf '    "mode": "%s", "present": %s, "ready": %s,\n' \
+    "$STORE_MODE" "$(b "$STORE_PRESENT")" "$(b "$STORE_READY")"
   printf '    "pvc": {"name": "postgres-pvc", "namespace": "%s", "status": "%s", "capacity": "%s"},\n' \
     "$NS_DATA" "$(json_escape "$STORE_PVC")" "$(json_escape "$(pvc_capacity "$NS_DATA" postgres-pvc)")"
   printf '    "databases": {"jaiscloud": %s, "jaiscloud_gcp": %s}\n' "$(b "$DB_AWS")" "$(b "$DB_GCP")"
@@ -570,8 +650,8 @@ if [[ "$JSON" == "1" ]]; then
   done
   [[ "$first" -eq 0 ]] && printf '\n'
   printf '  ],\n'
-  printf '  "mesh": {"namespace": %s, "istiod": %s, "ingressGateway": %s, "tlsSecret": %s, "crds": %s, "gateway": %s, "virtualServices": %s, "destinationRules": %s, "address": "%s"},\n' \
-    "$(b "$MESH_NS")" "$(b "$MESH_ISTIOD")" "$(b "$MESH_GATEWAY")" "$(b "$MESH_SECRET")" "$(b "$MESH_CRD")" \
+  printf '  "mesh": {"namespace": %s, "istiod": %s, "existingInstall": %s, "ingressGateway": %s, "tlsSecret": %s, "crds": %s, "gateway": %s, "virtualServices": %s, "destinationRules": %s, "address": "%s"},\n' \
+    "$(b "$MESH_NS")" "$(b "$MESH_ISTIOD")" "$(b "$MESH_ISTIOD")" "$(b "$MESH_GATEWAY")" "$(b "$MESH_SECRET")" "$(b "$MESH_CRD")" \
     "$(b "$MESH_GW")" "${MESH_VS:-0}" "${MESH_DR:-0}" "$(json_escape "$MESH_ADDR")"
   printf '  "rbac": {"namespaceAdmin": %s, "admissionPolicy": %s, "serverVersion": "%s"},\n' \
     "$(b "$NAMESPACE_ADMIN_PRESENT")" "$(b "$VAP_PRESENT")" "$(json_escape "$SERVER_VERSION")"
@@ -606,13 +686,28 @@ else
     if ns_exists "$ns"; then ok_ "$ns  role=${role:-?} substrate=${sub:-–}"; else miss_ "$ns"; fi
   done
   head_ "layout"
-  [[ "$LEGACY_PG" == "1" ]] && warn_ "legacy postgres Deployment in $NS_AWS" || ok_ "no legacy store in $NS_AWS"
-  [[ "$LEGACY_GCP" == "1" ]] && warn_ "legacy GCP Deployment in $NS_AWS" || ok_ "no legacy GCP workload in $NS_AWS"
-  if [[ "$STORE_DEPLOY" == "1" ]]; then
-    ok_ "store: deployment/postgres ready=$([[ "$STORE_READY" == "1" ]] && echo yes || echo no), pvc=${STORE_PVC:-?}"
+  if [[ "$LEGACY_PG_RETAINED" == "1" ]]; then
+    ok_ "legacy $LEGACY_PG_OBJECT in $NS_AWS is retained (scaled to 0) as a rollback copy"
+  elif [[ "$LEGACY_PG" == "1" ]]; then
+    warn_ "legacy $LEGACY_PG_OBJECT in $NS_AWS"
+  else
+    ok_ "no legacy store in $NS_AWS"
+  fi
+  if [[ "$LEGACY_GCP_RETAINED" == "1" ]]; then
+    ok_ "legacy GCP workload in $NS_AWS is retained (scaled to 0); its bytes were copied"
+  elif [[ "$LEGACY_GCP" == "1" ]]; then
+    warn_ "legacy GCP workload in $NS_AWS"
+  else
+    ok_ "no legacy GCP workload in $NS_AWS"
+  fi
+  if [[ "$STORE_MODE" == "external" ]]; then
+    ok_ "store: mode=external (your server; no postgres Deployment, database probes skipped)"
+    say "  note    : store.ready=false / databases=false mean 'not probeable', not 'missing'"
+  elif [[ "$STORE_PRESENT" == "1" ]]; then
+    ok_ "store: mode=bundled deployment/postgres ready=$([[ "$STORE_READY" == "1" ]] && echo yes || echo no), pvc=${STORE_PVC:-?}"
     ok_ "databases: jaiscloud=$([[ "$DB_AWS" == "1" ]] && echo yes || echo no) jaiscloud_gcp=$([[ "$DB_GCP" == "1" ]] && echo yes || echo no)"
   else
-    miss_ "store: $NS_DATA/deployment/postgres"
+    miss_ "store: mode=bundled $NS_DATA/deployment/postgres"
   fi
   head_ "substrates"
   if [[ "$AWS_PRESENT" == "1" ]]; then

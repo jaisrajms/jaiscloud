@@ -144,31 +144,89 @@ routes, then the smoke. See the `mesh` scenario in `contract.playbook` and
 `SMOKE_PORT_FORWARD=1 scripts/istio-smoke.sh` (4 assertions; the first is the
 authority-preservation canary).
 
+On a cluster that **already has istiod**, do not run
+`istioctl install --set profile=minimal` (it can replace that cluster's
+IOP/meshConfig and prune components). Add only the gateway with the overlay:
+`istioctl install -f deploy/k8s/istio/istiooperator-gateway-only.yaml` (or
+`istioctl manifest generate -f … | kubectl apply -f -`). `deploy.sh --check`
+warns when istiod pre-exists (`mesh.existingInstall`) and names the overlay.
+
 The mesh covers `*.amazonaws.com`, `*.googleapis.com`, `*.run.app`,
 `*.cloudfunctions.net` over HTTP(S) only. It is not a Kafka path and not an
 in-substrate path.
 
 ## Scenario 4 — upgrading a pre-split install
 
-Detection is in the preflight (`legacy.*`). The migration is destructive and
-irreversible in the sense that the old store is replaced; the old PVCs are kept
-as rollback copies. **Confirm with the operator, then:**
+Detection is in the preflight (`legacy.*`; it probes `deployment/postgres` and
+`statefulset/postgres`, `legacy.pending` is the actionable flag, and
+`legacy.*Retained` marks a rollback copy). The migration is destructive
+towards the *old* store in the sense that the new store becomes authoritative,
+but the old workload and volumes are kept by default as rollback copies.
+**Confirm with the operator, then:**
 
 ```bash
 SKIP_IMAGE_BUILD=1 deploy/deploy.sh --migrate-store --yes
 # verify: a known row survives in both databases; an existing GCS object reads
-# back through the new pod; deploy.sh --check --json shows no legacy workloads
+# back through the new pod; deploy/deploy.sh --check --json shows no pending
+# legacy workloads (legacy.pending=false)
+kubectl -n jaiscloud delete deployment postgres service postgres postgres-external
 kubectl -n jaiscloud delete pvc postgres-pvc jaiscloud-gcp-blobs-pvc   # after verification
 ```
 
 What it does and what it keeps is in `contract.playbook.scenarios.upgrade-legacy`
-and `destructive`. The blob copy needs a pullable `busybox`; preload it, or set
+and `destructive`. The source is `deployment/postgres` or `statefulset/postgres`
+(override with `LEGACY_POSTGRES_WORKLOAD=deployment|statefulset/<name>`), in
+`LEGACY_NAMESPACE` (default `jaiscloud`). If the old store is outside the
+cluster, `LEGACY_DSN=postgres://…` dumps it from the **new** store pod after that
+pod is up — no legacy store workload is scaled or deleted in that mode (the
+emulators still stop before the dump).
+
+Deletion is opt-in: by default only the legacy Postgres is scaled to 0, and its
+Deployment/StatefulSet, Services and PVCs stay. `--delete-legacy` (or
+`DELETE_LEGACY=1`) removes the workload and the `postgres`/`postgres-external`
+Services after verifying the object carries `app=postgres`; a mismatch refuses
+unless `LEGACY_DELETE_FORCE=1`. No PVC is ever deleted by the migration.
+
+Object bytes move with `migrate_blobs`: the GCP claim when the legacy GCP
+emulator exists, and the AWS claim when `LEGACY_NAMESPACE` differs from the AWS
+namespace (a PVC cannot move namespaces). Override the claims with
+`LEGACY_GCP_BLOBS_PVC` / `NEW_GCP_BLOBS_PVC` / `LEGACY_AWS_BLOBS_PVC` /
+`NEW_AWS_BLOBS_PVC`. The blob copy needs a pullable `busybox`; preload it, or set
 `SKIP_BLOB_MIGRATE=1` and copy the claim yourself.
 
 If the new store already exists the command refuses — do **not** delete the new
-PVC unless you have confirmed it is disposable.
+PVC unless you have confirmed it is disposable (`MIGRATE_FORCE=1` overrides, and
+the restore then overwrites the schema in that volume).
 
-## Scenario 5 — park / resume / switch (keep the data, stop the compute)
+## Scenario 5 — bring your own store
+
+`deploy.sh` normally installs a bundled PostgreSQL (`postgres.yaml`) in
+`jaiscloud-data`. To use a server you already run, point the install at it:
+
+```bash
+deploy/deploy.sh --yes --store-dsn 'postgres://user:pass@db.example.com:5432/postgres'
+deploy/deploy.sh --gcp --yes --store-dsn 'postgres://user:pass@db.example.com:5432/postgres'
+# or environment: JAISCLOUD_STORE_DSN=… (JAISCLOUD_AWS_DSN / JAISCLOUD_GCP_DSN
+# override it per substrate and are what the substrate Secrets receive)
+```
+
+In this mode `postgres.yaml` is not applied. The databases (`jaiscloud`,
+`jaiscloud_gcp`) are created through a short-lived `psql` pod in
+`jaiscloud-data` (`STORE_INIT_IMAGE`, default `postgres:16-alpine`), and the
+substrate DSN Secrets (`jaiscloud-dsn`, `jaiscloud-gcp-dsn`) are overwritten with
+the external DSN, followed by a rollout restart. The base DSN's **database
+component is replaced** with `jaiscloud` / `jaiscloud_gcp` for those Secrets (one
+database per cloud); `JAISCLOUD_AWS_DSN` / `JAISCLOUD_GCP_DSN` are used verbatim
+when you need an exact per-substrate DSN. `namespace-data.yaml` is still
+applied: it holds the install record. The install record carries
+`store=bundled|external`, and the preflight reports `store.mode`.
+
+Limits: the preflight cannot probe an external server (no pod to exec), so
+`store.ready`/`store.databases.*` are `false` = "not probeable", not "missing".
+`--migrate-store` into an external target is **not supported yet** (it refuses
+before doing anything); dump/restore that server yourself.
+
+## Scenario 6 — park / resume / switch (keep the data, stop the compute)
 
 Park is the deliberate, compute-destructive, data-retentive mode: it terminates
 the substrate and every executor workload but keeps the database, the blobs and
@@ -203,7 +261,7 @@ installed from a build that has the park/resume API):
 GATE_ALLOW_LIFECYCLE=1 make test-lifecycle-k8s
 ```
 
-## Scenario 6 — your own build
+## Scenario 7 — your own build
 
 Build, deliver (push or `k3d image import`/`kind load`), then
 `JAISCLOUD_GCP_IMAGE=<image> deploy/deploy.sh --gcp --yes`. Dataproc also needs a
@@ -241,17 +299,27 @@ boundary). Namespaces the emulator creates are stamped with the instance ID and
 substrate, and the admission policy refuses a namespace request from a substrate
 ServiceAccount that does not carry its own identity.
 
+The namespace *names* are literal in the manifests (Namespace `name`,
+`namespace:` fields, DSN hostnames, and the ValidatingAdmissionPolicy's
+`system:serviceaccount:<namespace>:<sa>` usernames). `NS_AWS` / `NS_GCP` /
+`NS_DATA` exist for the gate scripts, and `deploy.sh` verifies the manifests
+against them on every mutating mode: a partial override is refused with the list
+of mismatches instead of acting on a half-renamed install. To run under custom
+names, edit those fields together and re-run `deploy/deploy.sh --check`.
+
 ## Tooling summary
 
 | Need | Command |
 |---|---|
 | read-only state | `deploy/deploy.sh --check [--json] [--substrate aws\|gcp\|both] [--desired aws=running,gcp=parked]` (`scripts/integration-preflight.sh`) |
 | install intent | preflight `intent.*`; record in ConfigMap `jaiscloud-data/jaiscloud-install` (written by `deploy.sh`) |
+| store mode | preflight `store.mode` (`bundled\|external`); install record key `store` |
 | the pack, from the binary | `jaiscloud-gcp agent-guide` / `--json` / `--emit DIR` (`--force` to overwrite) |
 | preview | `deploy/deploy.sh <mode> --plan` |
 | install AWS / GCP | `deploy/deploy.sh [--yes]` / `deploy/deploy.sh --gcp --yes` |
+| bring your own store | `deploy/deploy.sh --yes --store-dsn postgres://…` (`JAISCLOUD_STORE_DSN`, `JAISCLOUD_AWS_DSN`, `JAISCLOUD_GCP_DSN`) |
 | park / resume / switch (compute only) | `deploy/deploy.sh --park <aws\|gcp>` / `--resume <aws\|gcp>` / `--switch <aws\|gcp> --yes` |
-| migrate | `deploy/deploy.sh --migrate-store --yes` |
+| migrate (keep the legacy workload) | `deploy/deploy.sh --migrate-store --yes` (`--delete-legacy` removes the workload + Services, never a PVC) |
 | delete workloads (keep data) | `deploy/deploy.sh --delete [aws\|gcp\|both]` |
 | resets (destructive, scoped) | `--reset` (AWS) / `--gcp-reset` (GCP) |
 | namespace boundary | preflight `rbac.*`; `GATE_ALLOW_RBAC=1 KUBE_CONTEXT=<ctx> make test-rbac-isolation-k8s` (server-side dry runs, K8s >= 1.30) |

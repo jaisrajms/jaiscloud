@@ -30,7 +30,20 @@
 #   ./deploy/deploy.sh --migrate-store
 #                                   # one-time: move the pre-split store from
 #                                   # ns jaiscloud into jaiscloud-data, and the
-#                                   # old GCP object bytes into jaiscloud-gcp
+#                                   # old GCP object bytes into jaiscloud-gcp.
+#                                   # The legacy workload is SCALED TO 0 and kept
+#                                   # (Deployment/StatefulSet, Services, PVCs);
+#                                   # --delete-legacy removes it too.
+#   ./deploy/deploy.sh --migrate-store --delete-legacy
+#                                   # also delete the legacy postgres workload +
+#                                   # Services (only when it carries app=postgres;
+#                                   # LEGACY_DELETE_FORCE=1 overrides), never a PVC
+#   ./deploy/deploy.sh --store-dsn postgres://user:pass@host:5432/db
+#                                   # bring your own store: no postgres.yaml, the
+#                                   # databases are created via a psql pod and the
+#                                   # substrate DSN Secrets point at this server
+#                                   # (JAISCLOUD_STORE_DSN, JAISCLOUD_AWS_DSN,
+#                                   # JAISCLOUD_GCP_DSN)
 #   ./deploy/deploy.sh --delete [aws|gcp|both]
 #                                   # remove workloads only (default aws); keep every PVC and
 #                                   # PostgreSQL database. `both` does each substrate.
@@ -84,9 +97,41 @@ IMAGE="jaiscloud:latest"
 AWS_MANIFEST_IMAGE="jaisraj/jaiscloud-aws:latest"
 
 # One namespace per concern, so deleting a substrate never destroys the store.
-NAMESPACE_AWS="jaiscloud"
-NAMESPACE_GCP="jaiscloud-gcp"
-NAMESPACE_DATA="jaiscloud-data"
+# NS_AWS/NS_GCP/NS_DATA exist for the gate scripts (which run against scratch
+# namespaces), but the manifests name their namespaces literally. deploy.sh
+# therefore verifies the manifests agree with the configured names and refuses to
+# run on a mismatch (check_namespace_overrides) instead of operating on a mix.
+NAMESPACE_AWS="${NS_AWS:-jaiscloud}"
+NAMESPACE_GCP="${NS_GCP:-jaiscloud-gcp}"
+NAMESPACE_DATA="${NS_DATA:-jaiscloud-data}"
+
+# ── the store: bundled Postgres in NAMESPACE_DATA, or an external DSN ────────
+# --store-dsn / JAISCLOUD_STORE_DSN switches the install to "bring your own
+# store": postgres.yaml is not applied, the databases are created through a
+# short-lived psql pod, and the substrate DSN Secrets are overwritten with the
+# external DSN. JAISCLOUD_AWS_DSN / JAISCLOUD_GCP_DSN override it per substrate.
+STORE_DSN="${JAISCLOUD_STORE_DSN:-}"
+STORE_MODE="bundled" # bundled|external, set from STORE_DSN after arg parsing
+STORE_INIT_IMAGE="${STORE_INIT_IMAGE:-postgres:16-alpine}"
+
+# ── legacy store migration (--migrate-store) ────────────────────────────────
+# The tooling never deletes a workload it did not create unless the operator
+# asks for it and the object carries the expected label. Deletion is opt-in.
+DELETE_LEGACY="${DELETE_LEGACY:-0}"
+# LEGACY_POSTGRES_WORKLOAD: auto (deployment/postgres, then statefulset/postgres),
+# or an explicit "<kind>/<name>" such as statefulset/postgres.
+LEGACY_POSTGRES_WORKLOAD="${LEGACY_POSTGRES_WORKLOAD:-auto}"
+LEGACY_PG_USER="${LEGACY_PG_USER:-jaiscloud}"
+LEGACY_DSN="${LEGACY_DSN:-}"
+MIGRATE_FORCE="${MIGRATE_FORCE:-0}"
+LEGACY_DELETE_FORCE="${LEGACY_DELETE_FORCE:-0}"
+# Blob claims: the pre-split claim in the legacy namespace and the claim the new
+# substrate owns. The AWS pair only needs copying when the namespace changes
+# (LEGACY_NAMESPACE != NAMESPACE_AWS); the GCP pair is a namespace move too.
+LEGACY_AWS_BLOBS_PVC="${LEGACY_AWS_BLOBS_PVC:-jaiscloud-blobs-pvc}"
+NEW_AWS_BLOBS_PVC="${NEW_AWS_BLOBS_PVC:-jaiscloud-blobs-pvc}"
+LEGACY_GCP_BLOBS_PVC="${LEGACY_GCP_BLOBS_PVC:-jaiscloud-gcp-blobs-pvc}"
+NEW_GCP_BLOBS_PVC="${NEW_GCP_BLOBS_PVC:-${GCP_BLOBS_PVC:-jaiscloud-gcp-blobs-pvc}}"
 
 # PVCs owned by the AWS substrate. `--delete` keeps these (and everything in the
 # other two namespaces); `--reset` removes them with the AWS namespace.
@@ -138,17 +183,41 @@ Usage:
                                   and wait for its rollout
   ./deploy/deploy.sh --migrate-store
                                   ONE-TIME upgrade from the pre-split layout: dump
-                                  database `jaiscloud` from ns jaiscloud/deployment/
-                                  postgres and restore it into the new store in
+                                  database `jaiscloud` from the legacy store
+                                  (deployment/postgres, or statefulset/postgres,
+                                  in LEGACY_NAMESPACE; or the LEGACY_DSN server)
+                                  and restore it into the new store in
                                   jaiscloud-data (both databases, so pre-split GCP
                                   state travels). If the old GCP emulator ran in
-                                  the jaiscloud namespace, it is stopped, its
-                                  object bytes are copied to
-                                  jaiscloud-gcp/jaiscloud-gcp-blobs-pvc and the old
-                                  workload is removed (SKIP_BLOB_MIGRATE=1 copies
-                                  by hand; BLOB_MIGRATE_IMAGE overrides busybox).
-                                  Keeps both old PVCs as rollback copies, and
-                                  refuses when the new postgres-pvc already exists.
+                                  the legacy namespace, its object bytes are
+                                  copied to jaiscloud-gcp/jaiscloud-gcp-blobs-pvc.
+                                  By default the legacy Postgres is only SCALED
+                                  TO 0: its Deployment/StatefulSet, Services and
+                                  PVCs are kept, and the command prints how to
+                                  remove them later. --delete-legacy (or
+                                  DELETE_LEGACY=1) deletes the workload and the
+                                  postgres/postgres-external Services after
+                                  checking they carry app=postgres; a PVC is
+                                  never deleted. SKIP_BLOB_MIGRATE=1 copies by
+                                  hand, BLOB_MIGRATE_IMAGE overrides busybox.
+                                  Refuses when the new postgres-pvc already
+                                  exists unless MIGRATE_FORCE=1.
+  ./deploy/deploy.sh --migrate-store --delete-legacy
+                                  With --migrate-store: opt into removing the
+                                  legacy Postgres workload and Services.
+  ./deploy/deploy.sh --store-dsn <dsn>
+                                  Bring your own store (JAISCLOUD_STORE_DSN does
+                                  the same): do not apply postgres.yaml, create
+                                  the databases through a short-lived psql pod in
+                                  jaiscloud-data, and overwrite the substrate DSN
+                                  Secrets. The base DSN's database component is
+                                  replaced with `jaiscloud` / `jaiscloud_gcp` for
+                                  the Secrets (one database per cloud);
+                                  JAISCLOUD_AWS_DSN / JAISCLOUD_GCP_DSN are used
+                                  verbatim for an exact per-substrate DSN.
+                                  --migrate-store with an external target is NOT
+                                  supported (the pre-split migration needs the
+                                  bundled store it is moving into).
   ./deploy/deploy.sh --delete [aws|gcp|both]
                                   Remove workloads only (default aws): the Deployment,
                                   Service and DSN Secret (AWS keeps its ConfigMap); every
@@ -195,6 +264,10 @@ Usage:
                                   (running|parked|absent).
   --plan                          Print the kubectl/docker/psql commands this mode would
                                   run, then exit 0 without executing them.
+  --store-dsn <dsn>               Bring your own store (see above; also
+                                  JAISCLOUD_STORE_DSN).
+  --delete-legacy                 With --migrate-store: remove the legacy Postgres
+                                  workload and Services (label-checked; never a PVC).
   --skip-build                    Do not run `docker build`; deploy the image already
                                   imported into the cluster (SKIP_IMAGE_BUILD=1). Useful
                                   with `k3d image import` and other CI paths.
@@ -209,6 +282,41 @@ Environment:
                                   emulator's /_jaiscloud hook returns a non-2xx
                                   (the scale/teardown still runs; the endpoint is
                                   reached through a free port in 18080-18089)
+  JAISCLOUD_STORE_DSN             External store DSN, same as --store-dsn
+                                  (its database component is replaced per cloud
+                                  for the substrate Secrets)
+  JAISCLOUD_AWS_DSN               Exact DSN for the AWS DSN Secret (verbatim,
+                                  overrides the rewritten STORE_DSN)
+  JAISCLOUD_GCP_DSN               Exact DSN for the GCP DSN Secret (verbatim)
+  STORE_INIT_IMAGE                Image for the external-store psql pod
+                                  (default postgres:16-alpine)
+  LEGACY_NAMESPACE                Namespace holding the pre-split store
+                                  (default the AWS namespace)
+  LEGACY_POSTGRES_WORKLOAD        auto (default), deployment/postgres or
+                                  statefulset/postgres
+  LEGACY_DSN                      Dump this server from the NEW store pod instead
+                                  of a legacy workload (nothing legacy is scaled or
+                                  deleted); postgres:// or postgresql://
+  LEGACY_PG_USER                  Role for the legacy-workload dump (default jaiscloud)
+  LEGACY_GCP_BLOBS_PVC            Legacy GCP claim (default jaiscloud-gcp-blobs-pvc)
+  NEW_GCP_BLOBS_PVC               New GCP claim (default jaiscloud-gcp-blobs-pvc)
+  LEGACY_AWS_BLOBS_PVC            Legacy AWS claim (default jaiscloud-blobs-pvc)
+  NEW_AWS_BLOBS_PVC               New AWS claim (default jaiscloud-blobs-pvc)
+  DELETE_LEGACY=1                 Same as --delete-legacy
+  LEGACY_DELETE_FORCE=1           Delete the legacy workload even without
+                                  label app=postgres (DANGEROUS)
+  MIGRATE_FORCE=1                 With --migrate-store: proceed when the new
+                                  postgres-pvc already exists
+  SKIP_BLOB_MIGRATE=1             Do not copy blob claims
+  BLOB_MIGRATE_IMAGE              Helper image for the blob copy (default
+                                  busybox:1.36)
+  NS_AWS / NS_GCP / NS_DATA       Namespace names (defaults: jaiscloud,
+                                  jaiscloud-gcp, jaiscloud-data). The manifests
+                                  name their namespaces literally, so a custom
+                                  value requires editing them too: deploy.sh
+                                  verifies Namespace names, namespace: fields,
+                                  the DSN hostnames and the VAP ServiceAccount
+                                  usernames and refuses on any mismatch.
 
 Reset semantics (both are database-scoped, never store-wide):
   --reset      drops only the AWS database `jaiscloud` (and the AWS blobs PVC)
@@ -672,10 +780,139 @@ psql_admin() {
     psql -U jaiscloud -v ON_ERROR_STOP=1 -d postgres "$@"
 }
 
+# dsn_with_db <dsn> <database> — the same server/user/password/options with the
+# database component replaced. psql takes the target database either as one
+# conninfo string or as -d, not both, so psql_external rewrites the DSN instead
+# of passing "-d" alongside it.
+dsn_with_db() {
+  local dsn=$1 db=$2 scheme rest authority path query=""
+  scheme="${dsn%%://*}"
+  rest="${dsn#*://}"
+  authority="${rest%%/*}"
+  path=""
+  [[ "$rest" == */* ]] && path="${rest#*/}"
+  if [[ "$path" == *"?"* ]]; then
+    query="?${path#*\?}"
+    path="${path%%\?*}"
+  fi
+  printf '%s://%s/%s%s' "$scheme" "$authority" "$db" "$query"
+}
+
+# psql_external [-d <db>] [--dsn <dsn>] <psql args...> — run psql from a
+# short-lived pod in NAMESPACE_DATA (the substrate namespaces cannot reach an
+# external server, and the store namespace already exists for the install
+# record). The pod is removed on exit (--rm --restart=Never). The DSN defaults
+# to STORE_DSN; --dsn carries the per-substrate override when one is configured.
+psql_external() {
+  local db="" dsn="$STORE_DSN" args=()
+  while (($#)); do
+    case "$1" in
+      -d) db="${2:-}"; shift 2 || shift ;;
+      -d*) db="${1#-d}"; shift ;;
+      --dsn) dsn="${2:-}"; shift 2 || shift ;;
+      --dsn=*) dsn="${1#--dsn=}"; shift ;;
+      *) args+=("$1"); shift ;;
+    esac
+  done
+  [[ -n "$db" ]] && dsn=$(dsn_with_db "$dsn" "$db")
+  kubectl -n "$NAMESPACE_DATA" run "jaiscloud-store-init-$$" --rm -i --restart=Never \
+    --labels=app=jaiscloud-store-init --image="$STORE_INIT_IMAGE" -- \
+    psql "$dsn" -v ON_ERROR_STOP=1 ${args+"${args[@]}"}
+}
+
+# store_dsn_for_db <db> — the DSN that owns a database: the per-substrate
+# override when set (JAISCLOUD_AWS_DSN / JAISCLOUD_GCP_DSN), else STORE_DSN.
+store_dsn_for_db() {
+  case "$1" in
+    "$AWS_DB") external_dsn aws ;;
+    "$GCP_DB") external_dsn gcp ;;
+    *) printf '%s' "$STORE_DSN" ;;
+  esac
+}
+
+# ensure_data_namespace — an external store still needs NAMESPACE_DATA: it holds
+# the install record and the psql helper pod runs there. The module is applied in
+# every install path anyway; this makes the reset paths explicit.
+ensure_data_namespace() {
+  kubectl apply -f "$K8S_DIR/namespace-data.yaml"
+}
+
+# external_dsn <aws|gcp> — the DSN that substrate's Secret must carry. A
+# per-substrate override (JAISCLOUD_AWS_DSN / JAISCLOUD_GCP_DSN) is used verbatim;
+# otherwise the base DSN's database component is replaced with that substrate's
+# database, so the two substrates keep the one-database-per-cloud invariant on a
+# shared external server.
+external_dsn() {
+  case "$1" in
+    aws)
+      if [[ -n "${JAISCLOUD_AWS_DSN:-}" ]]; then printf '%s' "$JAISCLOUD_AWS_DSN"
+      else dsn_with_db "$STORE_DSN" "$AWS_DB"; fi ;;
+    gcp)
+      if [[ -n "${JAISCLOUD_GCP_DSN:-}" ]]; then printf '%s' "$JAISCLOUD_GCP_DSN"
+      else dsn_with_db "$STORE_DSN" "$GCP_DB"; fi ;;
+    *) die "external_dsn: unknown substrate '$1'" ;;
+  esac
+}
+
+# external_host <dsn> — host[:port] only, never the credentials (for messages).
+external_host() {
+  local rest="${1#*://}"
+  rest="${rest##*@}"
+  printf '%s' "${rest%%[/?]*}"
+}
+
+# apply_external_dsn_secret <aws|gcp> — point the substrate's DSN Secret at the
+# external server. Substrate manifests declare that Secret with the bundled DSN,
+# so this runs AFTER the manifest apply and the Deployment is restarted: env
+# values are resolved when the pod is created, so an in-place Secret update alone
+# would leave a crash-looping pod on the old DSN.
+apply_external_dsn_secret() {
+  local cloud=$1 ns secret dsn
+  substrate_vars "$cloud"
+  ns=$NS
+  if [[ "$cloud" == "aws" ]]; then secret="jaiscloud-dsn"; else secret="jaiscloud-gcp-dsn"; fi
+  dsn=$(external_dsn "$cloud")
+  [[ -n "$dsn" ]] || die "no external DSN for '$cloud' — set --store-dsn/JAISCLOUD_STORE_DSN (or JAISCLOUD_${cloud^^}_DSN)"
+  case "$dsn" in
+    postgres://*|postgresql://*) ;;
+    *) die "JAISCLOUD_${cloud^^}_DSN must start with postgres:// or postgresql://" ;;
+  esac
+  info "Pointing $ns/secret/$secret at the external store..."
+  kubectl -n "$ns" create secret generic "$secret" \
+    --from-literal=dsn="$dsn" --dry-run=client -o yaml | kubectl apply -f - >/dev/null
+  kubectl -n "$ns" annotate secret "$secret" jaiscloud.io/store=external --overwrite >/dev/null
+  if kubectl -n "$ns" get deployment "$DEPLOY" &>/dev/null; then
+    kubectl -n "$ns" rollout restart deployment/"$DEPLOY" >/dev/null
+  fi
+}
+
+# ensure_store — bring up the store the install needs. Bundled: namespace-data +
+# postgres.yaml and wait for the rollout. External: only namespace-data (the
+# external server is the operator's).
+ensure_store() {
+  ensure_data_namespace
+  if [[ "$STORE_MODE" == "external" ]]; then
+    info "External store configured — not applying postgres.yaml."
+    return 0
+  fi
+  kubectl apply -f "$K8S_DIR/postgres.yaml"
+  wait_for_rollout "$POSTGRES_DEPLOYMENT" "$NAMESPACE_DATA"
+}
+
 # reset_database <db> — DROP (FORCE terminates sessions) + CREATE the database,
-# keeping the Postgres server, its PVC and every other database intact.
+# keeping the Postgres server, its PVC and every other database intact. With an
+# external store the statements run from a helper pod against STORE_DSN.
 reset_database() {
   local db=$1
+  if [[ "$STORE_MODE" == "external" ]]; then
+    ensure_data_namespace
+    info "Dropping and recreating database '$db' on the external store (server, other databases intact)..."
+    psql_external --dsn "$(store_dsn_for_db "$db")" -d postgres \
+      -c "DROP DATABASE IF EXISTS $db WITH (FORCE)" \
+      -c "CREATE DATABASE $db"
+    ok "Database '$db' recreated on the external store."
+    return 0
+  fi
   if ! postgres_deployed; then
     if kubectl -n "$NAMESPACE_DATA" get pvc "$POSTGRES_PVC" &>/dev/null; then
       die "deployment/postgres is missing in $NAMESPACE_DATA but pvc/$POSTGRES_PVC exists — deploy the stack first (./deploy/deploy.sh) so the '$db' database can be dropped"
@@ -695,9 +932,23 @@ reset_database() {
 # (`POSTGRES_DB=jaiscloud`, on a fresh volume) and declares no initdb script, so
 # every other database is created explicitly. For `jaiscloud_gcp` this must
 # happen before the GCP pod starts: a missing DSN target is fatal at startup.
-# Idempotent.
+# Idempotent. With an external store the check creates the database on that
+# server and refuses when it is unreachable (a missing target stays fatal).
 ensure_database() {
   local db=$1 exists
+  if [[ "$STORE_MODE" == "external" ]]; then
+    ensure_data_namespace
+    exists=$(psql_external --dsn "$(store_dsn_for_db "$db")" -d postgres -tAc "SELECT 1 FROM pg_database WHERE datname='$db'" | tr -d '[:space:]') \
+      || die "cannot reach the external store through STORE_DSN — is the server up and the DSN correct?"
+    if [[ "$exists" == "1" ]]; then
+      ok "Database '$db' already exists on the external store."
+      return 0
+    fi
+    info "Creating database '$db' on the external store..."
+    psql_external --dsn "$(store_dsn_for_db "$db")" -d postgres -c "CREATE DATABASE $db"
+    ok "Database '$db' created on the external store."
+    return 0
+  fi
   if ! postgres_deployed; then
     warn "deployment/postgres not found in $NAMESPACE_DATA — skipping database bootstrap for '$db'."
     return 0
@@ -739,6 +990,66 @@ server_minor() {
     minor=$(printf '%s' "$raw" | tr -d '[:space:]' | sed -n 's/.*"minor":"\([^"]*\)".*/\1/p')
   fi
   printf '%s' "${minor//[!0-9]/}"
+}
+
+# manifest_namespace_name <file> — metadata.name of the Namespace document.
+manifest_namespace_name() {
+  sed -n '/^kind: Namespace$/,/^---$/p' "$1" \
+    | sed -n 's/^  name:[[:space:]]*\(.*\)$/\1/p' | head -1
+}
+
+# manifest_namespace_fields <file> — every `namespace: <value>` in the file,
+# one per line, de-duplicated.
+manifest_namespace_fields() {
+  sed -n 's/^[[:space:]]*namespace:[[:space:]]*\([^[:space:]]*\).*$/\1/p' "$1" \
+    | sort -u
+}
+
+# check_namespace_overrides — NS_AWS/NS_GCP/NS_DATA must agree with the
+# manifests. The Namespace names, every `namespace:` field and the DSN hostnames
+# are literals, and the ValidatingAdmissionPolicy matches the ServiceAccount
+# usernames `system:serviceaccount:<NS_AWS>:jaiscloud` and
+# `system:serviceaccount:<NS_GCP>:jaiscloud-gcp`. A partial NS_* override would
+# silently mix the requested name with the shipped one, so refuse with the exact
+# edits instead of operating on a half-renamed install.
+check_namespace_overrides() {
+  local problems=() spec file expected got dep
+  for spec in "namespace-aws.yaml:$NAMESPACE_AWS" \
+              "namespace-gcp.yaml:$NAMESPACE_GCP" \
+              "namespace-data.yaml:$NAMESPACE_DATA"; do
+    file=${spec%%:*}; expected=${spec#*:}
+    got=$(manifest_namespace_name "$K8S_DIR/$file")
+    [[ "$got" == "$expected" ]] || \
+      problems+=("$file declares Namespace '${got:-<none>}', not '$expected'")
+  done
+  for spec in "rbac-aws.yaml:$NAMESPACE_AWS" "jaiscloud.yaml:$NAMESPACE_AWS" \
+              "rbac-gcp.yaml:$NAMESPACE_GCP" "jaiscloud-gcp.yaml:$NAMESPACE_GCP" \
+              "postgres.yaml:$NAMESPACE_DATA"; do
+    file=${spec%%:*}; expected=${spec#*:}
+    got=$(manifest_namespace_fields "$K8S_DIR/$file")
+    if [[ -z "$got" ]]; then
+      problems+=("$file declares no 'namespace:' field (expected '$expected')")
+    elif [[ "$got" != "$expected" ]]; then
+      problems+=("$file uses namespace: $(printf '%s\n' "$got" | tr '\n' ' ')— expected only '$expected'")
+    fi
+  done
+  # The policy is cluster-scoped but matches the substrate ServiceAccount
+  # usernames, which embed both substrate namespaces.
+  for dep in "system:serviceaccount:$NAMESPACE_AWS:jaiscloud" \
+             "system:serviceaccount:$NAMESPACE_GCP:jaiscloud-gcp"; do
+    grep -qF "$dep" "$K8S_DIR/rbac-admission-policy.yaml" || \
+      problems+=("rbac-admission-policy.yaml does not match '$dep' (edited NS_* needs the VAP usernames updated)")
+  done
+  # The DSN hostnames embed the store namespace.
+  for file in jaiscloud.yaml jaiscloud-gcp.yaml postgres.yaml; do
+    grep -qF "$NAMESPACE_DATA" "$K8S_DIR/$file" || \
+      problems+=("$file has no reference to the store namespace '$NAMESPACE_DATA' (DSN hostnames)")
+  done
+  if ((${#problems[@]})); then
+    warn "namespace override mismatch (NS_AWS=$NAMESPACE_AWS NS_GCP=$NAMESPACE_GCP NS_DATA=$NAMESPACE_DATA):"
+    for spec in "${problems[@]}"; do warn "  - $spec"; done
+    die "custom namespaces require editing the manifests: the Namespace 'name' fields, the 'namespace:' fields, the DSN hostnames and the ValidatingAdmissionPolicy ServiceAccount usernames. Refusing to operate on a mix of defaults and overrides."
+  fi
 }
 
 # require_isolation_prereqs — refuse to install where the dual-substrate boundary
@@ -789,21 +1100,23 @@ retire_legacy_namespace_binding() {
   fi
 }
 
-# apply_aws — the store first (namespace-data.yaml + postgres.yaml), then the
-# AWS namespace and its RBAC (rbac-shared.yaml declares the ClusterRole the
-# bindings reference; rbac-aws.yaml declares the ServiceAccount and both
-# bindings), and only then the deployment that runs as that identity. No GCP
-# object is created by an AWS-only install.
+# apply_aws — the store first (namespace-data.yaml + postgres.yaml for a bundled
+# store), then the AWS namespace and its RBAC (rbac-shared.yaml declares the
+# ClusterRole the bindings reference; rbac-aws.yaml declares the ServiceAccount
+# and both bindings), and only then the deployment that runs as that identity. No
+# GCP object is created by an AWS-only install.
 apply_aws() {
   require_isolation_prereqs
   apply_isolation_policy
-  kubectl apply -f "$K8S_DIR/namespace-data.yaml"
-  kubectl apply -f "$K8S_DIR/postgres.yaml"
+  ensure_store
+  ensure_database "$AWS_DB"
   kubectl apply -f "$K8S_DIR/namespace-aws.yaml"
   kubectl apply -f "$K8S_DIR/rbac-shared.yaml"
   kubectl apply -f "$K8S_DIR/rbac-aws.yaml"
   retire_legacy_namespace_binding aws
   kubectl apply -f "$K8S_DIR/jaiscloud.yaml"
+  [[ "$STORE_MODE" == "external" ]] && apply_external_dsn_secret aws
+  record_store "$STORE_MODE"
 }
 
 # AWS reset re-applies only the AWS-side objects: postgres.yaml lives entirely
@@ -887,8 +1200,10 @@ csv_set() {
 # `installed` (unless add=0, for a teardown of a cloud that was never installed)
 # and set its `desired` state. Never creates the store namespace just to record
 # intent; a cluster without jaiscloud-data gets a warning.
+# The `store` key (bundled|external) is preserved across intent writes and
+# defaulted from STORE_MODE when the record does not carry it yet.
 record_intent() {
-  local cloud=$1 state=$2 add=${3:-1} installed desired
+  local cloud=$1 state=$2 add=${3:-1} installed desired store
   if ! kubectl get namespace "$NAMESPACE_DATA" &>/dev/null; then
     warn "namespace $NAMESPACE_DATA does not exist — not recording install intent for '$cloud'"
     return 0
@@ -901,15 +1216,49 @@ record_intent() {
   fi
   desired=$(install_record_field desired)
   desired=$(csv_set "$desired" "$cloud" "$state")
+  store=$(install_record_field store)
+  [[ -n "$store" ]] || store="$STORE_MODE"
+  write_install_record "$installed" "$desired" "$store"
+}
+
+# record_store <bundled|external> — record how the store is provided. Kept in the
+# same ConfigMap as the intent so the preflight can explain an external store
+# (no deployment/postgres, database probes skipped) instead of calling it missing.
+record_store() {
+  local mode=$1 installed desired
+  if ! kubectl get namespace "$NAMESPACE_DATA" &>/dev/null; then
+    return 0
+  fi
+  installed=$(install_record_field installed)
+  desired=$(install_record_field desired)
+  write_install_record "$installed" "$desired" "$mode"
+}
+
+# write_install_record <installed> <desired> <store> — merge the three keys into
+# the install ConfigMap (create or patch; the record is deploy.sh's alone).
+write_install_record() {
+  local installed=$1 desired=$2 store=$3
   if ! kubectl -n "$NAMESPACE_DATA" create configmap "$INSTALL_CONFIGMAP" \
       --from-literal=schema=1 \
       --from-literal=installed="$installed" \
       --from-literal=desired="$desired" \
+      --from-literal=store="$store" \
       --dry-run=client -o yaml | kubectl apply -f - >/dev/null; then
     warn "could not write the install record $NAMESPACE_DATA/$INSTALL_CONFIGMAP — the preflight will fall back to inference"
     return 0
   fi
-  info "Install record ($NAMESPACE_DATA/$INSTALL_CONFIGMAP): installed=$installed desired=$desired"
+  info "Install record ($NAMESPACE_DATA/$INSTALL_CONFIGMAP): installed=${installed:--} desired=${desired:--} store=$store"
+}
+
+# print_endpoints — the endpoints and the next safe commands.
+# store_mode_from_record — adopt the recorded store mode when this invocation did
+# not configure one (park/resume/delete/switch), so the printed next steps do not
+# describe a bundled Postgres on an external-store install.
+store_mode_from_record() {
+  [[ -n "$STORE_DSN" ]] && return 0
+  local store
+  store=$(install_record_field store 2>/dev/null || true)
+  case "$store" in bundled|external) STORE_MODE="$store" ;; esac
 }
 
 print_endpoints() {
@@ -938,7 +1287,11 @@ print_endpoints() {
   # ports; the front door is the external HTTP surface).
   echo "  GCP substrate : kubectl port-forward -n $NAMESPACE_GCP svc/jaiscloud-gcp 8080:8080 8081:8081"
   echo "                  (namespace $NAMESPACE_GCP: REST :8080, gRPC :8081)"
-  echo "  Postgres      : postgres.$NAMESPACE_DATA.svc.cluster.local:5432  (nodePort 30543)"
+  if [[ "$STORE_MODE" == "external" ]]; then
+    echo "  Store         : external PostgreSQL (DSN from --store-dsn / JAISCLOUD_STORE_DSN)"
+  else
+    echo "  Postgres      : postgres.$NAMESPACE_DATA.svc.cluster.local:5432  (nodePort 30543)"
+  fi
   echo ""
   echo "  Remove the AWS workloads (keep data) : $0 --delete"
   echo "  Reset the AWS substrate (its db+PVC): $0 --reset"
@@ -974,6 +1327,11 @@ while (($#)); do
     --gcp)           MODE="gcp" ;;
     --gcp-reset)     MODE="gcp-reset" ;;
     --migrate-store) MODE="migrate-store" ;;
+    --delete-legacy) DELETE_LEGACY=1 ;;
+    --store-dsn)     [[ -n "${2:-}" ]] || die "--store-dsn needs a DSN (postgres:// or postgresql://)"
+                     STORE_DSN="$2"; shift ;;
+    --store-dsn=*)   STORE_DSN="${1#*=}"
+                     [[ -n "$STORE_DSN" ]] || die "--store-dsn= needs a DSN (postgres:// or postgresql://)" ;;
     --check)         MODE="check" ;;
     --json)          PREFLIGHT_JSON=1 ;;
     --strict)        PREFLIGHT_STRICT=1 ;;
@@ -1008,6 +1366,21 @@ case "$MODE" in
     esac ;;
 esac
 
+# ── store mode: the bundled Postgres, or a server you bring ─────────────────
+if [[ -n "$STORE_DSN" ]]; then
+  case "$STORE_DSN" in
+    postgres://*|postgresql://*) ;;
+    *) die "--store-dsn/JAISCLOUD_STORE_DSN must start with postgres:// or postgresql://" ;;
+  esac
+  STORE_MODE="external"
+fi
+if [[ "$DELETE_LEGACY" == "1" && "$MODE" != "migrate-store" ]]; then
+  die "--delete-legacy is only valid with --migrate-store"
+fi
+if [[ "$MODE" == "migrate-store" && "$STORE_MODE" == "external" ]]; then
+  die "--migrate-store moves a pre-split store INTO the bundled store in $NAMESPACE_DATA; an external store target is not supported yet. Run the migration without --store-dsn (or dump/restore the server yourself)."
+fi
+
 # ── --check: read-only inspection (never mutates) ───────────────────────────
 
 if [[ "$MODE" == "check" ]]; then
@@ -1028,7 +1401,25 @@ plan() { printf '  + %s\n' "$*"; }
 #   intent transition instead of a fixed document.
 plan_install_record() {
   plan "kubectl -n $NAMESPACE_DATA get configmap $INSTALL_CONFIGMAP -o jsonpath='{.data}'   # merge installed += $1"
-  plan "kubectl -n $NAMESPACE_DATA create configmap $INSTALL_CONFIGMAP --from-literal=schema=1 --from-literal=installed=<merged> --from-literal=desired=<merged, $2> --dry-run=client -o yaml | kubectl apply -f -"
+  plan "kubectl -n $NAMESPACE_DATA create configmap $INSTALL_CONFIGMAP --from-literal=schema=1 --from-literal=installed=<merged> --from-literal=desired=<merged, $2> --from-literal=store=$STORE_MODE --dry-run=client -o yaml | kubectl apply -f -"
+}
+
+# plan_store <cloud> — the store half of an install: bundled applies postgres.yaml
+# and creates the database inside it; external skips the Deployment and runs the
+# CREATE/DROP through a psql pod against the DSN.
+plan_store() {
+  local cloud=$1 ns secret
+  if [[ "$cloud" == "aws" ]]; then ns=$NAMESPACE_AWS; secret="jaiscloud-dsn"
+  else ns=$NAMESPACE_GCP; secret="jaiscloud-gcp-dsn"; fi
+  if [[ "$STORE_MODE" == "external" ]]; then
+    plan "# external store ($cloud): do NOT apply postgres.yaml (namespace-data.yaml is still applied for the install record)"
+    plan "kubectl -n $NAMESPACE_DATA run jaiscloud-store-init-<pid> --rm -i --restart=Never --image=$STORE_INIT_IMAGE -- psql <external DSN> -v ON_ERROR_STOP=1 -d postgres -c 'SELECT 1 FROM pg_database ...' || CREATE DATABASE"
+    plan "# after the substrate manifests: kubectl -n $ns create secret generic $secret --from-literal=dsn=<external DSN> --dry-run=client -o yaml | kubectl apply -f - ; rollout restart"
+  else
+    plan "kubectl apply -f $K8S_DIR/postgres.yaml"
+    plan "kubectl -n $NAMESPACE_DATA rollout status deployment/postgres --timeout=120s"
+    plan "kubectl -n $NAMESPACE_DATA exec deploy/postgres -- psql ... 'SELECT 1 ... database' || CREATE DATABASE"
+  fi
 }
 
 # plan_lifecycle_park <cloud> / plan_lifecycle_resume <cloud> — the exact steps
@@ -1067,6 +1458,7 @@ plan_lifecycle_resume() {
 print_plan() {
   local mode=$1
   info "Plan for mode '$mode' (nothing is executed)"
+  plan "check namespaces $NAMESPACE_AWS / $NAMESPACE_GCP / $NAMESPACE_DATA against the manifests (Namespace names, namespace: fields, DSN hostnames, VAP usernames)"
   case "$mode" in
     deploy)
       if [[ "$SKIP_IMAGE_BUILD" == "1" ]]; then
@@ -1078,66 +1470,88 @@ print_plan() {
       fi
       plan "kubectl apply -f $K8S_DIR/rbac-admission-policy.yaml   # namespace isolation (K8s >= 1.30)"
       plan "kubectl apply -f $K8S_DIR/namespace-data.yaml"
-      plan "kubectl apply -f $K8S_DIR/postgres.yaml"
+      plan_store "aws"
       plan "kubectl apply -f $K8S_DIR/namespace-aws.yaml"
       plan "kubectl apply -f $K8S_DIR/rbac-shared.yaml"
       plan "kubectl apply -f $K8S_DIR/rbac-aws.yaml"
       plan "kubectl apply -f $K8S_DIR/jaiscloud.yaml"
-      plan "kubectl -n $NAMESPACE_DATA rollout status deployment/postgres --timeout=120s"
+      if [[ "$STORE_MODE" == "external" ]]; then
+        plan "kubectl -n $NAMESPACE_AWS create secret generic jaiscloud-dsn --from-literal=dsn=<external DSN> --dry-run=client -o yaml | kubectl apply -f -; kubectl -n $NAMESPACE_AWS rollout restart deployment/jaiscloud"
+      fi
       plan "kubectl -n $NAMESPACE_AWS rollout status deployment/jaiscloud --timeout=120s"
       plan_install_record "aws" "aws=running"
       ;;
     gcp)
       plan "kubectl apply -f $K8S_DIR/rbac-admission-policy.yaml   # namespace isolation (K8s >= 1.30)"
       plan "kubectl apply -f $K8S_DIR/namespace-data.yaml"
-      plan "kubectl apply -f $K8S_DIR/postgres.yaml"
+      plan_store "gcp"
       plan "kubectl apply -f $K8S_DIR/namespace-gcp.yaml"
       plan "kubectl apply -f $K8S_DIR/rbac-shared.yaml"
       plan "kubectl apply -f $K8S_DIR/rbac-gcp.yaml"
-      plan "kubectl -n $NAMESPACE_DATA rollout status deployment/postgres --timeout=120s"
-      plan "kubectl -n $NAMESPACE_DATA exec deploy/postgres -- psql ... 'SELECT 1 ... jaiscloud_gcp' || CREATE DATABASE jaiscloud_gcp"
       plan "kubectl apply -f $K8S_DIR/jaiscloud-gcp.yaml"
+      if [[ "$STORE_MODE" == "external" ]]; then
+        plan "kubectl -n $NAMESPACE_GCP create secret generic jaiscloud-gcp-dsn --from-literal=dsn=<external DSN> --dry-run=client -o yaml | kubectl apply -f -; kubectl -n $NAMESPACE_GCP rollout restart deployment/jaiscloud-gcp"
+      fi
       [[ -n "${JAISCLOUD_GCP_IMAGE:-}" ]] && plan "kubectl -n $NAMESPACE_GCP set image deployment/jaiscloud-gcp jaiscloud-gcp=$JAISCLOUD_GCP_IMAGE"
       plan "kubectl -n $NAMESPACE_GCP rollout status deployment/jaiscloud-gcp --timeout=180s"
       plan_install_record "gcp" "gcp=running"
       ;;
     migrate-store)
-      local OLD_NS="${LEGACY_NAMESPACE:-$NAMESPACE_AWS}"
-      plan "kubectl -n $NAMESPACE_AWS scale deployment jaiscloud --replicas=0   # when present"
-      plan "kubectl -n $OLD_NS scale deployment postgres --replicas=0            # legacy GCP too, when present"
-      plan "kubectl -n $OLD_NS exec deploy/postgres -- pg_dump -Fc -d jaiscloud > <tmp>"
-      plan "kubectl apply -f $K8S_DIR/rbac-admission-policy.yaml   # namespace isolation (K8s >= 1.30)"
-      plan "kubectl apply -f $K8S_DIR/namespace-data.yaml"
-      plan "kubectl apply -f $K8S_DIR/postgres.yaml"
+      local OLD_NS="${LEGACY_NAMESPACE:-$NAMESPACE_AWS}" legacy_workload
+      legacy_workload="$LEGACY_POSTGRES_WORKLOAD"
+      [[ "$legacy_workload" == "auto" ]] && legacy_workload="<deployment|statefulset>/postgres"
+      plan "kubectl -n $NAMESPACE_AWS scale deployment jaiscloud --replicas=0   # when present (stops a writer)"
+      plan "kubectl -n $OLD_NS scale deployment jaiscloud-gcp --replicas=0       # legacy GCP too, when present"
+      plan "# legacy store source: $legacy_workload (auto = deployment/postgres, then statefulset/postgres)"
+      plan "# blob claims: legacy aws=$LEGACY_AWS_BLOBS_PVC gcp=$LEGACY_GCP_BLOBS_PVC -> new aws=$NEW_AWS_BLOBS_PVC gcp=$NEW_GCP_BLOBS_PVC"
+      if [[ -n "$LEGACY_DSN" ]]; then
+        plan "kubectl apply -f $K8S_DIR/namespace-data.yaml; kubectl apply -f $K8S_DIR/postgres.yaml; rollout status"
+        plan "kubectl -n $NAMESPACE_DATA exec deploy/postgres -- pg_dump -Fc '<LEGACY_DSN>' > <tmp>   # from the NEW store pod; no legacy workload touched"
+      else
+        plan "kubectl -n $OLD_NS exec $legacy_workload -- pg_dump -U $LEGACY_PG_USER -Fc -d jaiscloud > <tmp>"
+        plan "kubectl -n $OLD_NS scale $legacy_workload --replicas=0   # kept, not deleted"
+        plan "kubectl apply -f $K8S_DIR/namespace-data.yaml"
+        plan "kubectl apply -f $K8S_DIR/postgres.yaml"
+      fi
       plan "kubectl -n $NAMESPACE_DATA exec -i deploy/postgres -- pg_restore ... -d jaiscloud < <tmp>"
       plan "kubectl -n $NAMESPACE_DATA exec -i deploy/postgres -- pg_restore ... -d jaiscloud_gcp < <tmp>"
-      plan "kubectl -n $OLD_NS delete deployment postgres; delete service postgres postgres-external"
-      plan "# legacy GCP: apply namespace-gcp.yaml, rbac-shared.yaml, rbac-gcp.yaml and jaiscloud-gcp.yaml, scale to 0, tar-copy the blob PVC, scale to 1, delete the old Deployment/Service"
+      if [[ "$DELETE_LEGACY" == "1" ]]; then
+        plan "kubectl -n $OLD_NS get <deployment|statefulset>/postgres -o jsonpath='{.metadata.labels.app}'   # must be postgres (LEGACY_DELETE_FORCE=1 overrides)"
+        plan "kubectl -n $OLD_NS delete <deployment|statefulset>/postgres; delete service postgres postgres-external   # PVCs kept"
+      else
+        plan "# legacy workload kept: scaled to 0; Deployment/StatefulSet, Services and PVCs stay (pass --delete-legacy to remove the workload)"
+      fi
+      plan "# legacy GCP: apply namespace-gcp.yaml, rbac-shared.yaml, rbac-gcp.yaml and jaiscloud-gcp.yaml, scale to 0, tar-copy the blob PVC, scale to 1"
+      [[ "$OLD_NS" != "$NAMESPACE_AWS" ]] && plan "# AWS blobs move namespaces: tar-copy pvc/$LEGACY_AWS_BLOBS_PVC -> pvc/$NEW_AWS_BLOBS_PVC (migrate_blobs)"
       plan "kubectl apply -f $K8S_DIR/jaiscloud.yaml"
       plan_install_record "aws" "aws=running (and gcp when the legacy GCP workload exists)"
       ;;
     reset)
       plan "kubectl -n $NAMESPACE_AWS scale deployment jaiscloud --replicas=0   # when present"
-      plan "kubectl -n $NAMESPACE_DATA exec deploy/postgres -- psql -c 'DROP DATABASE IF EXISTS jaiscloud WITH (FORCE)' -c 'CREATE DATABASE jaiscloud OWNER jaiscloud'"
+      [[ "$STORE_MODE" == "external" ]] && plan "kubectl apply -f $K8S_DIR/namespace-data.yaml   # the psql helper pod runs there"
+      plan "kubectl -n $NAMESPACE_DATA apply namespace-data.yaml; psql -c 'DROP DATABASE IF EXISTS jaiscloud WITH (FORCE)' -c 'CREATE DATABASE jaiscloud'   # bundled: inside deploy/postgres; external: -d postgres from a psql pod"
       plan "kubectl delete namespace $NAMESPACE_AWS"
       plan "kubectl apply -f $K8S_DIR/rbac-admission-policy.yaml   # namespace isolation (K8s >= 1.30)"
-      plan "kubectl apply -f $K8S_DIR/namespace-data.yaml   # only when the store is missing"
-      plan "kubectl apply -f $K8S_DIR/postgres.yaml         # only when the store is missing"
+      plan "kubectl apply -f $K8S_DIR/namespace-data.yaml"
+      [[ "$STORE_MODE" == "bundled" ]] && plan "kubectl apply -f $K8S_DIR/postgres.yaml         # only when the store is missing"
       plan "kubectl apply -f $K8S_DIR/namespace-aws.yaml"
       plan "kubectl apply -f $K8S_DIR/rbac-shared.yaml"
       plan "kubectl apply -f $K8S_DIR/rbac-aws.yaml"
       plan "kubectl apply -f $K8S_DIR/jaiscloud.yaml"
+      [[ "$STORE_MODE" == "external" ]] && plan "kubectl -n $NAMESPACE_AWS create secret generic jaiscloud-dsn --from-literal=dsn=<external DSN> --dry-run=client -o yaml | kubectl apply -f -; rollout restart"
       plan_install_record "aws" "aws=running"
       ;;
     gcp-reset)
       plan "kubectl -n $NAMESPACE_GCP scale deployment jaiscloud-gcp --replicas=0   # when present"
       plan "kubectl -n $NAMESPACE_GCP delete pvc $GCP_PVC"
-      plan "kubectl -n $NAMESPACE_DATA exec deploy/postgres -- psql -c 'DROP DATABASE IF EXISTS jaiscloud_gcp WITH (FORCE)' -c 'CREATE DATABASE jaiscloud_gcp OWNER jaiscloud'"
+      [[ "$STORE_MODE" == "external" ]] && plan "kubectl apply -f $K8S_DIR/namespace-data.yaml   # the psql helper pod runs there"
+      plan "kubectl -n $NAMESPACE_DATA psql -c 'DROP DATABASE IF EXISTS jaiscloud_gcp WITH (FORCE)' -c 'CREATE DATABASE jaiscloud_gcp'   # bundled: deploy/postgres; external: -d postgres from a psql pod"
       plan "kubectl apply -f $K8S_DIR/rbac-admission-policy.yaml   # namespace isolation (K8s >= 1.30)"
       plan "kubectl apply -f $K8S_DIR/namespace-gcp.yaml"
       plan "kubectl apply -f $K8S_DIR/rbac-shared.yaml"
       plan "kubectl apply -f $K8S_DIR/rbac-gcp.yaml"
       plan "kubectl apply -f $K8S_DIR/jaiscloud-gcp.yaml"
+      [[ "$STORE_MODE" == "external" ]] && plan "kubectl -n $NAMESPACE_GCP create secret generic jaiscloud-gcp-dsn --from-literal=dsn=<external DSN> --dry-run=client -o yaml | kubectl apply -f -; rollout restart"
       plan_install_record "gcp" "gcp=running"
       ;;
     delete)
@@ -1172,6 +1586,11 @@ print_plan() {
       ;;
     *) plan "# unknown mode: $mode" ;;
   esac
+  if [[ "$STORE_MODE" == "external" ]]; then
+    info "Store mode: external (postgres.yaml is not applied; databases via a psql pod; migrate-store is unsupported)"
+  else
+    info "Store mode: bundled (PostgreSQL in $NAMESPACE_DATA)"
+  fi
   info "Re-run without --plan to execute."
 }
 
@@ -1180,10 +1599,20 @@ if [[ "$PLAN" == "1" ]]; then
   exit 0
 fi
 
+# Every mutating mode must agree with the manifests about the three namespaces;
+# a partial NS_* override would otherwise act on a namespace the manifests never
+# created (see check_namespace_overrides). --check reads the overrides and never
+# mutates, so it is exempt.
+case "$MODE" in
+  deploy|gcp|reset|gcp-reset|migrate-store|delete|park|resume|switch)
+    check_namespace_overrides ;;
+esac
+
 # ── --delete [aws|gcp|both]: remove workloads, keep every PVC ───────────────
 
 if [[ "$MODE" == "delete" ]]; then
   check_context
+  store_mode_from_record
   targets=(aws)
   if [[ "$DELETE_TARGET" == "both" ]]; then
     targets=(aws gcp)
@@ -1206,6 +1635,7 @@ if [[ "$MODE" == "park" || "$MODE" == "resume" || "$MODE" == "switch" ]]; then
   require kubectl
   require curl
   check_context
+  store_mode_from_record
   if [[ "$MODE" == "park" ]]; then
     confirm "Park the $LIFECYCLE_TARGET substrate? This terminates all its jobs and engine compute but keeps its data."
   fi
@@ -1225,6 +1655,9 @@ if [[ "$MODE" == "reset" ]]; then
   warn "AWS reset: this drops the '$AWS_DB' database and the $NAMESPACE_AWS namespace"
   warn "(including its blobs PVC). It does NOT touch $NAMESPACE_DATA, $POSTGRES_PVC,"
   warn "the '$GCP_DB' database, or the $NAMESPACE_GCP namespace/PVC."
+  if [[ "$STORE_MODE" == "external" ]]; then
+    warn "The store is external: '$AWS_DB' is dropped on $(external_host "$(external_dsn aws)") — other databases there are kept."
+  fi
   confirm "Are you sure?"
   check_context
   require_isolation_prereqs
@@ -1233,6 +1666,11 @@ if [[ "$MODE" == "reset" ]]; then
   info "Scaling the AWS deployment to zero..."
   scale_to_zero "$NAMESPACE_AWS" jaiscloud app=jaiscloud
 
+  if [[ "$STORE_MODE" == "external" ]]; then
+    # The psql helper pod runs in NAMESPACE_DATA; make sure it exists before the
+    # drop (an external store has no Deployment to create it for us).
+    ensure_data_namespace
+  fi
   reset_database "$AWS_DB"
 
   info "Deleting namespace $NAMESPACE_AWS (removes the AWS blobs PVC)..."
@@ -1240,15 +1678,20 @@ if [[ "$MODE" == "reset" ]]; then
 
   info "Recreating the AWS substrate..."
   # The store may not exist yet (e.g. --reset on a cluster that never ran the
-  # full deploy); bring it up so the recreated AWS pod has a database.
-  if ! postgres_deployed; then
+  # full deploy); bring it up so the recreated AWS pod has a database. An
+  # external store is the operator's, so only its namespace is ensured.
+  if [[ "$STORE_MODE" == "external" ]]; then
+    ensure_data_namespace
+  elif ! postgres_deployed; then
     kubectl apply -f "$K8S_DIR/namespace-data.yaml"
     kubectl apply -f "$K8S_DIR/postgres.yaml"
     wait_for_rollout "$POSTGRES_DEPLOYMENT" "$NAMESPACE_DATA"
   fi
   apply_aws_workloads
+  [[ "$STORE_MODE" == "external" ]] && apply_external_dsn_secret aws
   wait_for_rollout deployment/jaiscloud "$NAMESPACE_AWS"
   record_intent aws running
+  record_store "$STORE_MODE"
   ok "AWS substrate reset. The GCP substrate and Postgres were left untouched."
   print_endpoints
   exit 0
@@ -1277,6 +1720,9 @@ if [[ "$MODE" == "gcp-reset" ]]; then
       || warn "pvc/$GCP_PVC is still present — the next apply will keep using it"
   fi
 
+  if [[ "$STORE_MODE" == "external" ]]; then
+    ensure_data_namespace
+  fi
   reset_database "$GCP_DB"
 
   info "Re-applying the GCP substrate..."
@@ -1285,8 +1731,10 @@ if [[ "$MODE" == "gcp-reset" ]]; then
   kubectl apply -f "$K8S_DIR/rbac-gcp.yaml"
   retire_legacy_namespace_binding gcp
   kubectl apply -f "$K8S_DIR/jaiscloud-gcp.yaml"
+  [[ "$STORE_MODE" == "external" ]] && apply_external_dsn_secret gcp
   wait_for_rollout deployment/jaiscloud-gcp "$NAMESPACE_GCP" 180s
   record_intent gcp running
+  record_store "$STORE_MODE"
   ok "GCP substrate reset. The AWS substrate and Postgres were left untouched."
   print_endpoints
   exit 0
@@ -1300,8 +1748,7 @@ if [[ "$MODE" == "gcp" ]]; then
   info "Applying the namespace-isolation admission policy..."
   apply_isolation_policy
   info "Applying the shared store and the GCP substrate objects..."
-  kubectl apply -f "$K8S_DIR/namespace-data.yaml"
-  kubectl apply -f "$K8S_DIR/postgres.yaml"
+  ensure_store
   kubectl apply -f "$K8S_DIR/namespace-gcp.yaml"
   kubectl apply -f "$K8S_DIR/rbac-shared.yaml"
   kubectl apply -f "$K8S_DIR/rbac-gcp.yaml"
@@ -1311,15 +1758,60 @@ if [[ "$MODE" == "gcp" ]]; then
   ensure_database "$GCP_DB"
   info "Applying the GCP substrate manifest..."
   kubectl apply -f "$K8S_DIR/jaiscloud-gcp.yaml"
+  [[ "$STORE_MODE" == "external" ]] && apply_external_dsn_secret gcp
   apply_gcp_image_override
   wait_for_rollout deployment/jaiscloud-gcp "$NAMESPACE_GCP" 180s
   record_intent gcp running
+  record_store "$STORE_MODE"
   ok "GCP substrate is ready in namespace $NAMESPACE_GCP."
   print_endpoints
   exit 0
 fi
 
 # ── --migrate-store: move a pre-split single-namespace store ─────────────────
+#
+# The migration is a data move, not a teardown. By default the legacy Postgres
+# is only scaled to 0: its Deployment/StatefulSet, Services and PVCs stay as
+# rollback copies. --delete-legacy opts into removing the workload and Services,
+# and only after the object proves it is the store (label app=postgres); a PVC is
+# never deleted by this command.
+
+# migrate_source_workload — resolve LEGACY_POSTGRES_WORKLOAD (auto: Deployment,
+# then StatefulSet) into LEGACY_KIND/LEGACY_NAME and validate the object exists.
+# With DELETE_LEGACY=1 it also validates the app=postgres label up front, so a
+# refused deletion cannot leave a half-migrated cluster.
+migrate_source_workload() {
+  local old_ns=$1 label
+  case "$LEGACY_POSTGRES_WORKLOAD" in
+    auto)
+      if kubectl -n "$old_ns" get deployment postgres &>/dev/null; then
+        LEGACY_KIND=deployment; LEGACY_NAME=postgres
+      elif kubectl -n "$old_ns" get statefulset postgres &>/dev/null; then
+        LEGACY_KIND=statefulset; LEGACY_NAME=postgres
+      else
+        die "no legacy deployment/postgres or statefulset/postgres in namespace $old_ns — nothing to migrate. Point LEGACY_NAMESPACE at the old install, name the object with LEGACY_POSTGRES_WORKLOAD=<deployment|statefulset>/<name>, or set LEGACY_DSN for a store outside the cluster."
+      fi ;;
+    deployment/*|statefulset/*)
+      LEGACY_KIND="${LEGACY_POSTGRES_WORKLOAD%%/*}"
+      LEGACY_NAME="${LEGACY_POSTGRES_WORKLOAD#*/}"
+      kubectl -n "$old_ns" get "$LEGACY_KIND" "$LEGACY_NAME" &>/dev/null \
+        || die "LEGACY_POSTGRES_WORKLOAD=$LEGACY_POSTGRES_WORKLOAD does not exist in namespace $old_ns" ;;
+    *)
+      die "LEGACY_POSTGRES_WORKLOAD must be 'auto' or '<deployment|statefulset>/<name>' (got '$LEGACY_POSTGRES_WORKLOAD')" ;;
+  esac
+  LEGACY_WORKLOAD="$LEGACY_KIND/$LEGACY_NAME"
+  if [[ "$DELETE_LEGACY" == "1" ]]; then
+    label=$(kubectl -n "$old_ns" get "$LEGACY_KIND" "$LEGACY_NAME" \
+      -o jsonpath='{.metadata.labels.app}' 2>/dev/null || true)
+    if [[ "$label" != "postgres" ]]; then
+      if [[ "$LEGACY_DELETE_FORCE" == "1" ]]; then
+        warn "LEGACY_DELETE_FORCE=1 — deleting $old_ns/$LEGACY_WORKLOAD although its label is app='${label:-<none>}'"
+      else
+        die "refusing to delete $old_ns/$LEGACY_WORKLOAD: it does not carry label app=postgres (found '${label:-<none>}'), so this tooling cannot prove it created it. Set LEGACY_DELETE_FORCE=1 to delete it anyway; its PVC is never deleted."
+      fi
+    fi
+  fi
+}
 
 if [[ "$MODE" == "migrate-store" ]]; then
   check_context
@@ -1329,18 +1821,32 @@ if [[ "$MODE" == "migrate-store" ]]; then
   # namespace and held both clouds' schemas in database `jaiscloud`.
   OLD_NS="${LEGACY_NAMESPACE:-$NAMESPACE_AWS}"
   require kubectl
-  kubectl -n "$OLD_NS" get deployment postgres &>/dev/null \
-    || die "no legacy deployment/postgres in namespace $OLD_NS — nothing to migrate"
+  LEGACY_KIND="" LEGACY_NAME="" LEGACY_WORKLOAD=""
+
   if kubectl -n "$NAMESPACE_DATA" get pvc "$POSTGRES_PVC" &>/dev/null; then
-    die "pvc/$POSTGRES_PVC already exists in $NAMESPACE_DATA — the new store is deployed; refusing to overwrite it (drop it first if this is a retry)"
+    if [[ "$MIGRATE_FORCE" == "1" ]]; then
+      warn "pvc/$POSTGRES_PVC already exists in $NAMESPACE_DATA — MIGRATE_FORCE=1 continues; the restore overwrites the schema, not the volume"
+    else
+      die "pvc/$POSTGRES_PVC already exists in $NAMESPACE_DATA — the new store is deployed; refusing to overwrite it (drop it first if this is a retry, or set MIGRATE_FORCE=1)"
+    fi
+  fi
+
+  # ── where the dump comes from ─────────────────────────────────────────────
+  if [[ -n "$LEGACY_DSN" ]]; then
+    case "$LEGACY_DSN" in
+      postgres://*|postgresql://*) ;;
+      *) die "LEGACY_DSN must start with postgres:// or postgresql://" ;;
+    esac
+    info "Legacy store source: LEGACY_DSN (dumped from the NEW store pod; no legacy store workload is scaled or deleted)"
+  else
+    migrate_source_workload "$OLD_NS"
+    info "Legacy store source: $OLD_NS/$LEGACY_WORKLOAD"
   fi
 
   # A pre-split install ran the GCP emulator in the AWS namespace too, with its
   # object bytes on jaiscloud-gcp-blobs-pvc there. Detect it so the bytes are
-  # migrated (a PVC cannot move namespaces) and the old workload is stopped.
+  # migrated (a PVC cannot move namespaces).
   legacy_gcp=0
-  legacy_gcp_pvc="${LEGACY_GCP_BLOBS_PVC:-jaiscloud-gcp-blobs-pvc}"
-  gcp_blobs_pvc="${GCP_BLOBS_PVC:-jaiscloud-gcp-blobs-pvc}"
   if kubectl -n "$OLD_NS" get deployment jaiscloud-gcp &>/dev/null; then
     legacy_gcp=1
     info "Legacy GCP emulator found in $OLD_NS; its object bytes will be migrated."
@@ -1354,21 +1860,40 @@ if [[ "$MODE" == "migrate-store" ]]; then
     scale_to_zero "$OLD_NS" jaiscloud-gcp app=jaiscloud-gcp
   fi
 
-  info "Dumping database '$AWS_DB' from $OLD_NS/deployment/postgres..."
   DUMP_FILE="$(mktemp "${TMPDIR:-/tmp}/jaiscloud-store.XXXXXX.dump")"
   trap 'rm -f "$DUMP_FILE"' EXIT
-  kubectl -n "$OLD_NS" exec "$POSTGRES_DEPLOYMENT" -- \
-    pg_dump -U jaiscloud --no-owner --no-privileges -Fc -d "$AWS_DB" > "$DUMP_FILE"
+
+  if [[ -n "$LEGACY_DSN" ]]; then
+    # The new store must be up: its pod (which ships pg_dump) is the dump client,
+    # so the external server is reached without a legacy workload in the cluster.
+    info "Starting the new store in $NAMESPACE_DATA (the dump client)..."
+    kubectl apply -f "$K8S_DIR/namespace-data.yaml"
+    kubectl apply -f "$K8S_DIR/postgres.yaml"
+    wait_for_rollout "$POSTGRES_DEPLOYMENT" "$NAMESPACE_DATA"
+    ensure_database "$GCP_DB"
+    info "Dumping the LEGACY_DSN server from the new store pod..."
+    kubectl -n "$NAMESPACE_DATA" exec "$POSTGRES_DEPLOYMENT" -- \
+      pg_dump --no-owner --no-privileges -Fc "$LEGACY_DSN" > "$DUMP_FILE"
+  else
+    info "Dumping database '$AWS_DB' from $OLD_NS/$LEGACY_WORKLOAD..."
+    kubectl -n "$OLD_NS" exec "$LEGACY_WORKLOAD" -- \
+      pg_dump -U "$LEGACY_PG_USER" --no-owner --no-privileges -Fc -d "$AWS_DB" > "$DUMP_FILE"
+    [[ -s "$DUMP_FILE" ]] || die "the dump is empty — refusing to continue"
+
+    # The legacy workload is kept (a rollback copy); it simply must not keep
+    # running against the old volume while the new store serves.
+    info "Scaling the legacy Postgres to 0 (the dump is complete; kept for rollback)..."
+    kubectl -n "$OLD_NS" scale "$LEGACY_WORKLOAD" --replicas=0 --timeout=120s >/dev/null
+    kubectl -n "$OLD_NS" wait --for=delete pod -l app=postgres --timeout=120s >/dev/null 2>&1 \
+      || warn "legacy Postgres pods in $OLD_NS did not terminate within 120s"
+
+    info "Starting the new store in $NAMESPACE_DATA..."
+    kubectl apply -f "$K8S_DIR/namespace-data.yaml"
+    kubectl apply -f "$K8S_DIR/postgres.yaml"
+    wait_for_rollout "$POSTGRES_DEPLOYMENT" "$NAMESPACE_DATA"
+    ensure_database "$GCP_DB"
+  fi
   [[ -s "$DUMP_FILE" ]] || die "the dump is empty — refusing to continue"
-
-  info "Stopping the legacy Postgres (the dump is complete)..."
-  scale_to_zero "$OLD_NS" postgres app=postgres
-
-  info "Starting the new store in $NAMESPACE_DATA..."
-  kubectl apply -f "$K8S_DIR/namespace-data.yaml"
-  kubectl apply -f "$K8S_DIR/postgres.yaml"
-  wait_for_rollout "$POSTGRES_DEPLOYMENT" "$NAMESPACE_DATA"
-  ensure_database "$GCP_DB"
 
   info "Restoring into '$AWS_DB' and '$GCP_DB' (pre-split GCP schema travels too)..."
   kubectl -n "$NAMESPACE_DATA" exec -i "$POSTGRES_DEPLOYMENT" -- \
@@ -1376,9 +1901,16 @@ if [[ "$MODE" == "migrate-store" ]]; then
   kubectl -n "$NAMESPACE_DATA" exec -i "$POSTGRES_DEPLOYMENT" -- \
     pg_restore -U jaiscloud --no-owner --no-privileges --clean --if-exists -d "$GCP_DB" < "$DUMP_FILE"
 
-  # The legacy workload must not keep running against the old volume.
-  kubectl -n "$OLD_NS" delete deployment postgres --ignore-not-found
-  kubectl -n "$OLD_NS" delete service postgres postgres-external --ignore-not-found
+  # ── the legacy workloads: kept by default, removed only on request ────────
+  if [[ -n "$LEGACY_WORKLOAD" ]]; then
+    if [[ "$DELETE_LEGACY" == "1" ]]; then
+      info "Deleting $OLD_NS/$LEGACY_WORKLOAD and the postgres Services (label verified; PVCs are kept)..."
+      kubectl -n "$OLD_NS" delete "$LEGACY_KIND" "$LEGACY_NAME" --ignore-not-found
+      kubectl -n "$OLD_NS" delete service postgres postgres-external --ignore-not-found
+    else
+      info "Legacy Postgres kept: $OLD_NS/$LEGACY_WORKLOAD is scaled to 0; its Services and volumes stay."
+    fi
+  fi
 
   if [[ "$legacy_gcp" -eq 1 ]]; then
     info "Bringing up the GCP substrate in $NAMESPACE_GCP (paused for the byte copy)..."
@@ -1389,34 +1921,66 @@ if [[ "$MODE" == "migrate-store" ]]; then
     kubectl apply -f "$K8S_DIR/jaiscloud-gcp.yaml"
     apply_gcp_image_override
     scale_to_zero "$NAMESPACE_GCP" jaiscloud-gcp app=jaiscloud-gcp
-    if kubectl -n "$OLD_NS" get pvc "$legacy_gcp_pvc" &>/dev/null; then
-      migrate_blobs "$OLD_NS" "$legacy_gcp_pvc" "$NAMESPACE_GCP" "$gcp_blobs_pvc"
+    if [[ "$OLD_NS" == "$NAMESPACE_GCP" ]]; then
+      info "The legacy GCP claim already lives in $NAMESPACE_GCP — no namespace move needed."
+    elif kubectl -n "$OLD_NS" get pvc "$LEGACY_GCP_BLOBS_PVC" &>/dev/null; then
+      migrate_blobs "$OLD_NS" "$LEGACY_GCP_BLOBS_PVC" "$NAMESPACE_GCP" "$NEW_GCP_BLOBS_PVC"
     else
-      warn "no pvc/$legacy_gcp_pvc in $OLD_NS — no GCP object bytes to copy"
+      warn "no pvc/$LEGACY_GCP_BLOBS_PVC in $OLD_NS — no GCP object bytes to copy"
     fi
     kubectl apply -f "$K8S_DIR/jaiscloud-gcp.yaml"
     apply_gcp_image_override
     wait_for_rollout deployment/jaiscloud-gcp "$NAMESPACE_GCP" 180s
-    # The legacy GCP workload must not keep running in the AWS namespace.
-    kubectl -n "$OLD_NS" delete deployment jaiscloud-gcp --ignore-not-found
-    kubectl -n "$OLD_NS" delete service jaiscloud-gcp --ignore-not-found
+    if [[ "$DELETE_LEGACY" == "1" ]]; then
+      # The legacy GCP workload must not keep running in the legacy namespace.
+      kubectl -n "$OLD_NS" delete deployment jaiscloud-gcp --ignore-not-found
+      kubectl -n "$OLD_NS" delete service jaiscloud-gcp --ignore-not-found
+    else
+      info "Legacy GCP workload kept in $OLD_NS (scaled to 0): deployment/jaiscloud-gcp + service/jaiscloud-gcp."
+    fi
   fi
 
   info "Recreating the AWS substrate against the migrated store..."
   apply_aws_workloads
+  if [[ "$OLD_NS" != "$NAMESPACE_AWS" ]]; then
+    # The claim is moving namespaces: pause the substrate, copy, resume. When the
+    # legacy namespace IS the AWS namespace the claim never moved.
+    if kubectl -n "$OLD_NS" get pvc "$LEGACY_AWS_BLOBS_PVC" &>/dev/null; then
+      scale_to_zero "$NAMESPACE_AWS" jaiscloud app=jaiscloud
+      migrate_blobs "$OLD_NS" "$LEGACY_AWS_BLOBS_PVC" "$NAMESPACE_AWS" "$NEW_AWS_BLOBS_PVC"
+      kubectl -n "$NAMESPACE_AWS" scale deployment jaiscloud --replicas=1 >/dev/null
+    else
+      warn "no pvc/$LEGACY_AWS_BLOBS_PVC in $OLD_NS — no AWS object bytes to copy"
+    fi
+  fi
   wait_for_rollout deployment/jaiscloud "$NAMESPACE_AWS"
 
   record_intent aws running
+  record_store "$STORE_MODE"
   [[ "$legacy_gcp" -eq 1 ]] && record_intent gcp running
   ok "Store migrated from $OLD_NS to $NAMESPACE_DATA."
   echo ""
-  echo "  Legacy volumes kept in $OLD_NS as rollback copies:"
-  echo "    - pvc/$POSTGRES_PVC (the pre-split store)"
-  if [[ "$legacy_gcp" -eq 1 ]]; then
-    echo "    - pvc/$legacy_gcp_pvc (the pre-split GCP object bytes, now copied)"
+  if [[ "$DELETE_LEGACY" == "1" ]]; then
+    echo "  Legacy workloads removed. Retained volumes (rollback copies):"
+  else
+    echo "  Legacy workloads kept (scaled to 0). Retained volumes (rollback copies):"
   fi
-  echo "  Verify both substrates, then delete them:"
-  echo "    kubectl -n $OLD_NS delete pvc $POSTGRES_PVC $legacy_gcp_pvc --ignore-not-found"
+  if [[ -z "$LEGACY_WORKLOAD" ]]; then
+    echo "    - the LEGACY_DSN server itself (outside this cluster)"
+  else
+    echo "    - $OLD_NS/pvc/$POSTGRES_PVC (the pre-split store)"
+  fi
+  if [[ "$legacy_gcp" -eq 1 ]]; then
+    echo "    - $OLD_NS/pvc/$LEGACY_GCP_BLOBS_PVC (the pre-split GCP object bytes, now copied)"
+  fi
+  if [[ "$OLD_NS" != "$NAMESPACE_AWS" ]] && kubectl -n "$OLD_NS" get pvc "$LEGACY_AWS_BLOBS_PVC" &>/dev/null; then
+    echo "    - $OLD_NS/pvc/$LEGACY_AWS_BLOBS_PVC (the pre-split AWS object bytes, now copied)"
+  fi
+  echo "  Verify both substrates, then remove what is left:"
+  [[ "$DELETE_LEGACY" == "1" ]] || echo "    kubectl -n $OLD_NS delete ${LEGACY_WORKLOAD:-deployment/postgres}"
+  [[ "$legacy_gcp" -eq 1 ]] && [[ "$DELETE_LEGACY" != "1" ]] && echo "    kubectl -n $OLD_NS delete deployment jaiscloud-gcp service jaiscloud-gcp"
+  [[ -n "$LEGACY_WORKLOAD" ]] && echo "    kubectl -n $OLD_NS delete service postgres postgres-external"
+  echo "    kubectl -n $OLD_NS delete pvc $POSTGRES_PVC $LEGACY_GCP_BLOBS_PVC $LEGACY_AWS_BLOBS_PVC --ignore-not-found"
   echo "  (NOTE: $0 --reset deletes the $OLD_NS namespace, and with it those copies.)"
   exit 0
 fi
@@ -1442,12 +2006,22 @@ else
 fi
 
 info "Applying the AWS substrate manifests..."
-info "  $K8S_DIR/namespace-data.yaml  $K8S_DIR/postgres.yaml  $K8S_DIR/namespace-aws.yaml"
-info "  $K8S_DIR/rbac-shared.yaml  $K8S_DIR/rbac-aws.yaml  $K8S_DIR/jaiscloud.yaml"
+if [[ "$STORE_MODE" == "external" ]]; then
+  info "  $K8S_DIR/namespace-data.yaml (install record)  $K8S_DIR/namespace-aws.yaml"
+  info "  $K8S_DIR/rbac-shared.yaml  $K8S_DIR/rbac-aws.yaml  $K8S_DIR/jaiscloud.yaml"
+  info "  external store: postgres.yaml is NOT applied; the DSN Secret points at your server"
+else
+  info "  $K8S_DIR/namespace-data.yaml  $K8S_DIR/postgres.yaml  $K8S_DIR/namespace-aws.yaml"
+  info "  $K8S_DIR/rbac-shared.yaml  $K8S_DIR/rbac-aws.yaml  $K8S_DIR/jaiscloud.yaml"
+fi
 apply_aws
 
-wait_for_rollout "$POSTGRES_DEPLOYMENT" "$NAMESPACE_DATA"
-ok "Postgres is ready."
+if [[ "$STORE_MODE" == "external" ]]; then
+  info "External store configured — skipping the bundled Postgres rollout."
+else
+  wait_for_rollout "$POSTGRES_DEPLOYMENT" "$NAMESPACE_DATA"
+  ok "Postgres is ready."
+fi
 wait_for_rollout deployment/jaiscloud "$NAMESPACE_AWS"
 ok "JaisCloud (AWS) is ready."
 record_intent aws running
