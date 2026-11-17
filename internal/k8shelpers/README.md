@@ -152,7 +152,28 @@ process-wide one. The seam lives in `namespace.go`:
   `jaiscloud.io/service=<service>`), so an adopted or foreign namespace is untouched.
 - `EnsureNamespaceRBAC(ctx, client, ns, sa, saNamespace)` — creates the executor RoleBinding
   in a new namespace, referencing the `jaiscloud-executor` ClusterRole
-  (`deploy/k8s/rbac.yaml`), so the executor ServiceAccount can run there.
+  (`deploy/k8s/rbac.yaml`), so the executor ServiceAccount can run there. Pass
+  `ResolveOwnServiceAccount()`'s result so a substrate that does not run in
+  `jaiscloud` binds its own ServiceAccount; the empty-argument form keeps the
+  `jaiscloud`/`jaiscloud` default.
+
+### Own identity — `ResolveOwnServiceAccount() (name, namespace)` (own_identity.go)
+A managed namespace's executor RoleBinding must bind the ServiceAccount the emulator
+*itself* runs as, which is not always `jaiscloud`/`jaiscloud` (that is the AWS
+substrate's pod; the GCP pod may run as `jaiscloud-gcp` in namespace
+`jaiscloud-gcp`). Resolution is cached once per process, never fails, and always
+returns non-empty values, in this precedence:
+
+1. **name** — `JAISCLOUD_K8S_SA`, else `DefaultExecutorServiceAccount` (`jaiscloud`).
+2. **namespace** — `JAISCLOUD_K8S_SA_NAMESPACE`, else the trimmed contents of the
+   kubelet-projected `/var/run/secrets/kubernetes.io/serviceaccount/namespace`,
+   else `DefaultExecutorServiceAccountNamespace` (`jaiscloud`).
+
+A missing or unreadable token file (out-of-cluster dev, tests, the standalone
+binary) is not an error — it falls through to the constants, so the bare-binary
+path needs no new env var and no cluster. The exported constants stay for API
+compatibility and as that fallback; per-resource provisioning (Dataproc clusters,
+Managed Kafka brokers) calls this resolver instead of reading them directly.
 
 `JAISCLOUD_K8S_NAMESPACE` remains the default for engines that have not migrated, and the
 fallback when the ServiceAccount cannot manage cluster-scoped namespaces.

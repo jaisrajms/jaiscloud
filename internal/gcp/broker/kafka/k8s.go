@@ -69,18 +69,24 @@ type k8sBroker struct {
 	// probe reports whether addr is accepting TCP connections. Overridable in
 	// tests; defaults to a one-second TCP dial.
 	probe func(addr string) bool
+	// ownServiceAccount resolves the ServiceAccount this emulator process runs
+	// as (name, namespace), which the per-cluster namespace's executor
+	// RoleBinding must bind. Overridable in tests; defaults to
+	// k8shelpers.ResolveOwnServiceAccount.
+	ownServiceAccount func() (string, string)
 }
 
 func newK8sBroker(client kubernetes.Interface, namespace, image string, logger *slog.Logger) *k8sBroker {
 	return &k8sBroker{
-		client:     client,
-		namespace:  namespace,
-		image:      image,
-		logger:     logger,
-		endpoints:  make(map[ClusterKey]string),
-		namespaces: make(map[ClusterKey]string),
-		admins:     newAdminPool(nil),
-		probe:      tcpProbe,
+		client:            client,
+		namespace:         namespace,
+		image:             image,
+		logger:            logger,
+		endpoints:         make(map[ClusterKey]string),
+		namespaces:        make(map[ClusterKey]string),
+		admins:            newAdminPool(nil),
+		probe:             tcpProbe,
+		ownServiceAccount: k8shelpers.ResolveOwnServiceAccount,
 	}
 }
 
@@ -224,8 +230,13 @@ func (b *k8sBroker) provisionNamespace(ctx context.Context, key ClusterKey) (str
 		return b.namespace, false
 	}
 	// The emulator's own ServiceAccount creates the broker Pod/Service in the new
-	// namespace, so the executor ClusterRole must be bound to it there.
-	if rbacErr := k8shelpers.EnsureNamespaceRBAC(ctx, b.client, ns, "", ""); rbacErr != nil {
+	// namespace, so the executor ClusterRole must be bound to it there. Resolve
+	// the running process's identity rather than binding the historical
+	// `jaiscloud/jaiscloud` constant: a GCP substrate pod runs as e.g.
+	// `jaiscloud-gcp` in namespace `jaiscloud-gcp`, and the API server accepts a
+	// RoleBinding for any subject while the later Pod create is what fails.
+	saName, saNamespace := b.ownServiceAccount()
+	if rbacErr := k8shelpers.EnsureNamespaceRBAC(ctx, b.client, ns, saName, saNamespace); rbacErr != nil {
 		b.logger.Warn("managedkafka broker: cannot bootstrap executor RBAC in per-cluster namespace; falling back",
 			"cluster", key.String(), "namespace", ns, "fallback", b.namespace, "err", rbacErr)
 		if created {

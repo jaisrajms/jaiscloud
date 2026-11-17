@@ -10,6 +10,7 @@ import (
 	"github.com/stretchr/testify/require"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
+	rbacv1 "k8s.io/api/rbac/v1"
 	k8serrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -58,6 +59,30 @@ func TestCreateClusterProvisionsPerClusterNamespace(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, c1.Namespace, got.Namespace)
 	require.True(t, got.NamespaceOwned)
+}
+
+// TestCreateClusterBindsResolvedEmulatorIdentity proves the per-cluster
+// RoleBinding binds the identity the emulator process actually resolves — not
+// the historical `jaiscloud/jaiscloud` constant — so the GCP substrate pod
+// (`jaiscloud-gcp` in namespace `jaiscloud-gcp`) can create its driver pod.
+func TestCreateClusterBindsResolvedEmulatorIdentity(t *testing.T) {
+	prev := resolveOwnServiceAccount
+	resolveOwnServiceAccount = func() (string, string) { return "jaiscloud-gcp", "jaiscloud-gcp" }
+	t.Cleanup(func() { resolveOwnServiceAccount = prev })
+
+	client := fake.NewSimpleClientset()
+	p := newK8sProvider(t, client)
+	ctx := context.Background()
+
+	c, _, err := p.CreateCluster(ctx, "proj", "us-central1", "c1", gceClusterInput())
+	require.NoError(t, err)
+
+	rb, err := client.RbacV1().RoleBindings(c.Namespace).Get(ctx, k8shelpers.ExecutorRoleBindingName, metav1.GetOptions{})
+	require.NoError(t, err)
+	require.Equal(t, []rbacv1.Subject{
+		{Kind: "ServiceAccount", Name: "jaiscloud-gcp", Namespace: "jaiscloud-gcp"},
+		{Kind: "ServiceAccount", Name: "default", Namespace: c.Namespace},
+	}, rb.Subjects, "emulator subject must be the resolved identity; the Spark driver subject is unchanged")
 }
 
 func TestCreateClusterHonorsExplicitKubernetesNamespace(t *testing.T) {

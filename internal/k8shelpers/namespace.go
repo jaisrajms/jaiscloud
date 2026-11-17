@@ -24,6 +24,17 @@ import (
 //
 // The process-wide namespace (cfg.K8sNamespace) remains the default for engines
 // that have not been migrated; these helpers are additive.
+//
+// Executor identity: the RoleBinding created in a managed namespace must bind
+// the ServiceAccount the emulator *itself* runs as, which is not necessarily
+// DefaultExecutorServiceAccount/DefaultExecutorServiceAccountNamespace (the AWS
+// substrate's `jaiscloud`/`jaiscloud`). ResolveOwnServiceAccount resolves it once
+// per process with the precedence JAISCLOUD_K8S_SA / JAISCLOUD_K8S_SA_NAMESPACE
+// env, then the pod's projected .../serviceaccount/namespace file, then the
+// constants (see own_identity.go). Callers that provision a per-resource
+// namespace pass the resolved pair to EnsureNamespaceRBAC/ForSubjects; the
+// empty-argument form keeps the historical constant default for out-of-cluster
+// runs and existing callers.
 
 const (
 	// managedByLabel marks a namespace as emulator-created so delete/sweep never
@@ -46,9 +57,12 @@ const (
 	ExecutorClusterRoleName = "jaiscloud-executor"
 	// ExecutorRoleBindingName is the RoleBinding created in each new namespace.
 	ExecutorRoleBindingName = "jaiscloud-executor"
-	// DefaultExecutorServiceAccount / ...Namespace identify the ServiceAccount
-	// the emulator itself runs as (deploy/k8s/rbac.yaml). A per-namespace
-	// RoleBinding must bind this identity, not a Spark pod's service account.
+	// DefaultExecutorServiceAccount / ...Namespace are the fallback identity the
+	// emulator runs as (deploy/k8s/rbac.yaml) when nothing else identifies it —
+	// an out-of-cluster dev binary, or a pod that projects no namespace file. A
+	// per-namespace RoleBinding must bind the emulator's own ServiceAccount, not
+	// a Spark pod's; resolve it with ResolveOwnServiceAccount (own_identity.go)
+	// rather than reading these constants directly.
 	DefaultExecutorServiceAccount          = "jaiscloud"
 	DefaultExecutorServiceAccountNamespace = "jaiscloud"
 
@@ -311,9 +325,11 @@ type RBACSubject struct {
 
 // EnsureNamespaceRBAC creates the executor RoleBinding in namespace for the
 // emulator's own ServiceAccount (deploy/k8s/rbac.yaml); pass empty
-// serviceAccount/serviceAccountNamespace to use the defaults. It is idempotent
-// and best-effort against AlreadyExists; a Forbidden create returns
-// ErrNamespaceForbidden so the caller can fall back.
+// serviceAccount/serviceAccountNamespace to use the constants. Callers that can
+// resolve the running pod's identity should pass ResolveOwnServiceAccount's
+// result instead, so a substrate that does not run in `jaiscloud` binds its own
+// ServiceAccount. It is idempotent and best-effort against AlreadyExists; a
+// Forbidden create returns ErrNamespaceForbidden so the caller can fall back.
 func EnsureNamespaceRBAC(ctx context.Context, client kubernetes.Interface, namespace, serviceAccount, serviceAccountNamespace string) error {
 	if serviceAccount == "" {
 		serviceAccount = DefaultExecutorServiceAccount
