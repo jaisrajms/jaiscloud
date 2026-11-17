@@ -88,6 +88,35 @@ Advice is relative to that intent:
 - `--strict` exits 1 when any non-optional recommendation or leak warning
   exists; optional work (the mesh) never fails it.
 
+The preflight's *effective* view is deliberately narrower than "the object
+exists":
+
+- **Store databases are tri-state.** `store.databases.jaiscloud` /
+  `.jaiscloud_gcp` are `true`, `false` or `null`. `true`/`false` only when the
+  bundled store Deployment is ready and `psql` answered; `null` means *unknown* —
+  an external store (no pod to exec), a Deployment that is absent or not ready,
+  or a failing exec. `store.databasesProbe` is `exec` when both probes answered
+  and `unavailable` otherwise. Only `false` is a missing database, so `null`
+  never produces a "create the database" recommendation.
+- **RBAC is probed, not assumed.** `rbac.effective.<cloud>` reports what the
+  Deployment's own ServiceAccount
+  (`spec.template.spec.serviceAccountName`, falling back to `jaiscloud` /
+  `jaiscloud-gcp`) may do, via
+  `kubectl auth can-i <verb> <resource> --as=system:serviceaccount:<ns>:<sa>`:
+  `deleteNamespaces`, `createNamespaces`, `updateNamespaces` (cluster-scoped) and
+  `createRoleBindings` (in its namespace), each `yes`/`no`/`unknown`.
+  `rbac.namespaceAdmin` stays a boolean (true only when an intended substrate's
+  effective namespace delete is `yes`; `unknown` never counts). When the kubeconfig
+  may not impersonate, every answer is `unknown` and the preflight says it cannot
+  verify — it does not claim the grant is missing or that isolation is unenforced.
+- **The policy must name the running identity.** `rbac.policyMatchesSA` compares
+  the `ValidatingAdmissionPolicy`'s `matchConditions[].expression` with
+  `system:serviceaccount:<ns>:<sa>` for every present substrate
+  (`rbac.policyMentions.{aws,gcp}` is the per-substrate form). A policy that does
+  not mention a running identity enforces nothing for it; that is a warning and a
+  non-optional `install-rbac-policy` recommendation (edit the policy until it is
+  rendered from the configured namespaces/ServiceAccounts).
+
 ## Lifecycle: running, parked, deleted, reset
 
 Presence is not the same as being allowed to drop data. The lifecycle modes are
@@ -155,6 +184,37 @@ must not silently swap the binary (and run its store migrations):
   migrate.
 - `deploy.sh --check` still warns about `:latest` images; pin a release tag when
   one is available — DSL7 tracks that work.
+
+### DNS and the CA across park / switch / delete
+
+Park keeps the data, the CA and the namespaces, but it stops the backend — and a
+cluster-wide DNS rewrite does not know that:
+
+| override | what park/switch does to it | what to do |
+|---|---|---|
+| **CoreDNS rewrite** (`deploy/k8s/istio/dns.yaml`, cluster-wide) | nothing — it is the cluster's resolver, not JaisCloud's object | a rewrite for a parked/absent substrate still resolves to the gateway, whose route then has no ready backend: clients hang or get a 503. Remove that suffix's rewrite while parked and re-add it on resume (or keep it and accept the fast failure). `deploy/deploy.sh --check` reports `dns.rewrites` / `dns.suffixes` / `dns.stale` and warns per stale suffix. |
+| **Pod `hostAliases`** (per workload) | nothing — it lives in the client pod spec | the client pod keeps resolving the name to the gateway ClusterIP; restart/repoint the client when you switch, or point it at the resumed substrate's Service |
+| **pinned `clusterIP`** (per Service) | nothing — a Service keeps its address while it exists | a parked substrate's Service still has the address but no endpoints, so a dialer gets connection refused/503; resume it, or pin the address of the substrate you run |
+
+`--switch` is park-then-resume, so the *other* substrate's rewrites become stale
+in the same way (and the resumed one's become valid again). `--delete` removes
+the Deployment and Service but keeps the namespace, so a rewrite or a pinned
+address then points at nothing; re-add it only when the substrate is resumed.
+
+The CA is different: park **keeps** the CA ConfigMap in each substrate namespace
+(a resumed substrate and its managed workloads still trust the front door) and it
+is only stale when the issuer is gone. `deploy.sh --check` reports
+`ca.{aws,gcp}` (the copy exists) and `ca.issuerPresent` (the
+`istio-system/jaiscloud-wildcard` TLS secret or the gateway exists); a copy
+without an issuer is a warning — re-run `deploy/k8s/istio/certs/gen.sh` or remove
+the copy. With the mesh removed entirely you get one warning per namespace that
+still holds a copy (each names its own namespace), never a claim that both are
+required.
+
+The three DNS override kinds (cluster-wide CoreDNS rewrite, per-pod
+`hostAliases`, pinned Service `clusterIP`) and their park/switch consequences are
+documented in
+[`deploy/k8s/istio/README.md` § Park, switch and DNS/CA](../../../deploy/k8s/istio/README.md#park-switch-and-dnsca).
 
 ## Invariants
 
@@ -231,7 +291,12 @@ must not silently swap the binary (and run its store migrations):
     The policy matches the literal usernames
     `system:serviceaccount:jaiscloud:jaiscloud` and
     `system:serviceaccount:jaiscloud-gcp:jaiscloud-gcp`, so renaming a namespace
-    means editing the policy too.
+    means editing the policy too — the preflight compares the policy expression
+    with the identity each Deployment actually runs (`rbac.policyMatchesSA`) and
+    warns when the boundary matches nobody. The grant itself is verified the same
+    way (`rbac.effective.<cloud>` via `kubectl auth can-i --as=…`), so a missing
+    binding is reported as `no`, and a kubeconfig that may not impersonate as
+    `unknown` rather than as an unenforced policy.
 11. **Upgrade is a data move, not a teardown.** The pre-split layout ran Postgres
     and the GCP emulator in `jaiscloud`; a PVC cannot change namespace.
     `--migrate-store` dumps the old store (a `Deployment` or `StatefulSet`,
@@ -272,9 +337,9 @@ must not silently swap the binary (and run its store migrations):
     replaced per cloud; per-substrate overrides are verbatim). The choice is
     recorded as `store` in the install record (`bundled|external`) and reported
     by the preflight as `store.mode`. An external store is not probeable from the
-    cluster, so `store.ready` / `store.databases.*` are `false` (unknown, not
-    missing), and `--migrate-store` into an external target is unsupported (it
-    refuses).
+    cluster, so `store.ready` is `false` and `store.databases.*` is `null`
+    (`store.databasesProbe=unavailable`) — unknown, not missing — and
+    `--migrate-store` into an external target is unsupported (it refuses).
 
 ## Where each fact lives
 
@@ -287,9 +352,14 @@ must not silently swap the binary (and run its store migrations):
   the `playbook` section of `contract.yaml` (authored in
   [`playbook.yaml`](playbook.yaml)).
 - **Read-only cluster state**: `deploy/deploy.sh --check [--json]`
-  (`scripts/integration-preflight.sh`). The leak and legacy predicates are
-  regression-tested offline with a fake `kubectl`:
-  `scripts/integration-preflight-test.sh`.
+  (`scripts/integration-preflight.sh`): intent, legacy, store (with the tri-state
+  `store.databases` and `databasesProbe`), substrates (effective `sparkImage`
+  through `envFrom`/`valueFrom`), `mesh`, `dns` (CoreDNS rewrites and staleness),
+  `ca` (per-namespace CA copies and the issuer), `rbac` (bindings plus the
+  effective `auth can-i` view and `policyMatchesSA`), `warnings` and
+  `recommended`. The predicates are regression-tested offline with a fake
+  `kubectl`:
+  `scripts/integration-preflight-test.sh` (`make test-integration-preflight`).
 - **The same pack without the source tree**: `jaiscloud-gcp agent-guide`
   (brief), `--json` (contract), `--emit DIR` (manifests + scripts + docs); both
   binaries embed it.

@@ -71,12 +71,25 @@ manifest disagree, the manifest wins — regenerate with
 | does the cluster already run JaisCloud? | `deploy/deploy.sh --check --json` |
 | what is installed, and what is wanted? | preflight `intent.source` / `intent.installed` / `intent.desired`, or `kubectl -n jaiscloud-data get configmap jaiscloud-install -o yaml` |
 | legacy pre-split layout? | preflight `legacy.pending` (marked, migrate) vs `legacy.candidate` (unmarked same-named workload — confirm with `LEGACY_CONFIRM=1` or ignore) |
-| is the store already at the new layout? | preflight `store.present` / `store.databases` |
+| is the store already at the new layout? | preflight `store.present` / `store.databases` (tri-state: `null` = unknown, not missing; see `store.databasesProbe`) |
 | is the mesh installed? | preflight `mesh.installed` |
 | is the cluster new enough to enforce the namespace boundary? | preflight `rbac.serverVersion` (needs >= 1.30) |
-| is namespace isolation enforced? | preflight `rbac.admissionPolicy` (the ValidatingAdmissionPolicy) and `rbac.namespaceAdmin` (the intended substrate's `jaiscloud-namespace-admin-<cloud>` binding) |
+| is namespace isolation enforced? | preflight `rbac.admissionPolicy` (the ValidatingAdmissionPolicy), `rbac.policyMatchesSA` (does it name the running ServiceAccount?) and `rbac.namespaceAdmin` (the intended substrate's effective namespace delete) |
+| what may the running identities actually do? | preflight `rbac.effective.<cloud>` (`kubectl auth can-i --as`; `yes`/`no`/`unknown`) |
+| do cloud hostnames still resolve to a backend? | preflight `dns.rewrites` / `dns.suffixes` / `dns.stale` (CoreDNS rewrites survive a park) |
+| is the front door's CA still valid? | preflight `ca.aws` / `ca.gcp` / `ca.issuerPresent` (a copy without `istio-system/jaiscloud-wildcard` is stale) |
 | image strategy | published image (default) or your own (`custom-images`) |
 | executors needed? | only if tests submit Dataproc/Kafka/Cloud Run/function work |
+
+The preflight is read-only but it does read more than Deployments: the install
+record, the isolation ValidatingAdmissionPolicy, `kube-system/coredns` (Corefile),
+`jaiscloud-ca-cert` in each substrate namespace, the Istio TLS secret, and the
+ConfigMaps/Secrets a Deployment's `envFrom`/`valueFrom` points at (to resolve
+`JAISCLOUD_K8S_SPARK_IMAGE`, `JAISCLOUD_KAFKA_BROKER_MODE`). It also
+*impersonates* each substrate ServiceAccount with `kubectl auth can-i --as` for
+the effective-RBAC view, so the kubeconfig needs `impersonate` on
+`serviceaccounts`; without it that view is `unknown` (with a warning) and nothing
+is claimed about the grant.
 
 **Executor modes resolve per engine, then globally, then by default**:
 `JAISCLOUD_<SUBSYSTEM>_EXECUTOR_MODE` (`SPARK`, `FUNCTIONS`, `CLOUDRUN`, `LAMBDA`,
@@ -98,7 +111,18 @@ deploy/deploy.sh --check --json
 │   ├─ only GCP tests? ............................. new-install-gcp
 │   └─ both substrates? ............................ new-install-both
 ├─ store ready, substrate missing .................. deploy that substrate
+├─ store.databases null ............................ unknown, not missing: an
+│                                                    external store or a psql
+│                                                    failure; verify by hand, do
+│                                                    not "create the database"
 ├─ rbac.admissionPolicy=false (a substrate exists) . install-rbac-policy (K8s >= 1.30; non-optional)
+├─ rbac.policyMatchesSA=false (a substrate runs) ... edit the VAP matchConditions: it names
+│                                                    another identity, so nothing is enforced
+├─ rbac.effective.<cloud>.deleteNamespaces=no ..... apply rbac-shared.yaml + rbac-<cloud>.yaml
+│                                                    (else Dataproc/Kafka stay on mock)
+├─ dns.stale=true ................................. a CoreDNS rewrite points at a parked/
+│                                                    absent substrate: drop that suffix while
+│                                                    parked, re-add it on resume
 ├─ substrates ready, need external real hostnames .. mesh
 ├─ need compute off but data kept ................. park / switch (then resume)
 ├─ Dataproc/Kafka/Cloud Run jobs fail .............. executors (rbac + spark image)
@@ -254,7 +278,8 @@ applied: it holds the install record. The install record carries
 `store=bundled|external`, and the preflight reports `store.mode`.
 
 Limits: the preflight cannot probe an external server (no pod to exec), so
-`store.ready`/`store.databases.*` are `false` = "not probeable", not "missing".
+`store.ready=false` and `store.databases.*` are `null`
+(`store.databasesProbe=unavailable`) = "not probeable", not "missing".
 `--migrate-store` into an external target is **not supported yet** (it refuses
 before doing anything); dump/restore that server yourself.
 
@@ -307,6 +332,28 @@ digest as described. `--delete [aws|gcp|both]` is the workload-only alternative:
 it removes the Deployment/Service (and DSN Secret, plus the AWS ConfigMap) but
 never the PVCs or the database; the other substrate is untouched unless you pass
 `both`.
+
+**DNS and the CA do not follow the park.** A parked substrate's names still
+resolve, its CA copy is still present, and neither is bad by itself — but each
+override needs a decision:
+
+- **CoreDNS rewrite** (cluster-wide, `deploy/k8s/istio/dns.yaml`): it survives the
+  park, so `storage.googleapis.com` and friends keep resolving to the gateway
+  while the route has no backend; clients hang or get a fast 503. Remove that
+  suffix's rewrite while the owning substrate is parked and re-add it on resume.
+  `deploy.sh --check` reports `dns.rewrites` / `dns.suffixes` / `dns.stale` and
+  warns per stale suffix.
+- **Pod `hostAliases`** (one client workload): it keeps pointing at the gateway
+  ClusterIP; nothing to change for a switch (the gateway routes by host) but a
+  client that must reach the parked substrate directly needs a new address.
+- **Pinned Service `clusterIP`**: the Service keeps its address, its endpoints go
+  away with the Deployment (connection refused). Do not repoint a client at a
+  parked Service; resume it or pin the running one. `clusterIP` is immutable.
+- **CA (`jaiscloud-ca-cert`)**: park keeps it on purpose — a resumed substrate
+  and its managed workloads still trust the front door. It is stale only when the
+  issuer is gone; with no `istio-system/jaiscloud-wildcard` and no Gateway,
+  `ca.issuerPresent=false` and the preflight warns per namespace that still holds
+  a copy (re-run `certs/gen.sh` or remove it).
 
 Verify with the lifecycle gate (compute-destructive; needs both substrates
 installed from a build that has the park/resume API):
@@ -366,7 +413,7 @@ names, edit those fields together and re-run `deploy/deploy.sh --check`.
 | Need | Command |
 |---|---|
 | read-only state | `deploy/deploy.sh --check [--json] [--substrate aws\|gcp\|both] [--desired aws=running,gcp=parked]` (`scripts/integration-preflight.sh`) |
-| preflight predicates (offline) | `scripts/integration-preflight-test.sh` (fake kubectl: leak + legacy regression, no cluster) |
+| preflight predicates (offline) | `make test-integration-preflight` (`scripts/integration-preflight-test.sh`: fake kubectl, no cluster — leaks, legacy, env/envFrom, tri-state store databases, effective RBAC, VAP match, DNS/CA) |
 | install intent | preflight `intent.*`; record in ConfigMap `jaiscloud-data/jaiscloud-install` (written by `deploy.sh`) |
 | store mode | preflight `store.mode` (`bundled\|external`); install record key `store` |
 | the pack, from the binary | `jaiscloud-gcp agent-guide` / `--json` / `--emit DIR` (`--force` to overwrite) |
@@ -377,7 +424,7 @@ names, edit those fields together and re-run `deploy/deploy.sh --check`.
 | migrate (keep the legacy workload) | `deploy/deploy.sh --migrate-store --yes` (marked source; `--legacy-confirm` for a pre-split build, `--delete-legacy` removes the workload + Services, never a PVC) |
 | delete workloads (keep data) | `deploy/deploy.sh --delete [aws\|gcp\|both]` |
 | resets (destructive, scoped) | `--reset` (AWS) / `--gcp-reset` (GCP) |
-| namespace boundary | preflight `rbac.*`; `GATE_ALLOW_RBAC=1 KUBE_CONTEXT=<ctx> make test-rbac-isolation-k8s` (server-side dry runs, K8s >= 1.30) |
-| gates | `make check-deploy-images`, `make check-integration-contract`, `make test-istio-smoke`, `ALLOW_RESET=1 make test-dual-substrate-k8s`, `GATE_ALLOW_LIFECYCLE=1 make test-lifecycle-k8s`, `make gcp-ci-preflight` |
+| namespace boundary | preflight `rbac.*` (`admissionPolicy`, `policyMatchesSA`, effective `auth can-i`); `GATE_ALLOW_RBAC=1 KUBE_CONTEXT=<ctx> make test-rbac-isolation-k8s` (server-side dry runs, K8s >= 1.30) |
+| gates | `make check-deploy-images`, `make check-integration-contract`, `make test-integration-preflight`, `make test-istio-smoke`, `ALLOW_RESET=1 make test-dual-substrate-k8s`, `GATE_ALLOW_LIFECYCLE=1 make test-lifecycle-k8s`, `make gcp-ci-preflight` |
 | emulator state API | `GET /_jaiscloud/health`, `GET /_jaiscloud/doctor`, `POST /_jaiscloud/reset`, `GET /_jaiscloud/export`, `POST /_jaiscloud/import`, `POST /_jaiscloud/clock` |
 | emulator lifecycle API | `POST /_jaiscloud/park`, `POST /_jaiscloud/resume` (engine hooks; called by `deploy.sh --park`/`--resume`) |

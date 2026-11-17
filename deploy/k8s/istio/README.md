@@ -324,6 +324,36 @@ smoke gate:
 the real host in the URL so the emulator's authority routing is exercised
 honestly.
 
+## Park, switch and DNS/CA
+
+A front door does not change when a substrate is parked: the Gateway, the
+VirtualServices, the certificate and any DNS override all stay exactly as they
+were, while the backend behind them is scaled to 0. That is fine for a fast
+failure and wrong for a transparent one, so know which override you used:
+
+| override | scope | on `--park <cloud>` | on `--switch <target>` | on `--delete <cloud>` |
+|---|---|---|---|---|
+| CoreDNS rewrite (`dns.yaml`) | every pod in the cluster | the name still resolves to the gateway; its route has no ready backend, so clients hang (or get a fast 503 with `retries.attempts: 0`) | the newly parked substrate's suffixes go stale and the resumed one's become valid again | the name resolves to a gateway route with no backend: remove that suffix's rewrite |
+| Pod `hostAliases` | one workload's `/etc/hosts` | the client pod keeps the gateway ClusterIP; nothing to change until it needs the parked backend | repoint/restart the client at the resumed substrate, or keep the gateway (it routes by host) | same as park: the gateway has no backend |
+| pinned `clusterIP` | one Service | the Service keeps its address but loses its endpoints (connection refused) | pin the address of the substrate you intend to run, not both | the Service is gone; the address is free again |
+
+Recommendation: while a substrate is parked, remove its suffix from the CoreDNS
+Corefile (one line per suffix in `dns.yaml`) and re-add it on resume; keep the
+`hostAliases` and `clusterIP` forms pointed at the gateway/Service of whichever
+substrate is running. `deploy/deploy.sh --check --json` reports
+`dns.rewrites` / `dns.suffixes` / `dns.stale` and warns per stale suffix, so the
+check tells you which rule to drop.
+
+The CA is the opposite case: **park keeps it**. `certs/gen.sh` writes the CA
+ConfigMap `jaiscloud-ca-cert` into each substrate namespace for managed
+workloads that trust the front door; a resumed substrate, its Dataproc drivers
+and Cloud Run pods still need it, so do not delete it with the compute. It only
+becomes stale when the issuer is gone: if the TLS secret
+`istio-system/jaiscloud-wildcard` (and the `Gateway`) no longer exist, a
+remaining copy is a stale CA — re-run `certs/gen.sh` or remove the copy. The
+preflight reports `ca.aws` / `ca.gcp` / `ca.issuerPresent` and warns once per
+namespace that still has a copy without an issuer.
+
 ## Addressing the substrates
 
 The files here build the **external** front door (real cloud hostnames, TLS at

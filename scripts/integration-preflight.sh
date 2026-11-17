@@ -45,30 +45,71 @@
 #   namespace boundary between them is the ValidatingAdmissionPolicy
 #   jaiscloud-namespace-isolation (K8s >= 1.30). Namespace admin is bound per
 #   substrate (jaiscloud-namespace-admin-aws / …-gcp). The JSON reports
-#   rbac.namespaceAdmin (the intended substrate's binding), rbac.admissionPolicy
-#   and rbac.serverVersion, and a missing policy on a cluster with a substrate is
-#   a warning plus a non-optional install-rbac-policy recommendation (so --strict
-#   fails).
+#   rbac.namespaceAdmin, rbac.admissionPolicy, rbac.serverVersion and the
+#   *effective* permissions of each substrate's running ServiceAccount
+#   (rbac.effective.<cloud>: deleteNamespaces / createNamespaces /
+#   updateNamespaces cluster-scoped, createRoleBindings in its own namespace,
+#   each yes|no|unknown, plus source="auth").
+#   The effective check impersonates the ServiceAccount the Deployment actually
+#   runs (spec.template.spec.serviceAccountName, falling back to jaiscloud /
+#   jaiscloud-gcp) with `kubectl auth can-i --as=…`. When impersonation is not
+#   allowed every answer is unknown: the preflight then warns "cannot verify
+#   effective RBAC" and never claims that isolation is unenforced. A `no` for an
+#   intended substrate is a warning plus a non-optional install-rbac-policy
+#   recommendation. rbac.namespaceAdmin stays a boolean for compatibility: true
+#   only when an intended substrate's effective deleteNamespaces is `yes`
+#   (unknown never counts as true).
+#   rbac.policyMatchesSA (true|false|unknown) compares the policy's
+#   matchConditions[].expression with the running identities: a present substrate
+#   whose system:serviceaccount:<ns>:<sa> the expression does not name is a
+#   warning ("namespace isolation is not enforced for the running identity") and
+#   a non-optional install-rbac-policy recommendation (until the policy is
+#   rendered from the configured namespaces/ServiceAccounts, edit and re-apply
+#   it).
 #
 # The store:
 #   store.mode is bundled (PostgreSQL Deployment in NS_DATA) or external (a
 #   server the operator brought: deploy.sh --store-dsn / JAISCLOUD_STORE_DSN, no
 #   postgres.yaml). The mode comes from the install record's `store` key, then
 #   falls back to bundled when the record or the Deployment exists, and to
-#   external when a substrate exists without a bundled postgres Deployment. For
-#   an external store, store.ready=false and store.databases.*=false mean "not
-#   probeable from here", not "missing": there is no pod to exec psql in.
+#   external when a substrate exists without a bundled postgres Deployment.
+#   store.databases is TRI-STATE: true / false / null. true|false only when the
+#   bundled store Deployment is ready and psql answered; null when the store is
+#   external, the Deployment is absent or not ready, or the exec/psql failed —
+#   "unknown", never "missing". store.databasesProbe is "exec" when both psql
+#   probes answered, "unavailable" otherwise. Recommendations only treat `false`
+#   as a missing database.
 #
-# Images:
+# Images / env:
 #   substrates.<cloud>.image is the Deployment's image, imageID the digest the
 #   pod actually runs, and privateRegistry a heuristic for a 10./192.168./172.16-
 #   31./localhost/*.local registry. substrates.gcp.sparkImage is the deployment's
-#   JAISCLOUD_K8S_SPARK_IMAGE (the Dataproc driver/executor image) and
+#   *effective* JAISCLOUD_K8S_SPARK_IMAGE (the Dataproc driver/executor image) and
 #   sparkImageGCS a heuristic: false for an empty value or a plain apache/spark
 #   tag, true for any other image name. Neither image policy fails --strict: they
 #   are warnings only (a private Spark image -> ImagePullBackOff; an image without
 #   the GCS connector -> gs:// jobs fail; a :latest substrate tag -> the digest is
 #   whatever the node cached).
+#   Env resolution order (envFrom included): an explicit containers[0].env entry
+#   wins — its literal `value`, or its valueFrom.configMapKeyRef /
+#   secretKeyRef (Secret data base64-decoded); otherwise envFrom sources are
+#   scanned in order and the last source that provides the key wins. A missing
+#   object, a missing key or a Forbidden read resolves to "" (the probe never
+#   aborts because one ref is unreadable).
+#
+# DNS and CA:
+#   dns.reads the kube-system/coredns ConfigMap Corefile (read-only; Forbidden or
+#   absent -> unknown) and reports dns.rewrites (true|false|unknown),
+#   dns.suffixes (the cloud suffixes mapped to the gateway) and dns.stale.
+#   A rewrite whose substrate is parked or absent, or a rewrite with no ready
+#   gateway, is stale: clients resolve a dead backend and time out (or get a fast
+#   503); remove that suffix's rewrite and re-add it on resume.
+#   ca.aws / ca.gcp report the jaiscloud-ca-cert ConfigMap in each substrate
+#   namespace, ca.issuerPresent the Istio gateway TLS secret
+#   istio-system/jaiscloud-wildcard (or the Gateway resource). A CA copy with no
+#   issuing mesh is a stale CA: re-run certs/gen.sh or remove it. Park keeps the
+#   CA copy (a resumed substrate and its managed workloads still trust the
+#   front door), so it is not stale while the secret exists.
 #
 # Also reachable as: deploy/deploy.sh --check [--json] [--strict]
 #                    [--substrate ...] [--desired ...]
@@ -151,6 +192,10 @@ warn_() { printf '  WARN     %s\n' "$*"; }
 
 json_escape() { printf '%s' "$1" | tr '\n\t' '  ' | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g'; }
 b() { if [[ "$1" == "1" ]]; then printf 'true'; else printf 'false'; fi; }
+# tri <true|false|null> — the tri-state as a JSON literal (anything else is null).
+tri() { case "$1" in true) printf true ;; false) printf false ;; *) printf null ;; esac; }
+# tri_word <true|false|null> — the human form (null reads "unknown").
+tri_word() { case "$1" in true) printf true ;; false) printf false ;; *) printf unknown ;; esac; }
 
 # ── comma lists (installed / desired intent) ────────────────────────────────
 # list_has <csv> <item>
@@ -199,6 +244,29 @@ probe_ok() { "$@" >/dev/null 2>&1 && echo 1 || echo 0; }
 # field <namespace> <resource> <name> <go-template>
 field() {
   kc -n "$1" get "$2" "$3" -o go-template="$4" 2>/dev/null || true
+}
+
+# auth_can_i <verb> <resource> <sa-namespace> <sa> — yes|no|unknown.
+# Impersonates the substrate ServiceAccount with `kubectl auth can-i --as=…`, so
+# it reports what that identity may actually do, not which binding exists. A
+# namespaced resource (rolebindings) is evaluated in the SA's own namespace; a
+# cluster-scoped one (namespaces) is evaluated cluster-wide.
+# Only a clean yes/no is an answer: `no` exits 1, so the exit status is not the
+# signal. An error (Forbidden impersonation, unknown verb/resource, no
+# `auth` subcommand) is `unknown` — never a claim about the cluster.
+auth_can_i() {
+  local verb=$1 resource=$2 ns=$3 sa=$4 out
+  local -a args=(auth can-i "$verb" "$resource" --as="system:serviceaccount:$ns:$sa")
+  case "$resource" in
+    rolebindings) args+=(-n "$ns") ;;
+  esac
+  out=$(kc "${args[@]}" 2>/dev/null) || true
+  out=$(printf '%s' "$out" | tr -d '[:space:]' | tr '[:upper:]' '[:lower:]')
+  case "$out" in
+    yes) echo yes ;;
+    no) echo no ;;
+    *) echo unknown ;;
+  esac
 }
 
 # ns_present <name> — prints 1/0 (for JSON capture).
@@ -250,11 +318,70 @@ deployment_pull_policy() {
 }
 
 # deployment_env <ns> <deployment> <name> — the literal env value of one
-# variable in the first container ("" when unset). jsonpath, so a name is matched
-# exactly instead of by a Go-template range.
+# variable in the first container ("" when unset). Kept for callers that only
+# want the literal form; use deployment_env_effective when envFrom matters.
 deployment_env() {
   kc -n "$1" get deployment "$2" \
     -o jsonpath="{.spec.template.spec.containers[0].env[?(@.name==\"$3\")].value}" 2>/dev/null || true
+}
+
+# configmap_key <ns> <name> <key> — data.<key> ("" when the object, the key or
+# the read is unavailable).
+configmap_key() {
+  kc -n "$1" get configmap "$2" -o go-template="{{index .data \"$3\"}}" 2>/dev/null || true
+}
+# secret_key <ns> <name> <key> — data.<key>, base64-decoded (Secret data is
+# base64); "" when anything is missing.
+secret_key() {
+  local v
+  v=$(kc -n "$1" get secret "$2" -o go-template="{{index .data \"$3\"}}" 2>/dev/null) || return 0
+  [[ -n "$v" ]] || return 0
+  printf '%s' "$v" | base64 -d 2>/dev/null || true
+}
+
+# deployment_env_entry <ns> <deployment> <name> — the first container's explicit
+# env entry for one variable, as one line:
+#   literal <value>          env[].value
+#   configmap <name> <key>   env[].valueFrom.configMapKeyRef
+#   secret <name> <key>      env[].valueFrom.secretKeyRef
+# Nothing when the container does not declare the variable.
+deployment_env_entry() {
+  kc -n "$1" get deployment "$2" -o go-template="{{range (index .spec.template.spec.containers 0).env}}{{if eq .name \"$3\"}}{{if .valueFrom}}{{if .valueFrom.configMapKeyRef}}configmap {{.valueFrom.configMapKeyRef.name}} {{.valueFrom.configMapKeyRef.key}}{{end}}{{if .valueFrom.secretKeyRef}}secret {{.valueFrom.secretKeyRef.name}} {{.valueFrom.secretKeyRef.key}}{{end}}{{else}}literal {{.value}}{{end}}{{\"\\n\"}}{{end}}{{end}}" 2>/dev/null || true
+}
+
+# deployment_env_from <ns> <deployment> — the first container's envFrom sources
+# in order, one "configmap <name>" / "secret <name>" line each.
+deployment_env_from() {
+  kc -n "$1" get deployment "$2" -o go-template="{{range (index .spec.template.spec.containers 0).envFrom}}{{if .configMapRef}}configmap {{.configMapRef.name}}{{\"\\n\"}}{{end}}{{if .secretRef}}secret {{.secretRef.name}}{{\"\\n\"}}{{end}}{{end}}" 2>/dev/null || true
+}
+
+# deployment_env_effective <ns> <deployment> <name> — the value Kubernetes
+# would give the container, resolving envFrom:
+#   1. an explicit env[] entry wins (literal value or valueFrom ref), even when
+#      its value is empty;
+#   2. otherwise envFrom is scanned in order (later sources win) for a source
+#      that provides the key. A source without the key (or with an empty value)
+#      does not override an earlier one.
+# A missing object/key or a Forbidden read is "" — never an error.
+deployment_env_effective() {
+  local ns=$1 dep=$2 name=$3 entry kind obj key v=""
+  entry=$(deployment_env_entry "$ns" "$dep" "$name")
+  if [[ -n "$entry" ]]; then
+    case "$entry" in
+      literal\ *)   printf '%s' "${entry#literal }" ;;
+      configmap\ *) read -r _ obj key <<<"$entry"; configmap_key "$ns" "$obj" "$key" ;;
+      secret\ *)    read -r _ obj key <<<"$entry"; secret_key "$ns" "$obj" "$key" ;;
+    esac
+    return 0
+  fi
+  while read -r kind obj; do
+    [[ -n "${obj:-}" ]] || continue
+    case "$kind" in
+      configmap) v=$(configmap_key "$ns" "$obj" "$name") ;;
+      secret)    v=$(secret_key "$ns" "$obj" "$name") ;;
+    esac
+  done <<<"$(deployment_env_from "$ns" "$dep")"
+  printf '%s' "$v"
 }
 
 # deployment_replicas <ns> <name> <present 1|0> — desired scale. `spec.replicas`
@@ -307,14 +434,28 @@ private_registry() {
 pvc_status() { field "$1" pvc "$2" '{{.status.phase}}'; }
 pvc_capacity() { field "$1" pvc "$2" '{{index .status.capacity "storage"}}'; }
 
-# db_exists <name> — 1/0; only when the store deployment is ready.
-db_exists() {
-  local out
-  if [[ "$(deployment_ready "$NS_DATA" postgres)" != "1" ]]; then echo 0; return; fi
+# db_state <name> — TRI-STATE: true|false|null.
+#   true|false  the bundled store Deployment is ready and psql answered (psql
+#               exits 0; an empty row set means the database is absent)
+#   null        the store is external, the Deployment is absent/not ready, or
+#               the psql exec failed — "unknown", never "missing"
+db_state() {
+  local out rc=0
+  [[ "$STORE_MODE" == "external" ]] && { echo null; return; }
+  if [[ "$(deployment_ready "$NS_DATA" postgres)" != "1" ]]; then echo null; return; fi
   out=$(timeout 15 "${KUBECTL[@]}" --request-timeout=10s -n "$NS_DATA" exec deploy/postgres -- \
-        psql -U jaiscloud -d postgres -tAc "SELECT 1 FROM pg_database WHERE datname='$1'" 2>/dev/null | tr -d '[:space:]' || true)
-  [[ "$out" == "1" ]] && echo 1 || echo 0
+        psql -U jaiscloud -d postgres -tAc "SELECT 1 FROM pg_database WHERE datname='$1'" 2>/dev/null) || rc=$?
+  out=$(printf '%s' "$out" | tr -d '[:space:]')
+  [[ "$rc" -eq 0 ]] || { echo null; return; }
+  case "$out" in
+    1) echo true ;;
+    "") echo false ;;
+    *) echo null ;;
+  esac
 }
+
+# db_exists <name> — 1 only when the database is known to exist (tri-state true).
+db_exists() { [[ "$(db_state "$1")" == "true" ]] && echo 1 || echo 0; }
 
 # migration_skew_warning <ns> <app> — prints the terminated message when the pod
 # is crash-looping on a store migrated by a newer binary.
@@ -395,8 +536,8 @@ LEGACY_GCP_MARKED=0
 STORE_DEPLOY=$(deployment_present "$NS_DATA" postgres)
 STORE_PVC=$(pvc_status "$NS_DATA" postgres-pvc)
 STORE_READY=$(deployment_ready "$NS_DATA" postgres)
-DB_AWS=$(db_exists jaiscloud)
-DB_GCP=$(db_exists jaiscloud_gcp)
+# Database probes are tri-state and depend on store.mode, so they run after the
+# mode is resolved (below), not here.
 
 AWS_PRESENT=$(deployment_present "$NS_AWS" jaiscloud)
 AWS_READY=$(deployment_ready "$NS_AWS" jaiscloud)
@@ -415,14 +556,15 @@ GCP_STATE=$(substrate_state "$NS_GCP" jaiscloud-gcp "$GCP_PRESENT")
 GCP_REPLICAS=$(deployment_replicas "$NS_GCP" jaiscloud-gcp "$GCP_PRESENT")
 GCP_IMAGE_ID=$(pod_image_id "$NS_GCP" jaiscloud-gcp)
 # The Dataproc driver/executor image. It is a deployment env var, not the
-# substrate's own image, so it is probed separately.
-GCP_SPARK_IMAGE=$(deployment_env "$NS_GCP" jaiscloud-gcp JAISCLOUD_K8S_SPARK_IMAGE)
+# substrate's own image, so it is probed separately — through envFrom too, since
+# a Deployment may inject it from a ConfigMap/Secret.
+GCP_SPARK_IMAGE=$(deployment_env_effective "$NS_GCP" jaiscloud-gcp JAISCLOUD_K8S_SPARK_IMAGE)
 GCP_SPARK_PRIVATE=0
 [[ -n "$GCP_SPARK_IMAGE" ]] && GCP_SPARK_PRIVATE=$(private_registry "$GCP_SPARK_IMAGE")
 # Managed Kafka broker mode. A real broker (k8s/docker/native) has no PVC, so a
 # park loses its topics (the cluster/topic records and namespace survive). The
 # /park response reports topicDataLost; this warns before anyone parks.
-GCP_KAFKA_BROKER_MODE=$(deployment_env "$NS_GCP" jaiscloud-gcp JAISCLOUD_KAFKA_BROKER_MODE)
+GCP_KAFKA_BROKER_MODE=$(deployment_env_effective "$NS_GCP" jaiscloud-gcp JAISCLOUD_KAFKA_BROKER_MODE)
 GCP_KAFKA_REAL=0
 case "$GCP_KAFKA_BROKER_MODE" in
   k8s|docker|native) GCP_KAFKA_REAL=1 ;;
@@ -470,7 +612,7 @@ fi
 # server the operator brought; deploy.sh --store-dsn). The record is
 # authoritative; otherwise a Deployment/record means bundled, and a substrate
 # without one means external. For an external store there is no pod to exec, so
-# ready/databases are reported false = "not probeable", never "missing".
+# the database probe is null = "unknown", never "missing".
 STORE_MODE="bundled"
 if [[ -n "$RECORD_STORE" ]]; then
   case "$RECORD_STORE" in
@@ -482,10 +624,19 @@ fi
 if [[ "$STORE_MODE" == "external" ]]; then
   STORE_PRESENT=1
   STORE_READY=0
-  DB_AWS=0
-  DB_GCP=0
 else
   STORE_PRESENT="$STORE_DEPLOY"
+fi
+# Tri-state database probes + the probe disposition. "exec" means the bundled
+# store Deployment was ready and both psql probes returned an answer (true or
+# false); anything else is "unavailable" (external store, absent/not-ready
+# Deployment, or a failed exec) and the databases stay null.
+DB_AWS=$(db_state jaiscloud)
+DB_GCP=$(db_state jaiscloud_gcp)
+DATABASES_PROBE="unavailable"
+if [[ "$STORE_MODE" != "external" && "$STORE_READY" == "1" \
+      && "$DB_AWS" != "null" && "$DB_GCP" != "null" ]]; then
+  DATABASES_PROBE="exec"
 fi
 
 # A pre-split object that is scaled to 0 while the new store serves is a
@@ -596,7 +747,7 @@ for cloud in aws gcp; do
   reasons=""
   [[ "$dep" == "1" ]] && reasons+="${reasons:+, }deployment/$workload in $ns exists"
   [[ "$sa" == "1" ]] && reasons+="${reasons:+, }serviceaccount/$sa_name in $ns exists"
-  [[ "$db" == "1" ]] && reasons+="${reasons:+, }its database exists"
+  [[ "$db" == "true" ]] && reasons+="${reasons:+, }its database exists"
   [[ "$blobs_p" == "1" ]] && reasons+="${reasons:+, }pvc/$blobs_name in $ns exists"
   [[ "$state_p" == "1" ]] && reasons+="${reasons:+, }pvc/$state_name in $ns exists"
   [[ "$sub" == "$cloud" ]] && reasons+="${reasons:+, }namespace $ns is labelled jaiscloud.io/substrate=$cloud"
@@ -617,6 +768,129 @@ WARNINGS=()
 RECOMMENDED=() # "action|command|why|optional"
 warn_add() { WARNINGS+=("$1"); }
 rec_add() { RECOMMENDED+=("$1|$2|$3|$4"); }
+
+# ── effective RBAC: what the running ServiceAccounts may actually do ────────
+# The Deployment's spec.template.spec.serviceAccountName is the identity that
+# matters — a binding on the default name does nothing for a renamed SA. Fall
+# back to the conventional name when the field is unset (Kubernetes defaults to
+# "default", but the manifests always name their SA).
+AWS_SA=$(field "$NS_AWS" deployment jaiscloud '{{.spec.template.spec.serviceAccountName}}')
+AWS_SA=${AWS_SA:-jaiscloud}
+GCP_SA=$(field "$NS_GCP" deployment jaiscloud-gcp '{{.spec.template.spec.serviceAccountName}}')
+GCP_SA=${GCP_SA:-jaiscloud-gcp}
+
+AWS_DELETE_NS=$(auth_can_i delete namespaces "$NS_AWS" "$AWS_SA")
+AWS_CREATE_NS=$(auth_can_i create namespaces "$NS_AWS" "$AWS_SA")
+AWS_UPDATE_NS=$(auth_can_i update namespaces "$NS_AWS" "$AWS_SA")
+AWS_CREATE_RB=$(auth_can_i create rolebindings "$NS_AWS" "$AWS_SA")
+GCP_DELETE_NS=$(auth_can_i delete namespaces "$NS_GCP" "$GCP_SA")
+GCP_CREATE_NS=$(auth_can_i create namespaces "$NS_GCP" "$GCP_SA")
+GCP_UPDATE_NS=$(auth_can_i update namespaces "$NS_GCP" "$GCP_SA")
+GCP_CREATE_RB=$(auth_can_i create rolebindings "$NS_GCP" "$GCP_SA")
+
+# The intended substrate's effective namespace delete is what rbac.namespaceAdmin
+# means now (kept boolean for compatibility). Unknown never counts as true, so a
+# caller who may not impersonate gets false plus the "cannot verify" warning
+# rather than a silent yes.
+NAMESPACE_ADMIN_EFFECTIVE=0
+if [[ -z "$INSTALLED" ]]; then
+  if [[ "$AWS_DELETE_NS" == "yes" || "$GCP_DELETE_NS" == "yes" ]]; then NAMESPACE_ADMIN_EFFECTIVE=1; fi
+else
+  if list_has "$INSTALLED" aws && [[ "$AWS_DELETE_NS" == "yes" ]]; then NAMESPACE_ADMIN_EFFECTIVE=1; fi
+  if list_has "$INSTALLED" gcp && [[ "$GCP_DELETE_NS" == "yes" ]]; then NAMESPACE_ADMIN_EFFECTIVE=1; fi
+fi
+
+# Does the isolation policy's matchConditions actually name the identity that is
+# running? Until the policy is rendered from NS_*/SA_* (F3), a renamed namespace
+# or ServiceAccount silently leaves the boundary open: the policy matches
+# usernames that no request carries.
+VAP_EXPR=""
+if [[ "$VAP_PRESENT" == "1" ]]; then
+  VAP_EXPR=$(kc get validatingadmissionpolicy jaiscloud-namespace-isolation \
+    -o go-template='{{range .spec.matchConditions}}{{.expression}}{{"\n"}}{{end}}' 2>/dev/null || true)
+fi
+# policy_mentions <namespace> <sa> — true|false|null (null: no policy, no read).
+policy_mentions() {
+  if [[ "$VAP_PRESENT" != "1" || -z "$VAP_EXPR" ]]; then echo null; return; fi
+  if printf '%s' "$VAP_EXPR" | grep -Fq "system:serviceaccount:$1:$2"; then echo true; else echo false; fi
+}
+POLICY_AWS=$(policy_mentions "$NS_AWS" "$AWS_SA")
+POLICY_GCP=$(policy_mentions "$NS_GCP" "$GCP_SA")
+POLICY_MATCHES_SA=unknown
+if [[ "$POLICY_AWS" != "null" ]]; then
+  POLICY_MATCHES_SA=true
+  [[ "$AWS_PRESENT" == "1" && "$POLICY_AWS" == "false" ]] && POLICY_MATCHES_SA=false
+  [[ "$GCP_PRESENT" == "1" && "$POLICY_GCP" == "false" ]] && POLICY_MATCHES_SA=false
+fi
+
+# ── DNS: are cloud suffixes rewritten to the gateway, and is that still valid? ─
+# Read-only: kube-system/coredns is the cluster's resolver; an absent ConfigMap or
+# a Forbidden read means the rewrite state is unknown, never "absent".
+COREDNS_PRESENT=$(probe_ok kc -n kube-system get configmap coredns)
+COREFILE=""
+[[ "$COREDNS_PRESENT" == "1" ]] && COREFILE=$(configmap_key kube-system coredns Corefile)
+DNS_REWRITES=unknown
+DNS_SUFFIXES=""
+DNS_STALE=0
+# A "gateway" means both the Istio Gateway route resource and a ready ingress
+# Deployment: a rewrite pointing at a gateway Service with no route accepts the
+# connection and answers 404/503.
+GATEWAY_READY=0
+[[ "$MESH_GW" == "1" && "$MESH_GATEWAY" == "1" ]] && GATEWAY_READY=1
+if [[ "$COREDNS_PRESENT" == "1" && -n "$COREFILE" ]]; then
+  DNS_REWRITES=false
+  while read -r suffix owner; do
+    [[ -n "$suffix" ]] || continue
+    pat=""
+    case "$suffix" in
+      amazonaws.com)      pat='amazonaws\\?[.]com' ;;
+      googleapis.com)     pat='googleapis\\?[.]com' ;;
+      run.app)            pat='run\\?[.]app' ;;
+      cloudfunctions.net) pat='cloudfunctions\\?[.]net' ;;
+    esac
+    # One line that names the suffix AND a rewrite/template/gateway target. This
+    # is a heuristic on purpose: the Corefile is free-form, and the documented
+    # fragment is one `rewrite ... <suffix-regex> istio-ingressgateway...` line
+    # per suffix (dns.yaml).
+    if printf '%s\n' "$COREFILE" | grep -E "$pat" | grep -Eiq 'rewrite|template|istio-ingressgateway'; then
+      DNS_REWRITES=true
+      DNS_SUFFIXES=$(list_add "$DNS_SUFFIXES" "$suffix")
+      if [[ "$GATEWAY_READY" != "1" ]]; then
+        warn_add "CoreDNS rewrites $suffix to the JaisCloud gateway, but no ready gateway serves it (istio-system/istio-ingressgateway + Gateway/jaiscloud): clients that resolve $suffix hit a dead route; remove the $suffix rewrite or (re)install the mesh — see deploy/k8s/istio/dns.yaml"
+        DNS_STALE=1
+      else
+        case "$owner" in
+          aws) owner_state=$AWS_STATE ;;
+          gcp) owner_state=$GCP_STATE ;;
+        esac
+        case "$owner_state" in
+          parked|absent)
+            warn_add "CoreDNS rewrites $suffix to the JaisCloud gateway, but the $owner substrate is $owner_state: clients that resolve $suffix reach a parked/absent backend and time out (or get a fast 503); remove the $suffix rewrite for now (deploy/k8s/istio/dns.yaml) and re-add it when you resume $owner"
+            DNS_STALE=1 ;;
+        esac
+      fi
+    fi
+  done <<'EOF'
+amazonaws.com aws
+googleapis.com gcp
+run.app gcp
+cloudfunctions.net gcp
+EOF
+fi
+
+# ── CA copies: a ConfigMap with no issuing mesh is stale ────────────────────
+# Park keeps the CA (a resumed substrate and its managed workloads still trust
+# the front door), so a CA copy is only stale when the issuer itself is gone.
+CA_AWS=$(probe_ok kc -n "$NS_AWS" get configmap jaiscloud-ca-cert)
+CA_GCP=$(probe_ok kc -n "$NS_GCP" get configmap jaiscloud-ca-cert)
+CA_ISSUER=0
+[[ "$MESH_SECRET" == "1" || "$MESH_GW" == "1" ]] && CA_ISSUER=1
+if [[ "$CA_ISSUER" != "1" ]]; then
+  [[ "$CA_AWS" == "1" ]] && \
+    warn_add "the CA ConfigMap jaiscloud-ca-cert in $NS_AWS has no issuing mesh (istio-system/jaiscloud-wildcard is missing): stale CA — re-run deploy/k8s/istio/certs/gen.sh or remove it"
+  [[ "$CA_GCP" == "1" ]] && \
+    warn_add "the CA ConfigMap jaiscloud-ca-cert in $NS_GCP has no issuing mesh (istio-system/jaiscloud-wildcard is missing): stale CA — re-run deploy/k8s/istio/certs/gen.sh or remove it"
+fi
 
 [[ "$LEGACY_PENDING" == "1" ]] && \
   warn_add "legacy pre-split layout detected in $NS_AWS; the store and GCP bytes must be migrated"
@@ -686,6 +960,43 @@ if [[ "$SUBSTRATE_PRESENT" == "1" && "$VAP_PRESENT" == "0" ]]; then
   fi
 fi
 
+# The policy exists but does not name the identity that is running (a renamed
+# namespace or ServiceAccount, or a hand-edited policy): the boundary matches
+# nobody. Until the policy is rendered from NS_*/SA_* the operator must edit it.
+if [[ "$POLICY_MATCHES_SA" == "false" ]]; then
+  for cloud in aws gcp; do
+    case "$cloud" in
+      aws) present=$AWS_PRESENT ns=$NS_AWS sa=$AWS_SA mentions=$POLICY_AWS ;;
+      gcp) present=$GCP_PRESENT ns=$NS_GCP sa=$GCP_SA mentions=$POLICY_GCP ;;
+    esac
+    [[ "$present" == "1" && "$mentions" == "false" ]] || continue
+    warn_add "namespace isolation is not enforced for the running identity $ns:$sa: ValidatingAdmissionPolicy jaiscloud-namespace-isolation matches system:serviceaccount:<namespace>:<serviceaccount> usernames that do not include this one; edit its matchConditions (or re-apply a policy generated for these namespaces) and re-run the preflight"
+    rec_add "install-rbac-policy" \
+      "kubectl edit validatingadmissionpolicy jaiscloud-namespace-isolation   # matchConditions must name system:serviceaccount:$ns:$sa" \
+      "the isolation policy does not match the $cloud substrate's running ServiceAccount ($ns:$sa), so it enforces nothing for it" "false"
+  done
+fi
+
+# Effective RBAC: a `no` is a real permission gap for an intended substrate; an
+# `unknown` (impersonation not allowed, or kubectl too old) is reported as such —
+# never as "isolation is unenforced".
+for cloud in aws gcp; do
+  list_has "$INSTALLED" "$cloud" || continue
+  case "$cloud" in
+    aws) present=$AWS_PRESENT ns=$NS_AWS sa=$AWS_SA del=$AWS_DELETE_NS ;;
+    gcp) present=$GCP_PRESENT ns=$NS_GCP sa=$GCP_SA del=$GCP_DELETE_NS ;;
+  esac
+  [[ "$present" == "1" ]] || continue
+  case "$del" in
+    no)
+      warn_add "the $cloud substrate's ServiceAccount $ns:$sa cannot delete namespaces (effective RBAC, kubectl auth can-i --as): Dataproc cluster namespaces and Managed Kafka brokers cannot be created/torn down, and the run falls back to mock; apply deploy/k8s/rbac-shared.yaml and deploy/k8s/rbac-$cloud.yaml"
+      rec_add "install-rbac-policy" "kubectl apply -f deploy/k8s/rbac-shared.yaml -f deploy/k8s/rbac-$cloud.yaml -f deploy/k8s/rbac-admission-policy.yaml" \
+        "$ns:$sa has no cluster-wide namespace delete (Dataproc/Managed Kafka need it); the admission policy keeps that grant to owned namespaces" "false" ;;
+    unknown)
+      warn_add "cannot verify effective RBAC for $cloud: kubectl auth can-i --as=system:serviceaccount:$ns:$sa did not answer yes/no (impersonation may be forbidden for this kubeconfig); the permission state is unknown, not unenforced — re-run with a cluster-admin kubeconfig or check the bindings by hand" ;;
+  esac
+done
+
 # Recommendations are relative to intent: only an installed cloud is ever told
 # to deploy, and it is non-optional when it is absent. Clouds outside the
 # intent are leaks (warnings above), not deployment targets.
@@ -750,7 +1061,7 @@ else
   if list_has "$INSTALLED" gcp && [[ "$GCP_STATE" == "absent" ]] && [[ "$(desired_state gcp)" != "absent" ]]; then
     rec_add "deploy-gcp" "deploy/deploy.sh --gcp --yes" "$NS_GCP has no jaiscloud-gcp Deployment" "false"
   fi
-  [[ "$STORE_READY" == "1" && "$DB_GCP" == "0" && "$GCP_PRESENT" == "1" ]] && list_has "$INSTALLED" gcp \
+  [[ "$STORE_READY" == "1" && "$DB_GCP" == "false" && "$GCP_PRESENT" == "1" ]] && list_has "$INSTALLED" gcp \
     && [[ "$(desired_state gcp)" != "absent" ]] && \
     rec_add "create-gcp-db" "make postgres-gcp-db" "jaiscloud_gcp is missing from the store" "false"
 fi
@@ -780,7 +1091,8 @@ if [[ "$JSON" == "1" ]]; then
     "$STORE_MODE" "$(b "$STORE_PRESENT")" "$(b "$STORE_READY")"
   printf '    "pvc": {"name": "postgres-pvc", "namespace": "%s", "status": "%s", "capacity": "%s"},\n' \
     "$NS_DATA" "$(json_escape "$STORE_PVC")" "$(json_escape "$(pvc_capacity "$NS_DATA" postgres-pvc)")"
-  printf '    "databases": {"jaiscloud": %s, "jaiscloud_gcp": %s}\n' "$(b "$DB_AWS")" "$(b "$DB_GCP")"
+  printf '    "databases": {"jaiscloud": %s, "jaiscloud_gcp": %s}, "databasesProbe": "%s"\n' \
+    "$(tri "$DB_AWS")" "$(tri "$DB_GCP")" "$DATABASES_PROBE"
   printf '  },\n'
   printf '  "substrates": {\n'
   printf '    "aws": {"present": %s, "ready": %s, "state": "%s", "replicas": %s, "image": "%s", "imageID": "%s", "imagePullPolicy": "%s", "privateRegistry": %s},\n' \
@@ -809,8 +1121,23 @@ if [[ "$JSON" == "1" ]]; then
   printf '  "mesh": {"namespace": %s, "istiod": %s, "existingInstall": %s, "ingressGateway": %s, "tlsSecret": %s, "crds": %s, "gateway": %s, "virtualServices": %s, "destinationRules": %s, "address": "%s"},\n' \
     "$(b "$MESH_NS")" "$(b "$MESH_ISTIOD")" "$(b "$MESH_ISTIOD")" "$(b "$MESH_GATEWAY")" "$(b "$MESH_SECRET")" "$(b "$MESH_CRD")" \
     "$(b "$MESH_GW")" "${MESH_VS:-0}" "${MESH_DR:-0}" "$(json_escape "$MESH_ADDR")"
-  printf '  "rbac": {"namespaceAdmin": %s, "admissionPolicy": %s, "serverVersion": "%s"},\n' \
-    "$(b "$NAMESPACE_ADMIN_PRESENT")" "$(b "$VAP_PRESENT")" "$(json_escape "$SERVER_VERSION")"
+  printf '  "dns": {"rewrites": %s, "suffixes": %s, "stale": %s},\n' \
+    "$(tri "$DNS_REWRITES")" "$(csv_json_array "$DNS_SUFFIXES")" "$(b "$DNS_STALE")"
+  printf '  "ca": {"aws": %s, "gcp": %s, "issuerPresent": %s},\n' \
+    "$(b "$CA_AWS")" "$(b "$CA_GCP")" "$(b "$CA_ISSUER")"
+  printf '  "rbac": {\n'
+  printf '    "namespaceAdmin": %s, "admissionPolicy": %s, "serverVersion": "%s", "source": "auth",\n' \
+    "$(b "$NAMESPACE_ADMIN_EFFECTIVE")" "$(b "$VAP_PRESENT")" "$(json_escape "$SERVER_VERSION")"
+  printf '    "policyMatchesSA": %s,\n' "$(tri "$POLICY_MATCHES_SA")"
+  printf '    "policyMentions": {"aws": %s, "gcp": %s},\n' "$(tri "$POLICY_AWS")" "$(tri "$POLICY_GCP")"
+  printf '    "namespaceAdminBindings": {"aws": %s, "gcp": %s},\n' "$(b "$NAMESPACE_ADMIN_AWS")" "$(b "$NAMESPACE_ADMIN_GCP")"
+  printf '    "effective": {\n'
+  printf '      "aws": {"serviceAccount": "%s", "namespace": "%s", "source": "auth", "deleteNamespaces": "%s", "createNamespaces": "%s", "updateNamespaces": "%s", "createRoleBindings": "%s"},\n' \
+    "$(json_escape "$AWS_SA")" "$(json_escape "$NS_AWS")" "$AWS_DELETE_NS" "$AWS_CREATE_NS" "$AWS_UPDATE_NS" "$AWS_CREATE_RB"
+  printf '      "gcp": {"serviceAccount": "%s", "namespace": "%s", "source": "auth", "deleteNamespaces": "%s", "createNamespaces": "%s", "updateNamespaces": "%s", "createRoleBindings": "%s"}\n' \
+    "$(json_escape "$GCP_SA")" "$(json_escape "$NS_GCP")" "$GCP_DELETE_NS" "$GCP_CREATE_NS" "$GCP_UPDATE_NS" "$GCP_CREATE_RB"
+  printf '    }\n'
+  printf '  },\n'
   printf '  "warnings": ['
   first=1
   for w in ${WARNINGS+"${WARNINGS[@]}"}; do
@@ -862,10 +1189,11 @@ else
   fi
   if [[ "$STORE_MODE" == "external" ]]; then
     ok_ "store: mode=external (your server; no postgres Deployment, database probes skipped)"
-    say "  note    : store.ready=false / databases=false mean 'not probeable', not 'missing'"
+    ok_ "databases: jaiscloud=$(tri_word "$DB_AWS") jaiscloud_gcp=$(tri_word "$DB_GCP") databases-probe=$DATABASES_PROBE"
+    say "  note    : store.ready=false and databases=unknown mean 'not probeable', not 'missing'"
   elif [[ "$STORE_PRESENT" == "1" ]]; then
-    ok_ "store: mode=bundled deployment/postgres ready=$([[ "$STORE_READY" == "1" ]] && echo yes || echo no), pvc=${STORE_PVC:-?}"
-    ok_ "databases: jaiscloud=$([[ "$DB_AWS" == "1" ]] && echo yes || echo no) jaiscloud_gcp=$([[ "$DB_GCP" == "1" ]] && echo yes || echo no)"
+    ok_ "store: mode=bundled deployment/postgres ready=$([[ "$STORE_READY" == "1" ]] && echo yes || echo no), pvc=${STORE_PVC:-?} databases-probe=$DATABASES_PROBE"
+    ok_ "databases: jaiscloud=$(tri_word "$DB_AWS") jaiscloud_gcp=$(tri_word "$DB_GCP")"
   else
     miss_ "store: mode=bundled $NS_DATA/deployment/postgres"
   fi
@@ -892,18 +1220,35 @@ else
   head_ "rbac"
   say "  server     ${SERVER_VERSION:-unknown}"
   say "  namespace admin bindings: aws=$(yn "$NAMESPACE_ADMIN_AWS") gcp=$(yn "$NAMESPACE_ADMIN_GCP")  (intended: ${INSTALLED:-none})"
-  if [[ "$NAMESPACE_ADMIN_PRESENT" == "1" ]]; then
-    ok_ "clusterrolebinding jaiscloud-namespace-admin-<substrate> (namespace create/delete for the intended substrate)"
+  say "  effective  aws $NS_AWS:$AWS_SA delete-namespaces=$AWS_DELETE_NS create-namespaces=$AWS_CREATE_NS update-namespaces=$AWS_UPDATE_NS create-rolebindings=$AWS_CREATE_RB"
+  say "  effective  gcp $NS_GCP:$GCP_SA delete-namespaces=$GCP_DELETE_NS create-namespaces=$GCP_CREATE_NS update-namespaces=$GCP_UPDATE_NS create-rolebindings=$GCP_CREATE_RB"
+  say "             (kubectl auth can-i --as; unknown = impersonation not allowed, not unenforced)"
+  if [[ "$NAMESPACE_ADMIN_EFFECTIVE" == "1" ]]; then
+    ok_ "namespace create/delete allowed for the intended substrate (${INSTALLED:-any})"
   else
-    miss_ "clusterrolebinding jaiscloud-namespace-admin-{aws,gcp} — none bound for the intended substrate (${INSTALLED:-none})"
+    miss_ "namespace create/delete not verified/allowed for the intended substrate (${INSTALLED:-none})"
   fi
   if [[ "$VAP_PRESENT" == "1" ]]; then
-    ok_ "ValidatingAdmissionPolicy jaiscloud-namespace-isolation enforces the namespace boundary"
+    case "$POLICY_MATCHES_SA" in
+      true)  ok_ "ValidatingAdmissionPolicy jaiscloud-namespace-isolation enforces the namespace boundary and matches the running identity" ;;
+      false) warn_ "ValidatingAdmissionPolicy jaiscloud-namespace-isolation does not match the running identity — it enforces nothing for it (edit its matchConditions)" ;;
+      *)     warn_ "ValidatingAdmissionPolicy jaiscloud-namespace-isolation exists but its matchConditions could not be read" ;;
+    esac
   elif [[ "$SERVER_OLD" == "1" ]]; then
     miss_ "ValidatingAdmissionPolicy jaiscloud-namespace-isolation (Kubernetes 1.$SERVER_MINOR cannot enforce it; >= 1.30 required)"
   else
     miss_ "ValidatingAdmissionPolicy jaiscloud-namespace-isolation (namespace isolation not enforced)"
   fi
+  head_ "dns (CoreDNS rewrites, read-only)"
+  if [[ "$DNS_REWRITES" == "unknown" ]]; then
+    say "  rewrites: unknown (kube-system/coredns is absent or not readable)"
+  elif [[ "$DNS_REWRITES" == "false" ]]; then
+    say "  rewrites: none of amazonaws.com/googleapis.com/run.app/cloudfunctions.net (clients need --resolve or hostAliases)"
+  else
+    say "  rewrites: ${DNS_SUFFIXES} -> istio-ingressgateway  stale=$([[ "$DNS_STALE" == "1" ]] && echo yes || echo no)"
+  fi
+  head_ "ca (TLS trust copies)"
+  say "  configmaps/jaiscloud-ca-cert: aws=$(yn "$CA_AWS") gcp=$(yn "$CA_GCP")  issuer=$([[ "$CA_ISSUER" == "1" ]] && echo 'istio-system/jaiscloud-wildcard' || echo absent)"
   head_ "mesh (optional)"
   if [[ "$MESH_NS" == "1" ]]; then
     ok_ "istio-system: istiod=$(yn "$MESH_ISTIOD") gateway=$(yn "$MESH_GATEWAY") route-resource=$(yn "$MESH_GW") tls-secret=$(yn "$MESH_SECRET") virtualServices=${MESH_VS} destinationRules=${MESH_DR}${MESH_ADDR:+ address=$MESH_ADDR}"

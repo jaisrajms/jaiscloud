@@ -633,10 +633,13 @@ Rules that follow and must not be relaxed:
   creates, filters its sweeps on them, and backfills them onto a pre-upgrade
   namespace the next time it is ensured. `deploy.sh` applies the policy on every
   install/reset path and refuses Kubernetes < 1.30 before creating anything;
-  `deploy.sh --check --json` reports `rbac.admissionPolicy` and
-  `rbac.serverVersion`, and `GATE_ALLOW_RBAC=1 make test-rbac-isolation-k8s`
-  proves each ServiceAccount can only touch its own labelled namespaces. The
-  policy does not match an operator's `kubectl`, so `--reset` keeps working.
+  `deploy.sh --check --json` reports `rbac.admissionPolicy`,
+  `rbac.policyMatchesSA` (does the policy name the identity actually running?)
+  and `rbac.effective.<cloud>` (what that identity may do, via
+  `kubectl auth can-i --as`), plus `rbac.serverVersion`, and
+  `GATE_ALLOW_RBAC=1 make test-rbac-isolation-k8s` proves each ServiceAccount
+  can only touch its own labelled namespaces. The policy does not match an
+  operator's `kubectl`, so `--reset` keeps working.
 
 `make up-k8s` deploys the AWS substrate, `make up-k8s-gcp` the GCP one. Both are
 idempotent and can be run in either order on the same cluster.
@@ -691,7 +694,8 @@ and the namespace admission policy are the only shared objects
 For an agent or script driving this setup, start with
 [`docs/gcp/integration/AGENTS.md`](docs/gcp/integration/AGENTS.md) and
 `./deploy/deploy.sh --check --json` (read-only: namespaces, legacy detection,
-store, substrates, mesh, next step). The facts live in the generated
+store with its tri-state databases, substrates, mesh, CoreDNS rewrites, CA
+copies, effective RBAC, next step). The facts live in the generated
 [`contract.yaml`](docs/gcp/integration/contract.yaml).
 
 The GCP manifest defaults to the published multi-arch image
@@ -808,10 +812,11 @@ external DSN followed by a rollout restart. The base DSN's database component is
 replaced with `jaiscloud` / `jaiscloud_gcp` for those Secrets (one database per
 cloud); `JAISCLOUD_AWS_DSN` / `JAISCLOUD_GCP_DSN` are used verbatim for an exact
 per-substrate DSN. `deploy.sh --check --json` reports
-`store.mode=bundled|external`; for an external store `store.ready` and
-`store.databases.*` are `false`, meaning "not probeable" (there is no pod to
-exec), not "missing". Migrating the pre-split store into an external target is
-not supported yet — the command refuses before touching anything.
+`store.mode=bundled|external`; for an external store `store.ready` is `false` and
+`store.databases.*` is `null` (`store.databasesProbe=unavailable`), meaning "not
+probeable" (there is no pod to exec), not "missing". Migrating the pre-split
+store into an external target is not supported yet — the command refuses before
+touching anything.
 
 The old **sample workloads** are left to you: if you had applied
 `deploy/k8s/gcp-samples/samples.yaml` or `deploy/k8s/lakehouse/pipeline.yaml` in

@@ -282,10 +282,13 @@ those labels plus `jaiscloud.io/instance-id` on every namespace it creates, and
 its sweeps filter on them. `./deploy/deploy.sh` applies the policy on every
 install/reset path and refuses a cluster older than 1.30 before creating
 anything; `./deploy/deploy.sh --check --json` reports it as
-`rbac.admissionPolicy` + `rbac.serverVersion`, and `GATE_ALLOW_RBAC=1 make
-test-rbac-isolation-k8s` proves the allow/deny matrix with server-side dry runs.
-A plain `kubectl` (and `deploy.sh --reset`) is not matched by the policy, so the
-documented operator paths are unchanged.
+`rbac.admissionPolicy` + `rbac.serverVersion`, checks that the policy's
+`matchConditions` name the identity each Deployment actually runs
+(`rbac.policyMatchesSA`) and probes what that identity may do
+(`rbac.effective.<cloud>`, via `kubectl auth can-i --as`), and
+`GATE_ALLOW_RBAC=1 make test-rbac-isolation-k8s` proves the allow/deny matrix
+with server-side dry runs. A plain `kubectl` (and `deploy.sh --reset`) is not
+matched by the policy, so the documented operator paths are unchanged.
 
 **Automating this?** [`docs/gcp/integration/AGENTS.md`](docs/gcp/integration/AGENTS.md)
 is a runbook for an LLM agent or script; its generated
@@ -386,6 +389,15 @@ route on it. `scripts/istio-smoke.sh` asserts the gateway paths. On a cluster
 that already runs istiod, add only the gateway with
 `deploy/k8s/istio/istiooperator-gateway-only.yaml` — do not re-run
 `istioctl install --set profile=minimal`, which can replace the existing IOP.
+
+Park keeps the CA but stops the backend, so the front door's two supporting
+pieces need a decision: a cluster-wide CoreDNS rewrite survives a park and leaves
+clients resolving a dead route (remove that suffix's rewrite while parked,
+re-add it on resume; `deploy.sh --check --json` reports `dns.rewrites` /
+`dns.suffixes` / `dns.stale`), while the CA ConfigMap stays on purpose and is only
+stale when its issuer is gone (`ca.{aws,gcp}` / `ca.issuerPresent`). The three
+override kinds (CoreDNS, pod `hostAliases`, pinned `clusterIP`) are compared in
+[`deploy/k8s/istio/README.md`](deploy/k8s/istio/README.md#park-switch-and-dnsca).
 
 Resets are database-scoped: `./deploy/deploy.sh --gcp-reset` drops only
 `jaiscloud_gcp` and the GCP blobs PVC, while `--reset` drops only the AWS

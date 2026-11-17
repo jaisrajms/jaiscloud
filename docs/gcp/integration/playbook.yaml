@@ -42,6 +42,7 @@ platform:
       grants: "namespaces get/list/watch/create/update/patch/delete (update/patch for identity-label backfill; the admission policy keeps it to owned namespaces) + rolebindings get/list/create/update/delete, cluster-wide"
       why: "Dataproc creates one namespace per cluster and Managed Kafka one per broker; each substrate binds the ClusterRole to its own identity only, so a single-substrate install grants it to no other cloud."
       manifests: "deploy/k8s/rbac-shared.yaml (ClusterRoles) + rbac-aws.yaml / rbac-gcp.yaml (ServiceAccount + bindings)"
+      effective_check: "deploy/deploy.sh --check --json   # rbac.effective.<cloud>: deleteNamespaces/createNamespaces/updateNamespaces + createRoleBindings, each yes|no|unknown, via kubectl auth can-i --as=<the Deployment's spec.template.spec.serviceAccountName>. unknown = the kubeconfig may not impersonate; that is not evidence of a missing grant."
     admission_policy:
       object: "ValidatingAdmissionPolicy + ValidatingAdmissionPolicyBinding jaiscloud-namespace-isolation (deploy/k8s/rbac-admission-policy.yaml)"
       mode: "failurePolicy: Fail, validationActions: [Deny], matched only to the two substrate ServiceAccounts"
@@ -52,9 +53,24 @@ platform:
       rolebinding_rule: "create/update must carry jaiscloud.io/managed-by=jaiscloud and the caller's substrate label"
       limitation: "Admission cannot read the target Namespace's labels, so the RoleBinding rule is a write-shape guard, not the namespace boundary."
       apply: "kubectl apply -f deploy/k8s/rbac-admission-policy.yaml   # idempotent; deploy.sh applies it on every install path"
-      verify: "deploy/deploy.sh --check --json   # rbac.admissionPolicy=true"
+      verify: "deploy/deploy.sh --check --json   # rbac.admissionPolicy=true and rbac.policyMatchesSA=true"
+      identity_match: "rbac.policyMatchesSA compares spec.matchConditions[].expression with system:serviceaccount:<ns>:<sa> of every present substrate (rbac.policyMentions.<cloud> per cloud). false means the policy names nobody that is running: warn + non-optional install-rbac-policy; edit matchConditions (the policy matches literal usernames) until it is generated from the configured namespaces/ServiceAccounts."
       gate: "GATE_ALLOW_RBAC=1 KUBE_CONTEXT=<ctx> make test-rbac-isolation-k8s   # server-side dry runs: allow own, deny the other's, both directions"
       operator_paths: "The policy matches only the two ServiceAccounts; kubectl applied by the operator (including --reset deleting the jaiscloud namespace) is unaffected."
+  dns:
+    object: "ConfigMap kube-system/coredns, key Corefile (read-only probe; deploy/k8s/istio/dns.yaml is documentation and is never applied)"
+    override_kinds:
+      cluster_wide: "CoreDNS rewrite/template mapping a cloud suffix to istio-ingressgateway.istio-system.svc.cluster.local — every pod in the cluster gets it, including pods that really want the public cloud"
+      per_workload: "Pod spec.hostAliases listing concrete hosts -> the gateway ClusterIP — no wildcards, no port, per workload"
+      pinned_service_ip: "Service spec.clusterIP pinned to an unused address in the service CIDR — immutable; changing it means recreating the Service"
+    check: "deploy/deploy.sh --check --json   # dns.rewrites=true|false|unknown, dns.suffixes, dns.stale"
+    stale: "a rewrite for a suffix whose substrate is parked/absent, or with no ready gateway (istio-ingressgateway + Gateway/jaiscloud), leaves clients resolving a dead backend: they time out or get a fast 503. Remove that suffix's rewrite while parked and re-add it on resume."
+  ca:
+    objects: "Secret istio-system/jaiscloud-wildcard (issuer) + ConfigMap jaiscloud-ca-cert in each substrate namespace (trust copy for managed workloads)"
+    written_by: "deploy/k8s/istio/certs/gen.sh (--force rotates; clients must re-trust)"
+    check: "deploy/deploy.sh --check --json   # ca.aws, ca.gcp, ca.issuerPresent"
+    park: "park KEEPS the CA copy: a resumed substrate, its Dataproc drivers and Cloud Run pods still trust the front door. Do not delete it with the compute."
+    stale: "a copy with no issuer (no jaiscloud-wildcard secret and no Gateway) is stale: re-run certs/gen.sh or remove the copy; the preflight warns once per namespace that still holds one."
 
 lifecycle:
   install_record:
@@ -94,6 +110,11 @@ lifecycle:
     leaks: "a cloud outside installed with a namespace, Deployment or database is a warning: 'unexpected <cloud> footprint (intent=...)'"
     strict: "exit 1 when a non-optional recommendation or a leak warning exists; optional work (the mesh) does not fail --strict"
     no_intent: "when nothing is installed and no flag is given, the preflight says so and asks for --substrate instead of recommending a cloud"
+  store_probes:
+    databases: "tri-state: store.databases.jaiscloud / .jaiscloud_gcp are true|false|null. true/false only when the bundled store Deployment is ready and psql answered; null (unknown, NOT missing) for an external store, an absent/not-ready Deployment, or a failed exec."
+    databasesProbe: "exec when both psql probes answered; unavailable otherwise"
+    recommendations: "only false means a database is missing (create-gcp-db); null never does — verify an external store with your own psql instead of creating anything"
+    env: "substrates.<cloud> env probes (sparkImage, kafkaBrokerMode) resolve an explicit env literal/valueFrom first, then envFrom in order (later source wins); Secret data is base64-decoded and an unreadable/missing ref is empty, not an error"
 
 executor_modes:
   precedence: "JAISCLOUD_<SUBSYSTEM>_EXECUTOR_MODE > JAISCLOUD_EXECUTOR_MODE > engine default (mock)"
@@ -273,6 +294,10 @@ scenarios:
       - id: use-other
         run: "Read/write the GCP substrate (port-forward 8080, or --switch gcp)"
         expect: "GCP state unaffected by the AWS park"
+      - id: dns-ca
+        run: "deploy/deploy.sh --check --json   # dns.stale, ca.*"
+        expect: "dns.stale=false, ca.issuerPresent=true"
+        note: "A CoreDNS rewrite (deploy/k8s/istio/dns.yaml) is cluster-wide and survives the park: while the substrate is parked the suffix still resolves to the gateway with no ready backend, so clients time out or get a fast 503. Remove that suffix's rewrite while parked and re-add it on resume (dns.suffixes names it, dns.stale flags it). A per-pod hostAliases entry keeps the gateway IP (nothing to change for a switch); a pinned Service clusterIP keeps its address but loses its endpoints (connection refused; do not point a client at a parked Service). The CA ConfigMap jaiscloud-ca-cert is KEPT on purpose — a resumed substrate and its managed workloads still trust the front door; it is stale only when istio-system/jaiscloud-wildcard and the Gateway are both gone (then re-run certs/gen.sh or remove it)."
       - id: resume
         run: "deploy/deploy.sh --resume aws"
         expect: "image compared with the parked one BEFORE scaling (mismatch refused, names --allow-upgrade), parked digest pinned with kubectl set image, scale to 1, rollout, POST /_jaiscloud/resume, <cloud>.state=running and the <cloud>.parked-* keys cleared"
@@ -310,6 +335,12 @@ verification:
   - id: databases
     run: "kubectl -n jaiscloud-data exec deploy/postgres -- psql -U jaiscloud -d postgres -tAc \"select datname from pg_database where datname like 'jaiscloud%'\""
     expect: "jaiscloud (AWS) and, with the GCP substrate, jaiscloud_gcp"
+  - id: preflight-store-rbac
+    run: "deploy/deploy.sh --check --json"
+    expect: "store.databasesProbe=exec with store.databases true/false for a bundled store (null + unavailable for an external or unprobeable one); rbac.policyMatchesSA=true; rbac.effective.<cloud>.deleteNamespaces=yes (unknown means the kubeconfig could not impersonate)"
+  - id: preflight-dns-ca
+    run: "deploy/deploy.sh --check --json"
+    expect: "dns.stale=false when any cloud suffix is rewritten (a parked/absent substrate or a missing gateway makes it stale); ca.issuerPresent=true whenever a jaiscloud-ca-cert copy exists"
   - id: mesh-smoke
     run: "SMOKE_PORT_FORWARD=1 scripts/istio-smoke.sh"
     expect: "4/4 passed"
@@ -342,7 +373,16 @@ failure_taxonomy:
     fix: "run an image that stamps jaiscloud.io/substrate + jaiscloud.io/instance-id; a pre-upgrade namespace is backfilled when next ensured. Do not remove the policy."
   - symptom: "driver/broker Pods Forbidden"
     cause: "per-cluster RBAC not applied or the resolved ServiceAccount is wrong"
-    fix: "kubectl apply -f deploy/k8s/rbac-shared.yaml && kubectl apply -f deploy/k8s/rbac-gcp.yaml; verify JAISCLOUD_K8S_SA / _NAMESPACE (the emulator resolves them from env or the projected token)"
+    fix: "kubectl apply -f deploy/k8s/rbac-shared.yaml && kubectl apply -f deploy/k8s/rbac-gcp.yaml; verify JAISCLOUD_K8S_SA / _NAMESPACE (the emulator resolves them from env or the projected token); deploy.sh --check --json reports rbac.effective.gcp.deleteNamespaces=no for a missing grant (unknown = the kubeconfig may not impersonate)"
+  - symptom: "after parking a substrate, clients of its cloud hostnames hang or return 503"
+    cause: "a cluster-wide CoreDNS rewrite still points the suffix at the gateway, whose route now has no ready backend"
+    fix: "remove that suffix's rewrite for the parked period and re-add it on resume (deploy/k8s/istio/dns.yaml); deploy.sh --check --json reports dns.suffixes and dns.stale=true"
+  - symptom: "store.databases.jaiscloud / jaiscloud_gcp is null"
+    cause: "the store is external (no pod to exec), the postgres Deployment is not ready, or the psql exec failed"
+    fix: "unknown, not missing: verify an external server with your own psql; do not create a database or deploy a substrate to 'fix' a null (store.databasesProbe says exec vs unavailable)"
+  - symptom: "certificate errors from a client after removing the mesh"
+    cause: "the CA ConfigMap jaiscloud-ca-cert is still in a substrate namespace but its issuer (istio-system/jaiscloud-wildcard + Gateway) is gone"
+    fix: "re-run deploy/k8s/istio/certs/gen.sh, or remove the stale copy from that namespace; deploy.sh --check --json reports ca.issuerPresent=false"
   - symptom: "LoadBalancer EXTERNAL-IP pending"
     cause: "kind/k3d have no LoadBalancer controller"
     fix: "use the port-forward deploy.sh prints; the front door is the external HTTP surface"
@@ -376,6 +416,8 @@ do_not:
     why: "it is a full install request: it can replace the existing IstioOperator/meshConfig and prune other components; add only the gateway with deploy/k8s/istio/istiooperator-gateway-only.yaml"
   - action: "Edit a manifest in a running cluster by hand"
     why: "deploy.sh/up-k8s apply the repository manifests; changes drift and check-deploy-images/contract checks will not see them"
+  - action: "Treat store.databases=null as a missing database, or delete a CA ConfigMap that park kept"
+    why: "null means unknown (external store / no ready pod / failed exec) — creating a database or a substrate to 'fix' it is a guess; the CA copy is what a resumed substrate and its managed workloads trust, so only remove it when ca.issuerPresent=false"
 
 destructive:
   - command: "deploy/deploy.sh --reset"
@@ -407,7 +449,7 @@ tooling:
     exit_codes: {0: success, 1: failure, 2: usage/refused}
   make:
     entry: "make help"
-    targets: ["up-k8s", "up-k8s-gcp", "postgres-gcp-db", "down-k8s", "check-deploy-images", "test-istio-smoke", "test-dual-substrate-k8s", "test-rbac-isolation-k8s", "test-lifecycle-k8s", "gcp-ci-preflight"]
+    targets: ["up-k8s", "up-k8s-gcp", "postgres-gcp-db", "down-k8s", "check-deploy-images", "test-integration-preflight", "test-istio-smoke", "test-dual-substrate-k8s", "test-rbac-isolation-k8s", "test-lifecycle-k8s", "gcp-ci-preflight"]
   emulator_api:
     base: "REST port (8080 GCP / 4566 AWS)"
     endpoints:
