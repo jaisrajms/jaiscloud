@@ -9,6 +9,10 @@
 # Images are built from the pinned upstream tag by deploy/docker/gcp-samples:
 #   make docker-gcp-samples
 #
+# LAB/E2E ONLY: the sample images live on the lab registry (GCP_REGISTRY, default
+# 10.0.100.21:5050) and this file is a test fixture — it is not part of a
+# substrate install and deploy/deploy.sh never applies it.
+#
 # Emulator endpoints (see deploy/k8s/jaiscloud-gcp.yaml):
 #   REST  : http://jaiscloud-gcp.jaiscloud-gcp.svc.cluster.local:8080
 #   gRPC  : jaiscloud-gcp.jaiscloud-gcp.svc.cluster.local:8081

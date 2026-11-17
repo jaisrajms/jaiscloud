@@ -79,6 +79,10 @@ func AgentGuideText(cloud, version, commit, date string) string {
 	install += "  ./deploy/deploy.sh --migrate-store --yes  # pre-split upgrade (destructive: confirm first)\n"
 	install += "  mesh (optional): deploy/k8s/istio/README.md + deploy/k8s/istio/certs/gen.sh\n"
 	install += "  (istiod already on the cluster? add only the gateway: istioctl install -f deploy/k8s/istio/istiooperator-gateway-only.yaml — never profile=minimal)\n"
+	if isGCP {
+		install += "  Dataproc: the default Spark image (apache/spark) is public but has no GCS connector — set JAISCLOUD_K8S_SPARK_IMAGE for gs:// jobs\n"
+	}
+	install += "  images: ':latest' is the interim policy (a node cache decides the digest); pin a release tag when one is cut\n"
 	install += "  (the kit has no source tree: --skip-build deploys an image you already have; --gcp never builds)\n"
 	return fmt.Sprintf(`JaisCloud %s — agent integration guide
   binary   %s %s (commit %s, built %s)

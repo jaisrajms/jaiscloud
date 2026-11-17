@@ -320,12 +320,16 @@ namespace-isolation boundary is in place from the first namespace.
   registry. To run your own build, tag/import it and point the Deployment at it:
   `JAISCLOUD_GCP_IMAGE=<image> ./deploy/deploy.sh --gcp`, or
   `kubectl -n jaiscloud-gcp set image deploy/jaiscloud-gcp jaiscloud-gcp=<image>`.
-- **Dataproc jobs need a Spark image with the GCS connector** (plain
-  `apache/spark` cannot read `gs://`). The manifest's `JAISCLOUD_K8S_SPARK_IMAGE`
-  is the repo's `spark-gcs` build; if it is not reachable from your cluster,
-  build your own (`tests/persistent_mode/gcp/iceberg/spark-iceberg` +
-  `download-jars.sh`) and
+- **Dataproc jobs need a Spark image with the GCS connector.** The manifest
+  defaults `JAISCLOUD_K8S_SPARK_IMAGE` to `apache/spark:3.5.0`: a public image
+  that pulls anywhere but carries **no** GCS connector, so a Dataproc job that
+  reads/writes `gs://` fails at runtime (`No FileSystem for scheme "gs"`). Build
+  a connector image from `tests/persistent_mode/gcp/iceberg/spark-iceberg` +
+  `download-jars.sh` (or point at your own), push/import it, then
   `kubectl -n jaiscloud-gcp set env deploy/jaiscloud-gcp JAISCLOUD_K8S_SPARK_IMAGE=<image>`.
+  `deploy.sh --check --json` reports `substrates.gcp.sparkImage` /
+  `sparkImageGCS` and warns when the image is private, is the plain default, or
+  is unset — warnings only, never a `--strict` failure.
 - `postgres.yaml` creates only the AWS database (`POSTGRES_DB=jaiscloud`) on a
   fresh `postgres-pvc`; there is no initdb script. Create `jaiscloud_gcp` once
   with `make postgres-gcp-db`; `deploy.sh --gcp` and `make up-k8s-gcp` do it for
@@ -333,7 +337,11 @@ namespace-isolation boundary is in place from the first namespace.
 - **Reaching it.** The GCP Service is a ClusterIP (it also carries the Thrift
   HMS ports), so port-forward `8080`/`8081` as above, or use the front door for
   external HTTP(S). The AWS Service is a LoadBalancer for localhost convenience;
-  on clusters without one (kind) both need the port-forward.
+  on clusters without one (kind) both need the port-forward. In-cluster callers
+  use Service DNS, and a sidecar-injected client reaches both directly (no
+  `PeerAuthentication`/`DestinationRule`/`ServiceEntry`); literal-IP dialers,
+  `hostAliases`, pinned `clusterIP` and the emulator-host variables are covered
+  in [`deploy/k8s/istio/README.md`](deploy/k8s/istio/README.md#addressing-the-substrates).
 - The pod runs with `JAISCLOUD_K8S_NAMESPACE=jaiscloud-gcp` and
   `JAISCLOUD_STATE_DIR=/data/state` (a small state PVC, kept out of the blob PVC
   so snapshots cannot capture the TLS key), so Dataproc / Managed Kafka / Cloud
@@ -1055,7 +1063,7 @@ A cluster may attach an existing Dataproc Metastore service through `config.meta
 
 ### Dataproc: Iceberg on the Hive Metastore catalog
 
-A Dataproc-submitted Spark job can use the emulator's Hive Metastore as an **Iceberg** catalog. The deployed `spark-gcs` image ships only the GCS connector, so the self-contained `iceberg-spark-runtime` jar is staged on the emulator's GCS and passed through the job's `jarFileUris` (→ `spark-submit --jars`, the documented Dataproc mechanism — no image change needed). The job's `properties` then point Iceberg's `SparkCatalog` at the Thrift metastore with the connector-backed `HadoopFileIO` data path (the emulator's protected `fs.gs.*` wiring is injected and cannot be stripped):
+A Dataproc-submitted Spark job can use the emulator's Hive Metastore as an **Iceberg** catalog. A connector-only Spark image (for example the repo's `spark-gcs` build) ships only the GCS connector, so the self-contained `iceberg-spark-runtime` jar is staged on the emulator's GCS and passed through the job's `jarFileUris` (→ `spark-submit --jars`, the documented Dataproc mechanism — no image change needed). The job's `properties` then point Iceberg's `SparkCatalog` at the Thrift metastore with the connector-backed `HadoopFileIO` data path (the emulator's protected `fs.gs.*` wiring is injected and cannot be stripped):
 
 ```
 "spark.sql.catalog.hms":              "org.apache.iceberg.spark.SparkCatalog",

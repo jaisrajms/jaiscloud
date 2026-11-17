@@ -95,6 +95,16 @@ lifecycle:
     strict: "exit 1 when a non-optional recommendation or a leak warning exists; optional work (the mesh) does not fail --strict"
     no_intent: "when nothing is installed and no flag is given, the preflight says so and asks for --substrate instead of recommending a cloud"
 
+executor_modes:
+  precedence: "JAISCLOUD_<SUBSYSTEM>_EXECUTOR_MODE > JAISCLOUD_EXECUTOR_MODE > engine default (mock)"
+  variables:
+    - "JAISCLOUD_SPARK_EXECUTOR_MODE (Dataproc Spark driver)"
+    - "JAISCLOUD_FUNCTIONS_EXECUTOR_MODE (Cloud Functions)"
+    - "JAISCLOUD_CLOUDRUN_EXECUTOR_MODE (Cloud Run)"
+    - "JAISCLOUD_LAMBDA_EXECUTOR_MODE (Lambda)"
+    - "JAISCLOUD_ECS_EXECUTOR_MODE (ECS)"
+    - "JAISCLOUD_KAFKA_BROKER_MODE (Managed Kafka; same precedence)"
+
 scenarios:
   inspect:
     summary: "Read-only: what is already installed, and what is the next safe step?"
@@ -218,7 +228,7 @@ scenarios:
         note: "deploy.sh sets the image and imagePullPolicy=IfNotPresent on the Deployment."
       - id: spark
         run: "kubectl -n jaiscloud-gcp set env deploy/jaiscloud-gcp JAISCLOUD_K8S_SPARK_IMAGE=<spark image with the GCS connector>"
-        note: "Dataproc jobs cannot run without it; plain apache/spark cannot read gs://."
+        note: "The manifest default is the public apache/spark image, which pulls anywhere but has no GCS connector, so a gs:// job fails at runtime. Dataproc jobs cannot run without a connector image; plain apache/spark cannot read gs://."
 
   external-store:
     summary: "Install both substrates against a PostgreSQL server you already run (no postgres.yaml, no postgres-pvc)."
@@ -312,6 +322,12 @@ failure_taxonomy:
   - symptom: "ImagePullBackOff / ErrImagePull"
     cause: "image is private, not pushed, or not loaded into a kind/k3d node"
     fix: "publish the image, or k3d image import / kind load; set JAISCLOUD_GCP_IMAGE and redeploy"
+  - symptom: "Dataproc driver Pod ImagePullBackOff (JAISCLOUD_K8S_SPARK_IMAGE)"
+    cause: "the Spark image points at a private/local registry that the cluster's nodes cannot pull from"
+    fix: "set JAISCLOUD_K8S_SPARK_IMAGE to a pullable image (a public tag, or one imported/pushed to every node); deploy.sh --check --json reports substrates.gcp.sparkImage and warns on a private registry"
+  - symptom: "a Dataproc job fails reading/writing gs:// (No FileSystem for scheme \"gs\", or a connector/credential error)"
+    cause: "the Spark image has no GCS connector — the plain apache/spark default carries none"
+    fix: "build a connector image from tests/persistent_mode/gcp/iceberg/spark-iceberg + download-jars.sh (or your own), then set JAISCLOUD_K8S_SPARK_IMAGE; preflight substrates.gcp.sparkImageGCS=false is the tell"
   - symptom: "CrashLoopBackOff with 'postgres: ... does not exist'"
     cause: "the substrate's database is missing"
     fix: "make postgres-gcp-db (or deploy.sh --gcp, which creates it before starting the pod)"

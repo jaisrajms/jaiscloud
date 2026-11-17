@@ -45,6 +45,17 @@
 #   an external store, store.ready=false and store.databases.*=false mean "not
 #   probeable from here", not "missing": there is no pod to exec psql in.
 #
+# Images:
+#   substrates.<cloud>.image is the Deployment's image, imageID the digest the
+#   pod actually runs, and privateRegistry a heuristic for a 10./192.168./172.16-
+#   31./localhost/*.local registry. substrates.gcp.sparkImage is the deployment's
+#   JAISCLOUD_K8S_SPARK_IMAGE (the Dataproc driver/executor image) and
+#   sparkImageGCS a heuristic: false for an empty value or a plain apache/spark
+#   tag, true for any other image name. Neither image policy fails --strict: they
+#   are warnings only (a private Spark image -> ImagePullBackOff; an image without
+#   the GCS connector -> gs:// jobs fail; a :latest substrate tag -> the digest is
+#   whatever the node cached).
+#
 # Also reachable as: deploy/deploy.sh --check [--json] [--strict]
 #                    [--substrate ...] [--desired ...]
 #
@@ -201,6 +212,14 @@ deployment_pull_policy() {
   field "$1" deployment "$2" '{{range .spec.template.spec.containers}}{{.imagePullPolicy}}{{"\n"}}{{end}}' | head -1
 }
 
+# deployment_env <ns> <deployment> <name> — the literal env value of one
+# variable in the first container ("" when unset). jsonpath, so a name is matched
+# exactly instead of by a Go-template range.
+deployment_env() {
+  kc -n "$1" get deployment "$2" \
+    -o jsonpath="{.spec.template.spec.containers[0].env[?(@.name==\"$3\")].value}" 2>/dev/null || true
+}
+
 # deployment_replicas <ns> <name> <present 1|0> — desired scale. `spec.replicas`
 # is unset on a hand-written Deployment, where Kubernetes means 1.
 deployment_replicas() {
@@ -346,6 +365,21 @@ GCP_PRIVATE=$(private_registry "$GCP_IMAGE")
 GCP_STATE=$(substrate_state "$NS_GCP" jaiscloud-gcp "$GCP_PRESENT")
 GCP_REPLICAS=$(deployment_replicas "$NS_GCP" jaiscloud-gcp "$GCP_PRESENT")
 GCP_IMAGE_ID=$(pod_image_id "$NS_GCP" jaiscloud-gcp)
+# The Dataproc driver/executor image. It is a deployment env var, not the
+# substrate's own image, so it is probed separately.
+GCP_SPARK_IMAGE=$(deployment_env "$NS_GCP" jaiscloud-gcp JAISCLOUD_K8S_SPARK_IMAGE)
+GCP_SPARK_PRIVATE=0
+[[ -n "$GCP_SPARK_IMAGE" ]] && GCP_SPARK_PRIVATE=$(private_registry "$GCP_SPARK_IMAGE")
+# sparkImageGCS — a deliberately simple heuristic, not a registry query: an unset
+# value or a plain apache/spark image has no GCS connector; any other name is
+# assumed to be a connector build (the repo's spark-gcs, a GCS-enabled image, ...).
+GCP_SPARK_GCS=0
+if [[ -n "$GCP_SPARK_IMAGE" ]]; then
+  case "$GCP_SPARK_IMAGE" in
+    apache/spark|apache/spark:*) GCP_SPARK_GCS=0 ;;
+    *) GCP_SPARK_GCS=1 ;;
+  esac
+fi
 
 # A substrate is present when either substrate namespace or Deployment exists:
 # the namespace-admin binding is cluster-wide, so isolation matters even for a
@@ -507,6 +541,26 @@ rec_add() { RECOMMENDED+=("$1|$2|$3|$4"); }
   warn_add "the AWS substrate image '$AWS_IMAGE' points at a private/local registry"
 [[ "$GCP_PRESENT" == "1" && "$GCP_PRIVATE" == "1" ]] && \
   warn_add "the GCP substrate image '$GCP_IMAGE' points at a private/local registry"
+# Spark image policy: warnings only, never a --strict failure.
+if [[ "$GCP_PRESENT" == "1" && "$GCP_SPARK_PRIVATE" == "1" ]]; then
+  warn_add "JAISCLOUD_K8S_SPARK_IMAGE='$GCP_SPARK_IMAGE' points at a private/local registry; Dataproc driver Pods ImagePullBackOff unless every node can pull it"
+fi
+if [[ "$GCP_PRESENT" == "1" && "$GCP_SPARK_GCS" == "0" ]]; then
+  if [[ -z "$GCP_SPARK_IMAGE" ]]; then
+    warn_add "JAISCLOUD_K8S_SPARK_IMAGE is unset: the default Spark image has no GCS connector; Dataproc jobs that read gs:// need JAISCLOUD_K8S_SPARK_IMAGE set to a GCS-enabled image"
+  else
+    warn_add "JAISCLOUD_K8S_SPARK_IMAGE='$GCP_SPARK_IMAGE' has no GCS connector; Dataproc jobs that read gs:// need JAISCLOUD_K8S_SPARK_IMAGE set to a GCS-enabled image"
+  fi
+fi
+# A moving :latest tag means the digest is whatever the node cached, so a parked
+# substrate resumed after an upgrade can change binary (or fail a store
+# migration). Pinning is DSL7; warn, do not fail.
+if [[ "$AWS_PRESENT" == "1" && "$AWS_IMAGE" == *:latest ]]; then
+  warn_add "the AWS substrate image '$AWS_IMAGE' is a moving :latest tag: the running digest depends on the node cache, so a parked substrate resumed after an upgrade can change binary or fail a store migration; pin a release tag when one is available (DSL7 tracks the pinning work)"
+fi
+if [[ "$GCP_PRESENT" == "1" && "$GCP_IMAGE" == *:latest ]]; then
+  warn_add "the GCP substrate image '$GCP_IMAGE' is a moving :latest tag: the running digest depends on the node cache, so a parked substrate resumed after an upgrade can change binary or fail a store migration; pin a release tag when one is available (DSL7 tracks the pinning work)"
+fi
 SKEW_AWS=$(migration_skew_warning "$NS_AWS" jaiscloud)
 SKEW_GCP=$(migration_skew_warning "$NS_GCP" jaiscloud-gcp)
 [[ -n "$SKEW_AWS" ]] && warn_add "AWS substrate crash-loops on store version skew: $SKEW_AWS"
@@ -631,9 +685,10 @@ if [[ "$JSON" == "1" ]]; then
   printf '    "aws": {"present": %s, "ready": %s, "state": "%s", "replicas": %s, "image": "%s", "imageID": "%s", "imagePullPolicy": "%s", "privateRegistry": %s},\n' \
     "$(b "$AWS_PRESENT")" "$(b "$AWS_READY")" "$AWS_STATE" "$AWS_REPLICAS" "$(json_escape "$AWS_IMAGE")" \
     "$(json_escape "$AWS_IMAGE_ID")" "$(json_escape "$AWS_PULL")" "$(b "$AWS_PRIVATE")"
-  printf '    "gcp": {"present": %s, "ready": %s, "state": "%s", "replicas": %s, "image": "%s", "imageID": "%s", "imagePullPolicy": "%s", "privateRegistry": %s}\n' \
+  printf '    "gcp": {"present": %s, "ready": %s, "state": "%s", "replicas": %s, "image": "%s", "imageID": "%s", "imagePullPolicy": "%s", "privateRegistry": %s, "sparkImage": "%s", "sparkImageGCS": %s}\n' \
     "$(b "$GCP_PRESENT")" "$(b "$GCP_READY")" "$GCP_STATE" "$GCP_REPLICAS" "$(json_escape "$GCP_IMAGE")" \
-    "$(json_escape "$GCP_IMAGE_ID")" "$(json_escape "$GCP_PULL")" "$(b "$GCP_PRIVATE")"
+    "$(json_escape "$GCP_IMAGE_ID")" "$(json_escape "$GCP_PULL")" "$(b "$GCP_PRIVATE")" \
+    "$(json_escape "$GCP_SPARK_IMAGE")" "$(b "$GCP_SPARK_GCS")"
   printf '  },\n'
   printf '  "pvcs": [\n'
   first=1
@@ -717,6 +772,10 @@ else
   fi
   if [[ "$GCP_PRESENT" == "1" ]]; then
     ok_ "gcp: state=$GCP_STATE replicas=$GCP_REPLICAS $GCP_IMAGE ready=$([[ "$GCP_READY" == "1" ]] && echo yes || echo no) pull=$GCP_PULL${GCP_IMAGE_ID:+ imageID=$GCP_IMAGE_ID}"
+    spark_gcs=no; [[ "$GCP_SPARK_GCS" == "1" ]] && spark_gcs=yes
+    spark_extra=""
+    [[ "$GCP_SPARK_PRIVATE" == "1" ]] && spark_extra=" privateRegistry=yes"
+    ok_ "gcp spark: ${GCP_SPARK_IMAGE:-<unset>} gcs-connector=$spark_gcs$spark_extra"
   else
     miss_ "gcp: state=$GCP_STATE $NS_GCP/deployment/jaiscloud-gcp"
   fi

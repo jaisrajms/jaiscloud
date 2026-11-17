@@ -207,13 +207,17 @@ emulator create its per-cluster namespaces and driver Pods; without them the
 emulator falls back to `mock`/the process namespace. `deploy/deploy.sh --gcp`
 applies this order for you, including the namespace-isolation policy.
 
-Dataproc jobs also need the Spark image the emulator injects: the manifest's
-`JAISCLOUD_K8S_SPARK_IMAGE` must be pullable from your cluster (the default is
-the repo's `spark-gcs` build). Build it from
-`tests/persistent_mode/gcp/iceberg/spark-iceberg` (+ `download-jars.sh`), import
-it like the emulator image, and set it:
+Dataproc jobs also need the Spark image the emulator injects. The manifest's
+`JAISCLOUD_K8S_SPARK_IMAGE` defaults to the public `apache/spark:3.5.0`, which
+any cluster can pull but which has **no GCS connector** — a job that reads or
+writes `gs://` fails at runtime. Build a connector image from
+`tests/persistent_mode/gcp/iceberg/spark-iceberg` (+ `download-jars.sh`), push or
+import it like the emulator image, and set it:
 `kubectl -n jaiscloud-gcp set env deploy/jaiscloud-gcp JAISCLOUD_K8S_SPARK_IMAGE=<image>`.
-Redpanda (Managed Kafka) is pulled from `docker.redpanda.com` on first use.
+`deploy/deploy.sh --check --json` reports `substrates.gcp.sparkImage` and
+`sparkImageGCS`, and warns (without failing `--strict`) when the image is
+private, unset, or the plain default. Redpanda (Managed Kafka) is pulled from
+`docker.redpanda.com` on first use.
 
 **Parallel jobs on a shared cluster**: one namespace and one
 `JAISCLOUD_INSTANCE_ID` per job. The shipped manifests pin single values

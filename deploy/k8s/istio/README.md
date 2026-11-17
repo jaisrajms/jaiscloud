@@ -324,6 +324,66 @@ smoke gate:
 the real host in the URL so the emulator's authority routing is exercised
 honestly.
 
+## Addressing the substrates
+
+The files here build the **external** front door (real cloud hostnames, TLS at
+the gateway). They are not how a client inside the cluster reaches the
+emulators: those Services are ordinary cluster Services, already routable, and
+need no mesh object.
+
+In-cluster Service DNS is the first choice:
+
+| substrate | REST | gRPC |
+|---|---|---|
+| AWS | `jaiscloud.jaiscloud.svc.cluster.local:4566` | — |
+| GCP | `jaiscloud-gcp.jaiscloud-gcp.svc.cluster.local:8080` | `jaiscloud-gcp.jaiscloud-gcp.svc.cluster.local:8081` (h2c) |
+
+The short forms `jaiscloud:4566` and `jaiscloud-gcp:8080` / `:8081` work only
+from a pod in the *same* namespace; anything else should use the
+fully-qualified name.
+
+**If a client library or dialer insists on a literal IP**, use one of two
+supported options — neither is in the shipped manifests:
+
+1. A Pod `hostAliases` entry for each concrete host (wildcards are not
+   expressible, and there is no port field in `/etc/hosts`). This is the
+   per-workload option and changes nothing cluster-wide.
+2. Pin the Service's `spec.clusterIP` to an unused address inside the cluster's
+   Service CIDR (from the API server's `--service-cluster-ip-range`; a
+   `kubectl cluster-info dump | grep -m1 service-cluster-ip-range` works where
+   the cluster exposes its args). `clusterIP` is
+   **immutable**: changing it means deleting and recreating the Service — never
+   the namespace, and the data (PVCs, databases) lives outside it. The address
+   must not already be allocated to another Service, or the API server rejects
+   the create, and it must stay inside the CIDR, which differs per cluster; that
+   is why the manifests do not pin one.
+
+**The emulator-host variables take `host:port`, not just an IP.** The official
+`PUBSUB_EMULATOR_HOST`, `FIRESTORE_EMULATOR_HOST` and `STORAGE_EMULATOR_HOST`
+accept the Service DNS name (for example
+`jaiscloud-gcp.jaiscloud-gcp.svc.cluster.local:8081`), so the Go and Java
+clients need no non-routable address. Do not cargo-cult a `169.254.x.x` value:
+it is not required, and it will not route on a cluster.
+
+### Clients with a sidecar
+
+The substrates run **no** sidecar, and do not need one. Istio's auto mTLS sends
+plaintext to a destination without a sidecar, so a sidecar-injected client
+reaches `jaiscloud:4566` (AWS) and `jaiscloud-gcp:8080` (REST) / `:8081` (gRPC
+h2c) with **no** `PeerAuthentication` and **no** `DestinationRule`.
+
+A `PeerAuthentication: STRICT` in the *client's* namespace governs inbound
+traffic **to that client's workload**; it does not apply to the client's
+outbound connection to the emulator, so it does not block this path.
+
+gRPC clients must speak h2c to `8081`. The GCP Service port is named `grpc`
+(`rest`, `grpc`, `hms` in `jaiscloud-gcp.yaml`), so Istio selects HTTP/2 for it;
+do not rename that port, and do not rewrite the authority (see "Never rewrite
+authority" above).
+
+No `ServiceEntry` is needed: both Services are in the mesh's cluster. A
+`ServiceEntry` is only for a destination outside it.
+
 ## Standalone-binary constraint
 
 Nothing here is load-bearing for the emulators. No mesh asset touches the

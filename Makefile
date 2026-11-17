@@ -2700,13 +2700,18 @@ check-integration-contract: ## Fail when the committed integration contract is s
 integration-preflight: ## READ-ONLY cluster inspection for agents (PREFLIGHT_FLAGS="--json --strict")
 	scripts/integration-preflight.sh $(PREFLIGHT_FLAGS)
 
-check-deploy-images: ## Fail if a substrate Deployment's image points at a private/local registry
+check-deploy-images: ## Fail if a substrate image or the Spark image points at a private/local registry
 	@if grep -nE '^[[:space:]]+image:[[:space:]]+(10\.|192\.168\.|172\.(1[6-9]|2[0-9]|3[01])\.|localhost)' \
 	    deploy/k8s/jaiscloud.yaml deploy/k8s/jaiscloud-gcp.yaml; then \
 	  echo "ERROR: a substrate image points at a private/local registry — the manifests must install from a public tag"; \
 	  exit 1; \
 	fi
-	@echo "ok: substrate images use public tags"
+	@spark_image=$$(awk '/name: JAISCLOUD_K8S_SPARK_IMAGE/ {getline; sub(/^[[:space:]]*value:[[:space:]]*/, ""); print; exit}' deploy/k8s/jaiscloud-gcp.yaml); \
+	if printf '%s' "$$spark_image" | grep -qE '^(10\.|192\.168\.|172\.(1[6-9]|2[0-9]|3[01])\.|localhost)'; then \
+	  echo "ERROR: JAISCLOUD_K8S_SPARK_IMAGE='$$spark_image' points at a private/local registry — Dataproc driver Pods would ImagePullBackOff on a cluster that cannot reach it"; \
+	  exit 1; \
+	fi
+	@echo "ok: substrate images use public tags; JAISCLOUD_K8S_SPARK_IMAGE defaults to a public image"
 
 test-dual-substrate-k8s: ## Dual-substrate isolation gate — writes GCP state, runs `deploy.sh --reset`, asserts the GCP object, `jaiscloud_gcp` and the GCP PVCs survived (destructive: needs ALLOW_RESET=1)
 	NS_AWS=$(K8S_NAMESPACE_AWS) NS_GCP=$(K8S_NAMESPACE_GCP) NS_DATA=$(K8S_NAMESPACE_DATA) \

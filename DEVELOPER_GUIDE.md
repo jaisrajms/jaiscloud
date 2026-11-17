@@ -698,8 +698,10 @@ The GCP manifest defaults to the published multi-arch image
 (`jaisraj/jaiscloud-gcp:latest`). To run your own build:
 `JAISCLOUD_GCP_IMAGE=<image> ./deploy/deploy.sh --gcp`, or
 `kubectl -n jaiscloud-gcp set image deploy/jaiscloud-gcp jaiscloud-gcp=<image>`.
-Dataproc jobs additionally need a Spark image with the GCS connector (the
-manifest's `JAISCLOUD_K8S_SPARK_IMAGE`); point it at a reachable build with
+Dataproc jobs additionally need a Spark image with the GCS connector: the
+manifest's `JAISCLOUD_K8S_SPARK_IMAGE` defaults to the public `apache/spark`, which
+has no connector, so a `gs://` job fails at runtime. Point it at a reachable
+connector build with
 `kubectl -n jaiscloud-gcp set env deploy/jaiscloud-gcp JAISCLOUD_K8S_SPARK_IMAGE=<image>`.
 
 **Existing Postgres volume.** `deploy/k8s/postgres.yaml` bootstraps

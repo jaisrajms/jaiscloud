@@ -130,6 +130,12 @@ free port in `18080–18089` and requires `curl`; a `404` means the running imag
 predates the park/resume API (rebuild and redeploy it). A failed hook is fatal
 unless `PARK_FORCE=1`, which warns and continues with the scale/teardown.
 
+Both substrate images are tagged `:latest` for now (`imagePullPolicy:
+IfNotPresent`), so the digest a resumed pod runs is whatever the node cached; a
+park/resume across an upgrade can therefore change the binary (and run its store
+migrations), and `--resume` plus `deploy.sh --check` warn about it. Pin a release
+tag when one is available — DSL7 tracks that work.
+
 ## Invariants
 
 1. **The store outlives the substrates.** `jaiscloud-data` is never deleted by a
@@ -177,7 +183,11 @@ unless `PARK_FORCE=1`, which warns and continues with the scale/teardown.
 9. **Reaching each substrate.** The AWS Service is a `LoadBalancer` (localhost
    convenience on Docker Desktop; pending on kind/k3d). The GCP Service is a
    `ClusterIP` because it also carries the Thrift HMS ports — use a port-forward
-   (`8080`, `8081`) or the front door for external HTTP(S).
+   (`8080`, `8081`) or the front door for external HTTP(S). In-cluster callers
+   use Service DNS and need no mesh object; for a literal-IP dialer, a
+   `hostAliases` entry or an explicitly pinned `clusterIP`, and the sidecar-client
+   path, see
+   [`deploy/k8s/istio/README.md`](../../../deploy/k8s/istio/README.md#addressing-the-substrates).
 10. **Namespace isolation is enforced by admission, not by convention.** Each
     substrate ServiceAccount is bound to `jaiscloud-namespace-admin`, a
     cluster-scoped ClusterRole with namespace create/delete plus update/patch

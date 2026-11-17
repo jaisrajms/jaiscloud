@@ -78,6 +78,14 @@ manifest disagree, the manifest wins — regenerate with
 | image strategy | published image (default) or your own (`custom-images`) |
 | executors needed? | only if tests submit Dataproc/Kafka/Cloud Run/function work |
 
+**Executor modes resolve per engine, then globally, then by default**:
+`JAISCLOUD_<SUBSYSTEM>_EXECUTOR_MODE` (`SPARK`, `FUNCTIONS`, `CLOUDRUN`, `LAMBDA`,
+`ECS`; `JAISCLOUD_KAFKA_BROKER_MODE` for Managed Kafka) wins over the global
+`JAISCLOUD_EXECUTOR_MODE`, and an unset per-engine variable falls back to the
+global, then to the engine default (`mock`) — so a global `docker`/`k8s` covers
+every engine, and one engine opts out by naming its own variable.
+`contract.playbook.executor_modes` carries the list.
+
 ## Decision tree
 
 ```
@@ -153,7 +161,12 @@ warns when istiod pre-exists (`mesh.existingInstall`) and names the overlay.
 
 The mesh covers `*.amazonaws.com`, `*.googleapis.com`, `*.run.app`,
 `*.cloudfunctions.net` over HTTP(S) only. It is not a Kafka path and not an
-in-substrate path.
+in-substrate path: a sidecar-injected client reaches the substrates directly over
+Service DNS with plaintext (`jaiscloud:4566`, `jaiscloud-gcp:8080` REST,
+`jaiscloud-gcp:8081` gRPC h2c) and needs no `PeerAuthentication`,
+`DestinationRule` or `ServiceEntry` — see
+[`deploy/k8s/istio/README.md`](../../../deploy/k8s/istio/README.md) ("Addressing
+the substrates" and "Clients with a sidecar").
 
 ## Scenario 4 — upgrading a pre-split install
 
@@ -249,7 +262,10 @@ and Cloud Run removes revision runtimes (keeping Service/Revision records).
 endpoint means the running image predates the API — rebuild and redeploy.
 
 The switch direction is always park-then-resume, so only one substrate's compute
-runs at a time. `--delete [aws|gcp|both]` is the workload-only alternative: it
+runs at a time. Images are tagged `:latest` for now, so a resume after an upgrade
+can pick up whatever digest the node cached (the preflight warns, and
+`--resume` warns when the digest changed); pin a release tag once one exists.
+`--delete [aws|gcp|both]` is the workload-only alternative: it
 removes the Deployment/Service (and DSN Secret, plus the AWS ConfigMap) but never
 the PVCs or the database; the other substrate is untouched unless you pass
 `both`.

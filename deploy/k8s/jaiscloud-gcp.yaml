@@ -203,13 +203,16 @@ spec:
             # Dataproc submits Spark jobs as client-mode pods in this namespace.
             - name: JAISCLOUD_SPARK_EXECUTOR_MODE
               value: k8s
-            # Dataproc drivers/executors run this image. It must carry the GCS
-            # connector (the plain apache/spark image cannot read gs://), so the
-            # default is the repo's spark-gcs build. Point it at your own build
-            # (tests/persistent_mode/gcp/iceberg/spark-iceberg + download-jars.sh)
-            # when the default is not reachable from your cluster.
+            # Dataproc drivers/executors run this image. The default is the
+            # public apache/spark image: pullable anywhere, but it does NOT carry
+            # the GCS connector, so a Dataproc job that reads/writes gs:// fails
+            # at runtime (No FileSystem for scheme "gs"). Build a connector
+            # image from tests/persistent_mode/gcp/iceberg/spark-iceberg +
+            # download-jars.sh (or point at your own) and set it here. A private
+            # registry value also has to be reachable from every cluster node,
+            # or the driver Pods ImagePullBackOff.
             - name: JAISCLOUD_K8S_SPARK_IMAGE
-              value: 10.0.100.21:5050/spark-gcs:3.5.0
+              value: apache/spark:3.5.0
             - name: JAISCLOUD_K8S_SPARK_SUBMIT_PATH
               value: /opt/spark/bin/spark-submit
             # Spark reads/writes GCS through the emulator's own in-cluster Service.
