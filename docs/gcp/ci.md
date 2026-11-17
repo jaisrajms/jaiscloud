@@ -193,6 +193,14 @@ driver Pods; without it the emulator falls back to `mock`/the process namespace.
 them and change both for a multi-tenant cluster so no job's startup sweep reaps
 another's Pods.
 
+**Kafka data-plane clients must run where the broker's address resolves.** In
+`k8s` broker mode the advertised `bootstrapAddress` is the broker's in-cluster
+Service (`<svc>.<ns>.svc.cluster.local:9092`), and a Kafka client reconnects to
+that advertised listener, so a test process on the runner cannot use it even
+through a port-forward. Run the client as a Pod/Job in the cluster, or use the
+`docker` (host mode) or `native` broker backend from the runner — see
+[Where the client runs](../../README-GCP.md#managed-kafka-metadata-control-plane-optional-real-broker) in the emulator guide.
+
 **You still do not need the mesh here** — executors and functions call the
 emulator over Service DNS.
 
