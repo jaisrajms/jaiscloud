@@ -66,14 +66,16 @@ const (
 	// maxLabelValueLength is the Kubernetes label-value limit (63 chars).
 	maxLabelValueLength = 63
 
-	// ExecutorClusterRoleName is the ClusterRole (deploy/k8s/rbac.yaml) a
-	// per-namespace RoleBinding points at so the executor ServiceAccount can run
+	// ExecutorClusterRoleName is the ClusterRole (deploy/k8s/rbac-shared.yaml,
+	// bound to each substrate by rbac-aws.yaml/rbac-gcp.yaml) a per-namespace
+	// RoleBinding points at so the executor ServiceAccount can run
 	// pods/services/configmaps/jobs in the new namespace.
 	ExecutorClusterRoleName = "jaiscloud-executor"
 	// ExecutorRoleBindingName is the RoleBinding created in each new namespace.
 	ExecutorRoleBindingName = "jaiscloud-executor"
 	// DefaultExecutorServiceAccount / ...Namespace are the fallback identity the
-	// emulator runs as (deploy/k8s/rbac.yaml) when nothing else identifies it —
+	// emulator runs as (the AWS substrate's ServiceAccount, declared in
+	// deploy/k8s/rbac-aws.yaml) when nothing else identifies it —
 	// an out-of-cluster dev binary, or a pod that projects no namespace file. A
 	// per-namespace RoleBinding must bind the emulator's own ServiceAccount, not
 	// a Spark pod's; resolve it with ResolveOwnServiceAccount (own_identity.go)
@@ -479,7 +481,9 @@ type RBACSubject struct {
 }
 
 // EnsureNamespaceRBAC creates the executor RoleBinding in namespace for the
-// emulator's own ServiceAccount (deploy/k8s/rbac.yaml); pass empty
+// emulator's own ServiceAccount (the jaiscloud-executor ClusterRole lives in
+// deploy/k8s/rbac-shared.yaml; the ServiceAccount is declared by the substrate's
+// rbac-aws.yaml/rbac-gcp.yaml); pass empty
 // serviceAccount/serviceAccountNamespace to use the constants. Callers that can
 // resolve the running pod's identity should pass ResolveOwnServiceAccount's
 // result instead, so a substrate that does not run in `jaiscloud` binds its own

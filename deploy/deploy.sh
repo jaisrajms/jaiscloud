@@ -1,12 +1,20 @@
 #!/usr/bin/env bash
 # deploy.sh — one-click build + deploy of the JaisCloud substrates to local Kubernetes
 #
-# Topology (see deploy/k8s/namespace.yaml; docs in README-GCP.md and
+# Topology (see deploy/k8s/namespace-*.yaml; docs in README-GCP.md and
 # DEVELOPER_GUIDE.md, Setup 3):
 #   jaiscloud        AWS substrate — Deployment jaiscloud, PVC jaiscloud-blobs-pvc
+#                    (deploy/k8s/namespace-aws.yaml)
 #   jaiscloud-gcp    GCP substrate — Deployment jaiscloud-gcp, PVC jaiscloud-gcp-blobs-pvc
+#                    (deploy/k8s/namespace-gcp.yaml)
 #   jaiscloud-data   PostgreSQL — Deployment postgres, PVC postgres-pvc
 #                    databases: jaiscloud (AWS), jaiscloud_gcp (GCP)
+#                    (deploy/k8s/namespace-data.yaml)
+#
+# Each install applies only its own substrate's namespace and RBAC: an AWS-only
+# install never creates a GCP namespace, ServiceAccount or binding, and vice
+# versa. The store (namespace-data.yaml + postgres.yaml) and the namespace
+# admission policy are the only shared objects.
 #
 # Requirements:
 #   - Docker Desktop with Kubernetes enabled (or any cluster `kubectl` points at)
@@ -100,13 +108,18 @@ Topology (three namespaces, one Postgres server):
 
 Requires Kubernetes >= 1.30: both substrate ServiceAccounts hold cluster-wide
 namespace delete, so the namespace boundary between them is enforced by the
-ValidatingAdmissionPolicy in deploy/k8s/rbac-admission-policy.yaml.
+ValidatingAdmissionPolicy in deploy/k8s/rbac-admission-policy.yaml. deploy.sh
+applies that policy (with the namespace-*/rbac-* manifests) on every install and
+reset path.
 
 Usage:
   ./deploy/deploy.sh              Build the image and apply the AWS substrate
-                                  (namespace.yaml, postgres.yaml, rbac.yaml, jaiscloud.yaml)
-  ./deploy/deploy.sh --gcp        Apply the GCP substrate (namespace.yaml, postgres.yaml,
-                                  rbac.yaml, jaiscloud-gcp.yaml), creating the
+                                  (namespace-data.yaml, postgres.yaml,
+                                  namespace-aws.yaml, rbac-shared.yaml, rbac-aws.yaml,
+                                  jaiscloud.yaml)
+  ./deploy/deploy.sh --gcp        Apply the GCP substrate (namespace-data.yaml,
+                                  postgres.yaml, namespace-gcp.yaml, rbac-shared.yaml,
+                                  rbac-gcp.yaml, jaiscloud-gcp.yaml), creating the
                                   `jaiscloud_gcp` database BEFORE the pod starts,
                                   and wait for its rollout
   ./deploy/deploy.sh --migrate-store
@@ -125,13 +138,15 @@ Usage:
   ./deploy/deploy.sh --delete     Remove the AWS workloads; keep ALL PVCs and Postgres
   ./deploy/deploy.sh --reset      AWS-only, database-scoped reset: drop/recreate the
                                   `jaiscloud` database, delete the jaiscloud namespace (its
-                                  blobs and state PVCs), then re-apply the AWS manifests.
-                                  jaiscloud-data,
-                                  postgres-pvc, jaiscloud-gcp and `jaiscloud_gcp` survive.
+                                  blobs and state PVCs), then re-apply the AWS manifests
+                                  (namespace-aws.yaml, rbac-shared.yaml, rbac-aws.yaml,
+                                  jaiscloud.yaml). jaiscloud-data, postgres-pvc,
+                                  jaiscloud-gcp and `jaiscloud_gcp` survive.
   ./deploy/deploy.sh --gcp-reset  GCP-only, database-scoped reset: scale jaiscloud-gcp to 0,
                                   delete jaiscloud-gcp-blobs-pvc, drop/recreate
-                                  `jaiscloud_gcp`, then re-apply jaiscloud-gcp.yaml. The AWS
-                                  substrate and jaiscloud-data are never touched.
+                                  `jaiscloud_gcp`, then re-apply namespace-gcp.yaml,
+                                  rbac-shared.yaml, rbac-gcp.yaml and jaiscloud-gcp.yaml.
+                                  The AWS substrate and jaiscloud-data are never touched.
   --check                         READ-ONLY: inspect the cluster (namespaces, legacy
                                   layout, store, substrates, mesh, install intent) and
                                   print the next safe step. Alias for
@@ -344,9 +359,11 @@ reset_database() {
   ok "Database '$db' recreated."
 }
 
-# ensure_database <db> — the initdb script only runs on a FRESH postgres volume
-# (deploy/k8s/postgres.yaml, ConfigMap postgres-init), so create it explicitly
-# when the volume already existed. Idempotent.
+# ensure_database <db> — deploy/k8s/postgres.yaml creates only the AWS database
+# (`POSTGRES_DB=jaiscloud`, on a fresh volume) and declares no initdb script, so
+# every other database is created explicitly. For `jaiscloud_gcp` this must
+# happen before the GCP pod starts: a missing DSN target is fatal at startup.
+# Idempotent.
 ensure_database() {
   local db=$1 exists
   if ! postgres_deployed; then
@@ -359,7 +376,7 @@ ensure_database() {
     ok "Database '$db' already exists."
     return 0
   fi
-  info "Creating database '$db' (the postgres volume predates postgres-init)..."
+  info "Creating database '$db' (postgres.yaml creates only the AWS database)..."
   psql_admin -c "CREATE DATABASE $db OWNER jaiscloud"
   ok "Database '$db' created."
 }
@@ -421,23 +438,49 @@ apply_isolation_policy() {
   kubectl apply -f "$K8S_DIR/rbac-admission-policy.yaml"
 }
 
-# apply_aws — rbac.yaml must be applied after namespace.yaml (it declares
-# ServiceAccounts in both substrate namespaces and cluster-scoped bindings) and
-# before the deployments that reference those identities.
+# retire_legacy_namespace_binding <cloud> — a pre-split install bound one
+# jaiscloud-namespace-admin ClusterRoleBinding to BOTH substrate
+# ServiceAccounts. The split manifests replace it with per-substrate bindings.
+# Delete the combined binding only when that cannot strand the other substrate:
+# its own binding already exists, or its namespace is absent. Otherwise keep it
+# (and warn) until the other substrate's install migrates it.
+retire_legacy_namespace_binding() {
+  local cloud=$1 other other_ns
+  if [[ "$cloud" == "aws" ]]; then other=gcp; other_ns=$NAMESPACE_GCP; else other=aws; other_ns=$NAMESPACE_AWS; fi
+  kubectl get clusterrolebinding jaiscloud-namespace-admin &>/dev/null || return 0
+  if kubectl get clusterrolebinding "jaiscloud-namespace-admin-$other" &>/dev/null \
+     || ! kubectl get namespace "$other_ns" &>/dev/null; then
+    info "Removing the pre-split combined clusterrolebinding jaiscloud-namespace-admin (superseded by the per-substrate bindings)..."
+    kubectl delete clusterrolebinding jaiscloud-namespace-admin --ignore-not-found >/dev/null
+  else
+    warn "keeping the pre-split combined clusterrolebinding jaiscloud-namespace-admin: the $other substrate is present but has no per-substrate binding yet; run the $other install to migrate it"
+  fi
+}
+
+# apply_aws — the store first (namespace-data.yaml + postgres.yaml), then the
+# AWS namespace and its RBAC (rbac-shared.yaml declares the ClusterRole the
+# bindings reference; rbac-aws.yaml declares the ServiceAccount and both
+# bindings), and only then the deployment that runs as that identity. No GCP
+# object is created by an AWS-only install.
 apply_aws() {
   require_isolation_prereqs
   apply_isolation_policy
-  kubectl apply -f "$K8S_DIR/namespace.yaml"
+  kubectl apply -f "$K8S_DIR/namespace-data.yaml"
   kubectl apply -f "$K8S_DIR/postgres.yaml"
-  kubectl apply -f "$K8S_DIR/rbac.yaml"
+  kubectl apply -f "$K8S_DIR/namespace-aws.yaml"
+  kubectl apply -f "$K8S_DIR/rbac-shared.yaml"
+  kubectl apply -f "$K8S_DIR/rbac-aws.yaml"
+  retire_legacy_namespace_binding aws
   kubectl apply -f "$K8S_DIR/jaiscloud.yaml"
 }
 
 # AWS reset re-applies only the AWS-side objects: postgres.yaml lives entirely
 # in jaiscloud-data, which a --reset must never touch.
 apply_aws_workloads() {
-  kubectl apply -f "$K8S_DIR/namespace.yaml"
-  kubectl apply -f "$K8S_DIR/rbac.yaml"
+  kubectl apply -f "$K8S_DIR/namespace-aws.yaml"
+  kubectl apply -f "$K8S_DIR/rbac-shared.yaml"
+  kubectl apply -f "$K8S_DIR/rbac-aws.yaml"
+  retire_legacy_namespace_binding aws
   kubectl apply -f "$K8S_DIR/jaiscloud.yaml"
   restore_aws_ca_configmap
 }
@@ -642,9 +685,11 @@ print_plan() {
         plan "# kind load / k3d image import when the context is kind-*/k3d-*"
       fi
       plan "kubectl apply -f $K8S_DIR/rbac-admission-policy.yaml   # namespace isolation (K8s >= 1.30)"
-      plan "kubectl apply -f $K8S_DIR/namespace.yaml"
+      plan "kubectl apply -f $K8S_DIR/namespace-data.yaml"
       plan "kubectl apply -f $K8S_DIR/postgres.yaml"
-      plan "kubectl apply -f $K8S_DIR/rbac.yaml"
+      plan "kubectl apply -f $K8S_DIR/namespace-aws.yaml"
+      plan "kubectl apply -f $K8S_DIR/rbac-shared.yaml"
+      plan "kubectl apply -f $K8S_DIR/rbac-aws.yaml"
       plan "kubectl apply -f $K8S_DIR/jaiscloud.yaml"
       plan "kubectl -n $NAMESPACE_DATA rollout status deployment/postgres --timeout=120s"
       plan "kubectl -n $NAMESPACE_AWS rollout status deployment/jaiscloud --timeout=120s"
@@ -652,9 +697,11 @@ print_plan() {
       ;;
     gcp)
       plan "kubectl apply -f $K8S_DIR/rbac-admission-policy.yaml   # namespace isolation (K8s >= 1.30)"
-      plan "kubectl apply -f $K8S_DIR/namespace.yaml"
+      plan "kubectl apply -f $K8S_DIR/namespace-data.yaml"
       plan "kubectl apply -f $K8S_DIR/postgres.yaml"
-      plan "kubectl apply -f $K8S_DIR/rbac.yaml"
+      plan "kubectl apply -f $K8S_DIR/namespace-gcp.yaml"
+      plan "kubectl apply -f $K8S_DIR/rbac-shared.yaml"
+      plan "kubectl apply -f $K8S_DIR/rbac-gcp.yaml"
       plan "kubectl -n $NAMESPACE_DATA rollout status deployment/postgres --timeout=120s"
       plan "kubectl -n $NAMESPACE_DATA exec deploy/postgres -- psql ... 'SELECT 1 ... jaiscloud_gcp' || CREATE DATABASE jaiscloud_gcp"
       plan "kubectl apply -f $K8S_DIR/jaiscloud-gcp.yaml"
@@ -668,12 +715,12 @@ print_plan() {
       plan "kubectl -n $OLD_NS scale deployment postgres --replicas=0            # legacy GCP too, when present"
       plan "kubectl -n $OLD_NS exec deploy/postgres -- pg_dump -Fc -d jaiscloud > <tmp>"
       plan "kubectl apply -f $K8S_DIR/rbac-admission-policy.yaml   # namespace isolation (K8s >= 1.30)"
-      plan "kubectl apply -f $K8S_DIR/namespace.yaml"
+      plan "kubectl apply -f $K8S_DIR/namespace-data.yaml"
       plan "kubectl apply -f $K8S_DIR/postgres.yaml"
       plan "kubectl -n $NAMESPACE_DATA exec -i deploy/postgres -- pg_restore ... -d jaiscloud < <tmp>"
       plan "kubectl -n $NAMESPACE_DATA exec -i deploy/postgres -- pg_restore ... -d jaiscloud_gcp < <tmp>"
       plan "kubectl -n $OLD_NS delete deployment postgres; delete service postgres postgres-external"
-      plan "# legacy GCP: apply jaiscloud-gcp.yaml, scale to 0, tar-copy the blob PVC, scale to 1, delete the old Deployment/Service"
+      plan "# legacy GCP: apply namespace-gcp.yaml, rbac-shared.yaml, rbac-gcp.yaml and jaiscloud-gcp.yaml, scale to 0, tar-copy the blob PVC, scale to 1, delete the old Deployment/Service"
       plan "kubectl apply -f $K8S_DIR/jaiscloud.yaml"
       plan_install_record "aws" "aws=running (and gcp when the legacy GCP workload exists)"
       ;;
@@ -682,8 +729,11 @@ print_plan() {
       plan "kubectl -n $NAMESPACE_DATA exec deploy/postgres -- psql -c 'DROP DATABASE IF EXISTS jaiscloud WITH (FORCE)' -c 'CREATE DATABASE jaiscloud OWNER jaiscloud'"
       plan "kubectl delete namespace $NAMESPACE_AWS"
       plan "kubectl apply -f $K8S_DIR/rbac-admission-policy.yaml   # namespace isolation (K8s >= 1.30)"
-      plan "kubectl apply -f $K8S_DIR/namespace.yaml"
-      plan "kubectl apply -f $K8S_DIR/rbac.yaml"
+      plan "kubectl apply -f $K8S_DIR/namespace-data.yaml   # only when the store is missing"
+      plan "kubectl apply -f $K8S_DIR/postgres.yaml         # only when the store is missing"
+      plan "kubectl apply -f $K8S_DIR/namespace-aws.yaml"
+      plan "kubectl apply -f $K8S_DIR/rbac-shared.yaml"
+      plan "kubectl apply -f $K8S_DIR/rbac-aws.yaml"
       plan "kubectl apply -f $K8S_DIR/jaiscloud.yaml"
       plan_install_record "aws" "aws=running"
       ;;
@@ -692,6 +742,9 @@ print_plan() {
       plan "kubectl -n $NAMESPACE_GCP delete pvc $GCP_PVC"
       plan "kubectl -n $NAMESPACE_DATA exec deploy/postgres -- psql -c 'DROP DATABASE IF EXISTS jaiscloud_gcp WITH (FORCE)' -c 'CREATE DATABASE jaiscloud_gcp OWNER jaiscloud'"
       plan "kubectl apply -f $K8S_DIR/rbac-admission-policy.yaml   # namespace isolation (K8s >= 1.30)"
+      plan "kubectl apply -f $K8S_DIR/namespace-gcp.yaml"
+      plan "kubectl apply -f $K8S_DIR/rbac-shared.yaml"
+      plan "kubectl apply -f $K8S_DIR/rbac-gcp.yaml"
       plan "kubectl apply -f $K8S_DIR/jaiscloud-gcp.yaml"
       plan_install_record "gcp" "gcp=running"
       ;;
@@ -758,7 +811,7 @@ if [[ "$MODE" == "reset" ]]; then
   # The store may not exist yet (e.g. --reset on a cluster that never ran the
   # full deploy); bring it up so the recreated AWS pod has a database.
   if ! postgres_deployed; then
-    kubectl apply -f "$K8S_DIR/namespace.yaml"
+    kubectl apply -f "$K8S_DIR/namespace-data.yaml"
     kubectl apply -f "$K8S_DIR/postgres.yaml"
     wait_for_rollout "$POSTGRES_DEPLOYMENT" "$NAMESPACE_DATA"
   fi
@@ -796,6 +849,10 @@ if [[ "$MODE" == "gcp-reset" ]]; then
   reset_database "$GCP_DB"
 
   info "Re-applying the GCP substrate..."
+  kubectl apply -f "$K8S_DIR/namespace-gcp.yaml"
+  kubectl apply -f "$K8S_DIR/rbac-shared.yaml"
+  kubectl apply -f "$K8S_DIR/rbac-gcp.yaml"
+  retire_legacy_namespace_binding gcp
   kubectl apply -f "$K8S_DIR/jaiscloud-gcp.yaml"
   wait_for_rollout deployment/jaiscloud-gcp "$NAMESPACE_GCP" 180s
   record_intent gcp running
@@ -811,10 +868,13 @@ if [[ "$MODE" == "gcp" ]]; then
   require_isolation_prereqs
   info "Applying the namespace-isolation admission policy..."
   apply_isolation_policy
-  info "Applying the shared namespaces, Postgres and RBAC..."
-  kubectl apply -f "$K8S_DIR/namespace.yaml"
+  info "Applying the shared store and the GCP substrate objects..."
+  kubectl apply -f "$K8S_DIR/namespace-data.yaml"
   kubectl apply -f "$K8S_DIR/postgres.yaml"
-  kubectl apply -f "$K8S_DIR/rbac.yaml"
+  kubectl apply -f "$K8S_DIR/namespace-gcp.yaml"
+  kubectl apply -f "$K8S_DIR/rbac-shared.yaml"
+  kubectl apply -f "$K8S_DIR/rbac-gcp.yaml"
+  retire_legacy_namespace_binding gcp
   # Create the database BEFORE starting the GCP pod: a missing DSN target is
   # fatal at startup, so applying the Deployment first would crash-loop it.
   ensure_database "$GCP_DB"
@@ -874,7 +934,7 @@ if [[ "$MODE" == "migrate-store" ]]; then
   scale_to_zero "$OLD_NS" postgres app=postgres
 
   info "Starting the new store in $NAMESPACE_DATA..."
-  kubectl apply -f "$K8S_DIR/namespace.yaml"
+  kubectl apply -f "$K8S_DIR/namespace-data.yaml"
   kubectl apply -f "$K8S_DIR/postgres.yaml"
   wait_for_rollout "$POSTGRES_DEPLOYMENT" "$NAMESPACE_DATA"
   ensure_database "$GCP_DB"
@@ -891,6 +951,10 @@ if [[ "$MODE" == "migrate-store" ]]; then
 
   if [[ "$legacy_gcp" -eq 1 ]]; then
     info "Bringing up the GCP substrate in $NAMESPACE_GCP (paused for the byte copy)..."
+    kubectl apply -f "$K8S_DIR/namespace-gcp.yaml"
+    kubectl apply -f "$K8S_DIR/rbac-shared.yaml"
+    kubectl apply -f "$K8S_DIR/rbac-gcp.yaml"
+    retire_legacy_namespace_binding gcp
     kubectl apply -f "$K8S_DIR/jaiscloud-gcp.yaml"
     apply_gcp_image_override
     scale_to_zero "$NAMESPACE_GCP" jaiscloud-gcp app=jaiscloud-gcp
@@ -947,7 +1011,8 @@ else
 fi
 
 info "Applying the AWS substrate manifests..."
-info "  $K8S_DIR/namespace.yaml  $K8S_DIR/postgres.yaml  $K8S_DIR/rbac.yaml  $K8S_DIR/jaiscloud.yaml"
+info "  $K8S_DIR/namespace-data.yaml  $K8S_DIR/postgres.yaml  $K8S_DIR/namespace-aws.yaml"
+info "  $K8S_DIR/rbac-shared.yaml  $K8S_DIR/rbac-aws.yaml  $K8S_DIR/jaiscloud.yaml"
 apply_aws
 
 wait_for_rollout "$POSTGRES_DEPLOYMENT" "$NAMESPACE_DATA"

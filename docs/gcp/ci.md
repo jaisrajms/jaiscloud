@@ -181,9 +181,12 @@ k3d cluster create ci --wait
 docker build --build-arg CLOUD=gcp -t jaiscloud-gcp:ci .
 k3d image import -c ci jaiscloud-gcp:ci
 
-kubectl apply -f deploy/k8s/namespace.yaml
+kubectl apply -f deploy/k8s/rbac-admission-policy.yaml   # namespace isolation (K8s >= 1.30)
+kubectl apply -f deploy/k8s/namespace-data.yaml
 kubectl apply -f deploy/k8s/postgres.yaml
-kubectl apply -f deploy/k8s/rbac.yaml
+kubectl apply -f deploy/k8s/namespace-gcp.yaml
+kubectl apply -f deploy/k8s/rbac-shared.yaml
+kubectl apply -f deploy/k8s/rbac-gcp.yaml
 kubectl apply -f deploy/k8s/jaiscloud-gcp.yaml
 kubectl -n jaiscloud-gcp set image deployment/jaiscloud-gcp jaiscloud-gcp=jaiscloud-gcp:ci
 kubectl -n jaiscloud-gcp patch deployment/jaiscloud-gcp --type=json \
@@ -195,11 +198,14 @@ Then point tests at the in-cluster Service
 (`jaiscloud-gcp.jaiscloud-gcp.svc.cluster.local:8080` / `:8081`) and pass
 `K8S_NAMESPACE=jaiscloud-gcp` to the repo's e2e helpers.
 
-`postgres.yaml` creates `jaiscloud_gcp` on a **fresh** volume; if you reuse one,
-create it once (`make postgres-gcp-db`, or
-`kubectl -n jaiscloud-data exec deploy/postgres -- psql -U jaiscloud -d postgres -c 'CREATE DATABASE jaiscloud_gcp'`).
-`rbac.yaml` is what lets the emulator create its per-cluster namespaces and
-driver Pods; without it the emulator falls back to `mock`/the process namespace.
+`postgres.yaml` creates only the `jaiscloud` database (via `POSTGRES_DB`) on a
+**fresh** volume; the GCP database is not created by the manifest, so create
+`jaiscloud_gcp` once (`make postgres-gcp-db`, or
+`kubectl -n jaiscloud-data exec deploy/postgres -- psql -U jaiscloud -d postgres -c 'CREATE DATABASE jaiscloud_gcp'`)
+before the GCP pod starts. `rbac-shared.yaml` + `rbac-gcp.yaml` are what let the
+emulator create its per-cluster namespaces and driver Pods; without them the
+emulator falls back to `mock`/the process namespace. `deploy/deploy.sh --gcp`
+applies this order for you, including the namespace-isolation policy.
 
 Dataproc jobs also need the Spark image the emulator injects: the manifest's
 `JAISCLOUD_K8S_SPARK_IMAGE` must be pullable from your cluster (the default is
@@ -316,7 +322,7 @@ secret.
 | gRPC client hangs on `:443` | native TLS is REST-only; use the front door (D3) or plaintext `:8081` (h2c). |
 | `x509: certificate is valid for …` | the client does not trust the dev CA, or the host is not covered (IP literal / unlisted depth). |
 | `https://storage.googleapis.com` times out | the name does not resolve to the proxy/emulator yet (`/etc/hosts`, `hostAliases`, DNS). |
-| Dataproc/Kafka/Cloud Run jobs stay `mock` | no k8s client: the pod needs `rbac.yaml` and a reachable API server, and the executor mode set to `k8s`. |
+| Dataproc/Kafka/Cloud Run jobs stay `mock` | no k8s client: the pod needs `rbac-shared.yaml` + `rbac-gcp.yaml` and a reachable API server, and the executor mode set to `k8s`. |
 | Two jobs reap each other's Pods | shared cluster without a per-job `JAISCLOUD_INSTANCE_ID`/namespace. |
 
 ## See also

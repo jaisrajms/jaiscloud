@@ -152,7 +152,8 @@ process-wide one. The seam lives in `namespace.go`:
   `jaiscloud.io/service=<service>`), so an adopted or foreign namespace is untouched.
 - `EnsureNamespaceRBAC(ctx, client, ns, sa, saNamespace)` — creates the executor RoleBinding
   in a new namespace, referencing the `jaiscloud-executor` ClusterRole
-  (`deploy/k8s/rbac.yaml`), so the executor ServiceAccount can run there. Pass
+  (`deploy/k8s/rbac-shared.yaml`, bound per substrate by `rbac-aws.yaml` /
+  `rbac-gcp.yaml`), so the executor ServiceAccount can run there. Pass
   `ResolveOwnServiceAccount()`'s result so a substrate that does not run in
   `jaiscloud` binds its own ServiceAccount; the empty-argument form keeps the
   `jaiscloud`/`jaiscloud` default.

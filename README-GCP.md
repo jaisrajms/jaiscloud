@@ -255,7 +255,7 @@ export STORAGE_EMULATOR_HOST=http://localhost:8080      # GCS REST client
 
 The GCP emulator runs as its own **substrate** in a cluster, next to the AWS one,
 each in its own namespace so neither reset can destroy the other's state
-(`deploy/k8s/namespace.yaml`):
+(`deploy/k8s/namespace-aws.yaml`, `namespace-gcp.yaml`, `namespace-data.yaml`):
 
 | namespace | contents |
 |---|---|
@@ -264,7 +264,7 @@ each in its own namespace so neither reset can destroy the other's state
 | `jaiscloud-data` | PostgreSQL, `postgres-pvc`, database `jaiscloud_gcp` (schema `gcp`) |
 
 ```bash
-make up-k8s-gcp           # apply namespace/postgres/rbac/jaiscloud-gcp.yaml, wait for rollout
+make up-k8s-gcp           # apply namespace-data/postgres/namespace-gcp/rbac-shared/rbac-gcp/jaiscloud-gcp.yaml, wait for rollout
 ./deploy/deploy.sh --gcp  # same from the deploy script (no image build)
 kubectl port-forward -n jaiscloud-gcp svc/jaiscloud-gcp 8080:8080
 ```
@@ -300,12 +300,20 @@ deployment kit: manifests, `deploy.sh`, preflight, Istio/CI assets, docs).
 The single-file manifest still works on a bare cluster (it declares its own
 Namespace and the `jaiscloud-gcp` ServiceAccount). The Postgres server and the
 `jaiscloud_gcp` database have to exist for the pod to become Ready, and
-`rbac.yaml` is needed for Dataproc / Managed Kafka / Cloud Run execution:
+`rbac-shared.yaml` + `rbac-gcp.yaml` are needed for Dataproc / Managed Kafka /
+Cloud Run execution:
 
 ```bash
-kubectl apply -f deploy/k8s/namespace.yaml -f deploy/k8s/postgres.yaml \
-              -f deploy/k8s/rbac.yaml -f deploy/k8s/jaiscloud-gcp.yaml
+kubectl apply -f deploy/k8s/namespace-data.yaml -f deploy/k8s/postgres.yaml \
+              -f deploy/k8s/namespace-gcp.yaml \
+              -f deploy/k8s/rbac-shared.yaml -f deploy/k8s/rbac-gcp.yaml \
+              -f deploy/k8s/jaiscloud-gcp.yaml
 ```
+
+The shared store comes first (`namespace-data.yaml` + `postgres.yaml`), then the
+GCP namespace and its RBAC, then the substrate. `deploy/deploy.sh --gcp` also
+applies `deploy/k8s/rbac-admission-policy.yaml` before any of these, so the
+namespace-isolation boundary is in place from the first namespace.
 
 - **Image.** The manifest defaults to the published multi-arch image
   (`jaisraj/jaiscloud-gcp:latest`), so the commands above work without a private
@@ -318,9 +326,10 @@ kubectl apply -f deploy/k8s/namespace.yaml -f deploy/k8s/postgres.yaml \
   build your own (`tests/persistent_mode/gcp/iceberg/spark-iceberg` +
   `download-jars.sh`) and
   `kubectl -n jaiscloud-gcp set env deploy/jaiscloud-gcp JAISCLOUD_K8S_SPARK_IMAGE=<image>`.
-- The Postgres bootstrap (`ConfigMap postgres-init` → `CREATE DATABASE jaiscloud_gcp`)
-  runs **only on a fresh `postgres-pvc`**. On an existing volume create it once
-  with `make postgres-gcp-db`; `deploy.sh --gcp` and `make up-k8s-gcp` do it for you.
+- `postgres.yaml` creates only the AWS database (`POSTGRES_DB=jaiscloud`) on a
+  fresh `postgres-pvc`; there is no initdb script. Create `jaiscloud_gcp` once
+  with `make postgres-gcp-db`; `deploy.sh --gcp` and `make up-k8s-gcp` do it for
+  you before the GCP pod starts.
 - **Reaching it.** The GCP Service is a ClusterIP (it also carries the Thrift
   HMS ports), so port-forward `8080`/`8081` as above, or use the front door for
   external HTTP(S). The AWS Service is a LoadBalancer for localhost convenience;
@@ -925,7 +934,7 @@ A cluster may be created with a `virtualClusterConfig` (Dataproc-on-GKE) instead
 
 A virtual cluster is **recreate-only**: `clusters.patch` may update labels and the worker-instance counts of a GCE cluster, but a patch whose `updateMask` applies `virtualClusterConfig` or `config` is `InvalidArgument` — the release-note rule real GCP follows, and it is why the documented recipe drops `kubernetesNamespace` and re-creates. The mask decides, as it does for the persisted fields: an empty mask means "everything supplied applies", so an unmasked patch carrying either placement field is rejected, while a full resource sent under a `labels`-only mask is applied for labels and leaves the placement alone. The effective namespace defaults to the cluster name, and a second live virtual cluster claiming a namespace already owned on the same GKE cluster is `FailedPrecondition` ("`kubernetesNamespace … is already used by Dataproc virtual cluster …`"); dropping the namespace (so it defaults to the new cluster's name) is what makes delete-then-recreate work. `kubernetesSoftwareConfig` is optional, and a present one must carry a non-empty `componentVersion` whose only supported entry is `SPARK` (an absent software config is accepted; a present-but-empty one is `InvalidArgument`); `latest`, `<major>`, `<major.minor>` and the image-line alias `dataproc-<major.minor>` are dereferenced at create to a concrete `<major.minor>-dataproc-<n>` release (an unknown alias or release is `InvalidArgument`). Of the image-line aliases, real GCP accepts exactly `dataproc-2.2` (the Dataproc image line the GKE engine releases are built on, resolving to `3.5-dataproc-28` like `latest`); every other line (`dataproc-2.1`, `dataproc-2.3`, `dataproc-3.0`, …) is rejected there too, so it is `InvalidArgument` here rather than inferred — [real-GCP capture](docs/gcp/dataproc-gke-version-aliases.md). `stagingBucket` must be a bare bucket name.
 
-Jobs, however, get a real placement/isolation boundary in K8s executor mode: each cluster runs in its own Kubernetes namespace — the caller's `kubernetesClusterConfig.kubernetesNamespace` when supplied, else a deterministic derived name (`gcp-dataproc-<project>-<cluster>-<hash8>`) — provisioned on cluster create and removed on cluster delete or `/_jaiscloud/reset` **only when the emulator created it** (a pre-existing namespace is adopted and left in place; its jobs are still reaped on cluster delete, while reset reclaims only emulator-owned namespaces). When the emulator's ServiceAccount cannot manage cluster-scoped namespaces, or in mock execution mode, the cluster falls back to the process-wide `JAISCLOUD_K8S_NAMESPACE`. The effective namespace and its ownership are recorded on the cluster record (`namespace`/`namespaceOwned`). The required RBAC — the `jaiscloud-executor` ClusterRole and a per-namespace RoleBinding, plus the `jaiscloud-namespace-admin` ClusterRole for namespace create/delete — is in `deploy/k8s/rbac.yaml`. Because that ClusterRole is cluster-wide, the per-resource namespaces carry `jaiscloud.io/substrate` and `jaiscloud.io/instance-id` alongside their ownership labels and are filtered on them, and the `jaiscloud-namespace-isolation` ValidatingAdmissionPolicy (Kubernetes >= 1.30) refuses a namespace request from one substrate that does not carry its own identity (see [Kubernetes and the Istio front door](#kubernetes-and-the-istio-front-door)).
+Jobs, however, get a real placement/isolation boundary in K8s executor mode: each cluster runs in its own Kubernetes namespace — the caller's `kubernetesClusterConfig.kubernetesNamespace` when supplied, else a deterministic derived name (`gcp-dataproc-<project>-<cluster>-<hash8>`) — provisioned on cluster create and removed on cluster delete or `/_jaiscloud/reset` **only when the emulator created it** (a pre-existing namespace is adopted and left in place; its jobs are still reaped on cluster delete, while reset reclaims only emulator-owned namespaces). When the emulator's ServiceAccount cannot manage cluster-scoped namespaces, or in mock execution mode, the cluster falls back to the process-wide `JAISCLOUD_K8S_NAMESPACE`. The effective namespace and its ownership are recorded on the cluster record (`namespace`/`namespaceOwned`). The required RBAC — the `jaiscloud-executor` ClusterRole and a per-namespace RoleBinding, plus the `jaiscloud-namespace-admin` ClusterRole for namespace create/delete — is in `deploy/k8s/rbac-shared.yaml` (`rbac-aws.yaml`/`rbac-gcp.yaml` bind it to each substrate's ServiceAccount). Because that ClusterRole is cluster-wide, the per-resource namespaces carry `jaiscloud.io/substrate` and `jaiscloud.io/instance-id` alongside their ownership labels and are filtered on them, and the `jaiscloud-namespace-isolation` ValidatingAdmissionPolicy (Kubernetes >= 1.30) refuses a namespace request from one substrate that does not carry its own identity (see [Kubernetes and the Istio front door](#kubernetes-and-the-istio-front-door)).
 
 The **docker executor** is the k8s-free path (`JAISCLOUD_SPARK_EXECUTOR_MODE=docker`, or `JAISCLOUD_EXECUTOR_MODE=docker`): each job runs as a one-shot container on the local Docker daemon, where the configured Spark image (`JAISCLOUD_K8S_SPARK_IMAGE`) executes `spark-submit --master local[*]` in client mode with the same GCS-connector env/`--conf`s the k8s driver pods receive. The emulator host is reachable from the container as `host.docker.internal` (a loopback `STORAGE_EMULATOR_HOST` is rewritten for the container), or, when the emulator itself is containerized (`JAISCLOUD_DOCKER_MODE=container`), by its name on `JAISCLOUD_DOCKER_NETWORK`, which the driver joins (CDE1). The driver's stdout/stderr is streamed from the container log into the job's `driverOutputResourceUri`, and cancel, cluster delete and `/_jaiscloud/reset` reap the container. Like the Cloud Run/Lambda/ECS executors it dials `/var/run/docker.sock` (ignoring `DOCKER_HOST`) and falls back to mock when no daemon is reachable. Docker and k8s are interchangeable implementations of one executor seam and change no wire surface — the executor choice never affects a fidelity tier (`docs/gcp/testability.md` §8). Verified by `make test-e2e-dataproc-docker` (`tests/persistent_mode/gcp/dataproc/`, local Docker).
 

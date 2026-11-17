@@ -117,7 +117,7 @@ DEMO_RECORD_DURATION ?= 20
 CLOUDRUN_JAVA_TIMEOUT ?= 2400
 
 # ─── K8s configuration ────────────────────────────────────────────────────────
-# One namespace per concern (deploy/k8s/namespace.yaml): the AWS substrate
+# One namespace per concern (deploy/k8s/namespace-*.yaml): the AWS substrate
 # (default, unchanged), the GCP substrate, and the shared PostgreSQL server.
 # AWS-side targets use K8S_NAMESPACE; anything that drives the jaiscloud-gcp
 # deployment/Service must use K8S_NAMESPACE_GCP and the Postgres-side rows use
@@ -126,6 +126,12 @@ K8S_NAMESPACE           ?= jaiscloud
 K8S_NAMESPACE_AWS       ?= $(K8S_NAMESPACE)
 K8S_NAMESPACE_GCP       ?= jaiscloud-gcp
 K8S_NAMESPACE_DATA      ?= jaiscloud-data
+# Per-substrate RBAC: the ClusterRoles are shared by both substrates, while each
+# substrate's ServiceAccount and bindings live in its own file, so a
+# single-substrate install creates no object for the other cloud.
+K8S_RBAC_SHARED         ?= deploy/k8s/rbac-shared.yaml
+K8S_RBAC_AWS            ?= deploy/k8s/rbac-aws.yaml
+K8S_RBAC_GCP            ?= deploy/k8s/rbac-gcp.yaml
 JAISCLOUD_K8S_APISERVER ?= $(shell kubectl config view --context docker-desktop --minify -o jsonpath='{.clusters[0].cluster.server}' 2>/dev/null)
 JAISCLOUD_K8S_CA_FILE           ?=
 JAISCLOUD_K8S_CLIENT_CERT_FILE  ?=
@@ -568,9 +574,11 @@ down-docker: ## Stop and remove docker-compose services
 	docker-compose down --remove-orphans
 
 up-k8s: _check-k8s-prereq ## Deploy the AWS substrate (JaisCloud + Postgres) to K8s  (docker-desktop)
-	kubectl apply -f deploy/k8s/namespace.yaml
+	kubectl apply -f deploy/k8s/namespace-data.yaml
 	kubectl apply -f deploy/k8s/postgres.yaml
-	kubectl apply -f deploy/k8s/rbac.yaml
+	kubectl apply -f deploy/k8s/namespace-aws.yaml
+	kubectl apply -f $(K8S_RBAC_SHARED)
+	kubectl apply -f $(K8S_RBAC_AWS)
 	kubectl apply -f deploy/k8s/jaiscloud.yaml
 	@echo "Waiting for postgres and jaiscloud deployments..."
 	@kubectl rollout status deployment/postgres -n $(K8S_NAMESPACE_DATA) --timeout=120s
@@ -578,9 +586,11 @@ up-k8s: _check-k8s-prereq ## Deploy the AWS substrate (JaisCloud + Postgres) to 
 	$(MAKE) _wait-docker
 
 up-k8s-gcp: _check-k8s-prereq ## Deploy the GCP substrate (jaiscloud-gcp) to K8s; creates jaiscloud_gcp on an existing Postgres volume
-	kubectl apply -f deploy/k8s/namespace.yaml
+	kubectl apply -f deploy/k8s/namespace-data.yaml
 	kubectl apply -f deploy/k8s/postgres.yaml
-	kubectl apply -f deploy/k8s/rbac.yaml
+	kubectl apply -f deploy/k8s/namespace-gcp.yaml
+	kubectl apply -f $(K8S_RBAC_SHARED)
+	kubectl apply -f $(K8S_RBAC_GCP)
 	@kubectl rollout status deployment/postgres -n $(K8S_NAMESPACE_DATA) --timeout=120s
 	$(MAKE) postgres-gcp-db
 	kubectl apply -f deploy/k8s/jaiscloud-gcp.yaml
@@ -589,11 +599,11 @@ up-k8s-gcp: _check-k8s-prereq ## Deploy the GCP substrate (jaiscloud-gcp) to K8s
 	@echo "GCP substrate ready in namespace $(K8S_NAMESPACE_GCP)"
 	@echo "  kubectl port-forward -n $(K8S_NAMESPACE_GCP) svc/jaiscloud-gcp 8080:8080"
 
-# deploy/k8s/postgres.yaml's ConfigMap postgres-init mounts 01-gcp-db.sql, which
-# only runs when the entrypoint initialises an empty data directory — i.e. on a
-# FRESH postgres-pvc. On an existing volume the GCP database must be created
-# explicitly, hence this idempotent target (up-k8s-gcp and deploy.sh --gcp run it).
-postgres-gcp-db: ## Create the jaiscloud_gcp database on an existing postgres-pvc (postgres-init only runs on a fresh volume)
+# postgres.yaml creates the `jaiscloud` database via POSTGRES_DB on a FRESH
+# volume; `jaiscloud_gcp` is not created by the manifest at all (no initdb
+# script), so it must be created explicitly before the GCP pod starts. This
+# idempotent target does that (up-k8s-gcp and deploy.sh --gcp run it).
+postgres-gcp-db: ## Create the jaiscloud_gcp database on the shared store (postgres.yaml only creates `jaiscloud`)
 	@kubectl -n $(K8S_NAMESPACE_DATA) exec deploy/postgres -- \
 	  psql -U jaiscloud -d postgres -tAc "SELECT 1 FROM pg_database WHERE datname='jaiscloud_gcp'" | grep -q 1 || \
 	  kubectl -n $(K8S_NAMESPACE_DATA) exec deploy/postgres -- \
@@ -2465,9 +2475,10 @@ test-dataproc-streaming-kafka: _check-dataproc-streaming-k8s-prereq _refresh-gcp
 	K8S_NAMESPACE=$(K8S_NAMESPACE_GCP) \
 	  go test -v -tags dataproc_streaming_e2e -run '^TestDataprocKafkaStreamingK3d$$' -timeout 25m ./tests/persistent_mode/gcp/dataproc-streaming/
 
-test-dataproc-namespace-k8s: _check-dataproc-namespace-k8s-prereq _refresh-gcp-image ## Real-K8s Dataproc per-cluster namespace isolation + teardown e2e on k3d (tag: dataproc_namespace_e2e; SKIP_GCP_IMAGE_REBUILD=1 to reuse the deployed emulator). Applies deploy/k8s/rbac.yaml because namespace create/delete needs the jaiscloud-namespace-admin ClusterRoleBinding.
+test-dataproc-namespace-k8s: _check-dataproc-namespace-k8s-prereq _refresh-gcp-image ## Real-K8s Dataproc per-cluster namespace isolation + teardown e2e on k3d (tag: dataproc_namespace_e2e; SKIP_GCP_IMAGE_REBUILD=1 to reuse the deployed emulator). Applies $(K8S_RBAC_SHARED) + $(K8S_RBAC_GCP) because namespace create/delete needs the jaiscloud-namespace-admin-gcp ClusterRoleBinding.
 	go clean -testcache
-	kubectl apply -f deploy/k8s/rbac.yaml
+	kubectl apply -f $(K8S_RBAC_SHARED)
+	kubectl apply -f $(K8S_RBAC_GCP)
 	K8S_NAMESPACE=$(K8S_NAMESPACE_GCP) DATAPROC_NAMESPACE_E2E=1 \
 	  go test -v -tags dataproc_namespace_e2e -run '^TestDataprocNamespaceIsolationK3d$$' -timeout 30m ./tests/persistent_mode/gcp/dataproc/
 
@@ -2498,9 +2509,10 @@ test-e2e-dpgke-demo-k3d: _check-dpgke-demo-k3d-prereq ## Full Dataproc-on-GKE de
 	  DPGKE_SPARK_IMAGE=$(DPGKE_SPARK_IMAGE) \
 	  ./demo/dpgke-lifecycle/scripts/e2e-k3d.sh
 
-test-managedkafka-broker-k8s: _check-managedkafka-broker-k8s-prereq _refresh-gcp-image ## Real-K8s Managed Kafka broker lifecycle smoke on k3d (tag: managedkafka_broker_e2e; SKIP_GCP_IMAGE_REBUILD=1 to reuse the deployed emulator). Applies deploy/k8s/rbac.yaml because per-cluster namespace create/delete needs the jaiscloud-namespace-admin ClusterRoleBinding.
+test-managedkafka-broker-k8s: _check-managedkafka-broker-k8s-prereq _refresh-gcp-image ## Real-K8s Managed Kafka broker lifecycle smoke on k3d (tag: managedkafka_broker_e2e; SKIP_GCP_IMAGE_REBUILD=1 to reuse the deployed emulator). Applies $(K8S_RBAC_SHARED) + $(K8S_RBAC_GCP) because per-cluster namespace create/delete needs the jaiscloud-namespace-admin-gcp ClusterRoleBinding.
 	go clean -testcache
-	kubectl apply -f deploy/k8s/rbac.yaml
+	kubectl apply -f $(K8S_RBAC_SHARED)
+	kubectl apply -f $(K8S_RBAC_GCP)
 	K8S_NAMESPACE=$(K8S_NAMESPACE_GCP) \
 	  go test -v -tags managedkafka_broker_e2e -timeout 20m ./tests/persistent_mode/gcp/managedkafka-broker/
 

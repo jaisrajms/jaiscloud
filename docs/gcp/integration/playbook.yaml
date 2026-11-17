@@ -37,10 +37,11 @@ platform:
     enforced_by: "deploy/deploy.sh require_isolation_prereqs() — refuses install/reset/migrate on < 1.30 or when the VAP API is missing"
   rbac:
     namespace_admin:
-      object: "ClusterRole/ClusterRoleBinding jaiscloud-namespace-admin"
+      object: "ClusterRole jaiscloud-namespace-admin + per-substrate ClusterRoleBindings jaiscloud-namespace-admin-aws / jaiscloud-namespace-admin-gcp"
       subjects: ["system:serviceaccount:jaiscloud:jaiscloud (aws)", "system:serviceaccount:jaiscloud-gcp:jaiscloud-gcp (gcp)"]
       grants: "namespaces get/list/watch/create/update/patch/delete (update/patch for identity-label backfill; the admission policy keeps it to owned namespaces) + rolebindings get/list/create/update/delete, cluster-wide"
-      why: "Dataproc creates one namespace per cluster and Managed Kafka one per broker; both substrates need it."
+      why: "Dataproc creates one namespace per cluster and Managed Kafka one per broker; each substrate binds the ClusterRole to its own identity only, so a single-substrate install grants it to no other cloud."
+      manifests: "deploy/k8s/rbac-shared.yaml (ClusterRoles) + rbac-aws.yaml / rbac-gcp.yaml (ServiceAccount + bindings)"
     admission_policy:
       object: "ValidatingAdmissionPolicy + ValidatingAdmissionPolicyBinding jaiscloud-namespace-isolation (deploy/k8s/rbac-admission-policy.yaml)"
       mode: "failurePolicy: Fail, validationActions: [Deny], matched only to the two substrate ServiceAccounts"
@@ -207,8 +208,8 @@ scenarios:
     summary: "Enable Dataproc / Managed Kafka / Cloud Run on Kubernetes."
     steps:
       - id: rbac
-        run: "kubectl apply -f deploy/k8s/rbac.yaml"
-        note: "Per-cluster namespaces, driver Pods and brokers need it; without it the emulator falls back to mock."
+        run: "kubectl apply -f deploy/k8s/rbac-shared.yaml && kubectl apply -f deploy/k8s/rbac-gcp.yaml"
+        note: "Per-cluster namespaces, driver Pods and brokers need it; rbac-gcp.yaml binds role/namespace-admin to the GCP ServiceAccount only. Without it the emulator falls back to mock."
       - id: spark-image
         run: "Set JAISCLOUD_K8S_SPARK_IMAGE to a reachable image with the GCS connector (see custom-images)."
       - id: verify
@@ -254,7 +255,7 @@ failure_taxonomy:
     fix: "run an image that stamps jaiscloud.io/substrate + jaiscloud.io/instance-id; a pre-upgrade namespace is backfilled when next ensured. Do not remove the policy."
   - symptom: "driver/broker Pods Forbidden"
     cause: "per-cluster RBAC not applied or the resolved ServiceAccount is wrong"
-    fix: "kubectl apply -f deploy/k8s/rbac.yaml; verify JAISCLOUD_K8S_SA / _NAMESPACE (the emulator resolves them from env or the projected token)"
+    fix: "kubectl apply -f deploy/k8s/rbac-shared.yaml && kubectl apply -f deploy/k8s/rbac-gcp.yaml; verify JAISCLOUD_K8S_SA / _NAMESPACE (the emulator resolves them from env or the projected token)"
   - symptom: "LoadBalancer EXTERNAL-IP pending"
     cause: "kind/k3d have no LoadBalancer controller"
     fix: "use the port-forward deploy.sh prints; the front door is the external HTTP surface"

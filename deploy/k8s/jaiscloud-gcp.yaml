@@ -1,13 +1,14 @@
 ---
 # Namespace — the GCP substrate owns its own namespace so that deleting it never
 # touches the AWS substrate or the shared store. Declared here (as well as in
-# namespace.yaml, with identical labels) together with the ServiceAccount the
+# namespace-gcp.yaml, with identical labels) together with the ServiceAccount the
 # Deployment runs as, so the documented one-file install
 #   kubectl apply -f deploy/k8s/jaiscloud-gcp.yaml
 # still starts its pod on a bare cluster; applying both files in either order is
 # a no-op. The shared Postgres and its `jaiscloud_gcp` database must exist
-# (deploy/k8s/postgres.yaml), and rbac.yaml is still needed for Dataproc /
-# Managed Kafka / Cloud Run execution (executor RoleBinding + namespace admin).
+# (namespace-data.yaml + postgres.yaml), and rbac-shared.yaml + rbac-gcp.yaml are
+# still needed for Dataproc / Managed Kafka / Cloud Run execution (executor
+# RoleBinding + the GCP namespace-admin binding).
 apiVersion: v1
 kind: Namespace
 metadata:
@@ -49,10 +50,11 @@ spec:
     requests:
       storage: 64Mi
 ---
-# ServiceAccount — mirrors the one in rbac.yaml so the documented one-file
+# ServiceAccount — mirrors the one in rbac-gcp.yaml so the documented one-file
 # install (`kubectl apply -f deploy/k8s/jaiscloud-gcp.yaml`) can start the pod on
-# a bare cluster. The executor RoleBinding and the cluster-scoped namespace RBAC
-# stay in rbac.yaml; apply it too for Dataproc/Kafka/Cloud Run execution.
+# a bare cluster. The executor RoleBinding and the GCP cluster-scoped namespace
+# RBAC stay in rbac-shared.yaml + rbac-gcp.yaml; apply them too for
+# Dataproc/Kafka/Cloud Run execution.
 apiVersion: v1
 kind: ServiceAccount
 metadata:
@@ -86,7 +88,7 @@ stringData:
 # (or `JAISCLOUD_GCP_IMAGE=<image> deploy/deploy.sh --gcp`).
 # Spark drivers/executors are launched as pods in the GCP substrate namespace
 # using JAISCLOUD_K8S_SPARK_IMAGE, so the pod's ServiceAccount needs the
-# jaiscloud-executor Role from rbac.yaml.
+# jaiscloud-executor ClusterRole binding from rbac-shared.yaml + rbac-gcp.yaml.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -226,7 +228,8 @@ spec:
             # (rpk) Pod + Service per cluster (namespace jaiscloud-gcp) and
             # renders its in-cluster endpoint as bootstrapAddress. The
             # jaiscloud-gcp ServiceAccount already has pod/service
-            # create+delete from rbac.yaml, and the emulator's in-cluster
+            # create+delete from rbac-shared.yaml + rbac-gcp.yaml, and the
+            # emulator's in-cluster
             # config supplies the client. Set to mock to disable (no broker;
             # synthesized cloud.goog address).
             - name: JAISCLOUD_KAFKA_BROKER_MODE
@@ -235,7 +238,8 @@ spec:
             # Pod + ClusterIP Service (namespace jaiscloud-gcp) and data-plane
             # requests addressed to the synthesized *.run.app authority are
             # reverse-proxied to it. The jaiscloud-gcp ServiceAccount already
-            # has pod/service create+delete from rbac.yaml. The URI suffix/port
+            # has pod/service create+delete from rbac-shared.yaml +
+            # rbac-gcp.yaml. The URI suffix/port
             # are left at the real-GCP default; the optional floci interop smoke
             # run overrides them per-target (see the Makefile).
             - name: JAISCLOUD_CLOUDRUN_EXECUTOR_MODE

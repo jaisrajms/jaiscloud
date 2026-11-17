@@ -249,7 +249,7 @@ namespace so deleting or resetting one never destroys the other's state:
 | `jaiscloud-data` | one PostgreSQL server, `postgres-pvc`, databases `jaiscloud` (AWS) and `jaiscloud_gcp` (GCP) |
 
 ```bash
-make up-k8s          # AWS: namespace.yaml + postgres.yaml + rbac.yaml + jaiscloud.yaml
+make up-k8s          # AWS: namespace-data + postgres + namespace-aws + rbac-shared + rbac-aws + jaiscloud.yaml
 make up-k8s-gcp       # GCP: jaiscloud-gcp.yaml (+ creates the jaiscloud_gcp database)
 
 ./deploy/deploy.sh --reset      # AWS only: drops the `jaiscloud` database + AWS namespace/PVC

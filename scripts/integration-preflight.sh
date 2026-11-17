@@ -29,10 +29,12 @@
 # RBAC/namespace isolation:
 #   Both substrate ServiceAccounts hold cluster-wide namespace delete; the
 #   namespace boundary between them is the ValidatingAdmissionPolicy
-#   jaiscloud-namespace-isolation (K8s >= 1.30). The JSON reports
-#   rbac.namespaceAdmin, rbac.admissionPolicy and rbac.serverVersion, and a
-#   missing policy on a cluster with a substrate is a warning plus a
-#   non-optional install-rbac-policy recommendation (so --strict fails).
+#   jaiscloud-namespace-isolation (K8s >= 1.30). Namespace admin is bound per
+#   substrate (jaiscloud-namespace-admin-aws / …-gcp). The JSON reports
+#   rbac.namespaceAdmin (the intended substrate's binding), rbac.admissionPolicy
+#   and rbac.serverVersion, and a missing policy on a cluster with a substrate is
+#   a warning plus a non-optional install-rbac-policy recommendation (so --strict
+#   fails).
 #
 # Also reachable as: deploy/deploy.sh --check [--json] [--strict]
 #                    [--substrate ...] [--desired ...]
@@ -279,7 +281,13 @@ SERVER_MINOR=${SERVER_MINOR//[!0-9]/}
 SERVER_OLD=0
 if [[ -n "$SERVER_MINOR" ]] && (( SERVER_MINOR < 30 )); then SERVER_OLD=1; fi
 VAP_PRESENT=$(probe_ok kc get validatingadmissionpolicy jaiscloud-namespace-isolation)
-NAMESPACE_ADMIN_PRESENT=$(probe_ok kc get clusterrolebinding jaiscloud-namespace-admin)
+# Namespace admin is bound per substrate (…-aws / …-gcp), so a single-substrate
+# install binds only its own; `namespaceAdmin` is derived from the intent below.
+NAMESPACE_ADMIN_AWS=$(probe_ok kc get clusterrolebinding jaiscloud-namespace-admin-aws)
+NAMESPACE_ADMIN_GCP=$(probe_ok kc get clusterrolebinding jaiscloud-namespace-admin-gcp)
+# Pre-split installs bound one combined ClusterRoleBinding to both ServiceAccounts;
+# the split manifests replace it with the two per-substrate bindings above.
+LEGACY_NAMESPACE_ADMIN=$(probe_ok kc get clusterrolebinding jaiscloud-namespace-admin)
 
 NS_AWS_P=$(ns_present "$NS_AWS"); NS_GCP_P=$(ns_present "$NS_GCP"); NS_DATA_P=$(ns_present "$NS_DATA")
 ROLE_AWS=$(field "" namespace "$NS_AWS" '{{index .metadata.labels "jaiscloud.io/role"}}' 2>/dev/null || true)
@@ -344,6 +352,23 @@ else
   INSTALLED=""
   [[ "$NS_AWS_P" == "1" || "$AWS_PRESENT" == "1" ]] && INSTALLED=$(list_add "$INSTALLED" aws)
   [[ "$NS_GCP_P" == "1" || "$GCP_PRESENT" == "1" ]] && INSTALLED=$(list_add "$INSTALLED" gcp)
+fi
+
+# The namespace-admin ClusterRoleBinding is per substrate (…-aws / …-gcp), so a
+# clean AWS-only install binds only jaiscloud-namespace-admin-aws. Report the
+# binding that matches the intent; with no intent, accept either (or both).
+NAMESPACE_ADMIN_PRESENT=0
+if [[ -z "$INSTALLED" ]]; then
+  if [[ "$NAMESPACE_ADMIN_AWS" == "1" || "$NAMESPACE_ADMIN_GCP" == "1" ]]; then
+    NAMESPACE_ADMIN_PRESENT=1
+  fi
+else
+  if list_has "$INSTALLED" aws && [[ "$NAMESPACE_ADMIN_AWS" == "1" ]]; then
+    NAMESPACE_ADMIN_PRESENT=1
+  fi
+  if list_has "$INSTALLED" gcp && [[ "$NAMESPACE_ADMIN_GCP" == "1" ]]; then
+    NAMESPACE_ADMIN_PRESENT=1
+  fi
 fi
 
 # Desired states: an explicit --desired wins, then the record, then a default
@@ -415,6 +440,9 @@ SKEW_GCP=$(migration_skew_warning "$NS_GCP" jaiscloud-gcp)
 [[ "$STORE_DEPLOY" == "0" && -n "$STORE_PVC" ]] && \
   warn_add "pvc postgres-pvc exists in $NS_DATA but deployment/postgres is missing"
 for leak in ${LEAKS+"${LEAKS[@]}"}; do warn_add "$leak"; done
+if [[ "$LEGACY_NAMESPACE_ADMIN" == "1" && "$NAMESPACE_ADMIN_PRESENT" == "0" ]]; then
+  warn_add "legacy combined clusterrolebinding jaiscloud-namespace-admin is bound to both substrates; re-run an install path (deploy/deploy.sh) to replace it with jaiscloud-namespace-admin-aws / jaiscloud-namespace-admin-gcp"
+fi
 if [[ "$SUBSTRATE_PRESENT" == "1" && "$VAP_PRESENT" == "0" ]]; then
   if [[ "$SERVER_OLD" == "1" ]]; then
     warn_add "namespace isolation is not enforced: Kubernetes 1.$SERVER_MINOR predates ValidatingAdmissionPolicy (>= 1.30), so this cluster cannot enforce deploy/k8s/rbac-admission-policy.yaml and one substrate can delete the other's namespaces"
@@ -599,10 +627,11 @@ else
   fi
   head_ "rbac"
   say "  server     ${SERVER_VERSION:-unknown}"
+  say "  namespace admin bindings: aws=$(yn "$NAMESPACE_ADMIN_AWS") gcp=$(yn "$NAMESPACE_ADMIN_GCP")  (intended: ${INSTALLED:-none})"
   if [[ "$NAMESPACE_ADMIN_PRESENT" == "1" ]]; then
-    ok_ "clusterrolebinding jaiscloud-namespace-admin (both substrate ServiceAccounts)"
+    ok_ "clusterrolebinding jaiscloud-namespace-admin-<substrate> (namespace create/delete for the intended substrate)"
   else
-    miss_ "clusterrolebinding jaiscloud-namespace-admin"
+    miss_ "clusterrolebinding jaiscloud-namespace-admin-{aws,gcp} — none bound for the intended substrate (${INSTALLED:-none})"
   fi
   if [[ "$VAP_PRESENT" == "1" ]]; then
     ok_ "ValidatingAdmissionPolicy jaiscloud-namespace-isolation enforces the namespace boundary"

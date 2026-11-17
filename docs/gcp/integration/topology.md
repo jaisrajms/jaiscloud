@@ -37,6 +37,16 @@ shape is what it is and what must not be relaxed.
 | `jaiscloud-data` | shared store | Deployment `postgres`, `postgres-pvc`, Secret `postgres-secret` (server env), Services `postgres:5432` / `postgres-external:30543` |
 | `istio-system` | optional front door | `istio-ingressgateway`, `Gateway jaiscloud`, TLS secret `jaiscloud-wildcard`, CA ConfigMap `jaiscloud-ca-cert` (also copied into each substrate namespace for managed workloads) |
 
+Each substrate's objects come from that substrate's own manifests: the AWS
+substrate from `namespace-aws.yaml` + `rbac-shared.yaml` + `rbac-aws.yaml`, the
+GCP substrate from `namespace-gcp.yaml` + `rbac-shared.yaml` + `rbac-gcp.yaml`,
+and the shared store from `namespace-data.yaml` + `postgres.yaml`. Installing one
+substrate creates no namespace, ServiceAccount or binding for the other; the
+shared objects are the store and `rbac-admission-policy.yaml`. The
+`jaiscloud-namespace-admin` ClusterRole is bound per substrate
+(`jaiscloud-namespace-admin-aws` / `jaiscloud-namespace-admin-gcp`), so a
+single-substrate install grants namespace admin to its own identity only.
+
 ## Install intent and state
 
 Presence is not intent: a cluster can hold only AWS on purpose, and a leftover
@@ -125,10 +135,12 @@ Advice is relative to that intent:
    convenience on Docker Desktop; pending on kind/k3d). The GCP Service is a
    `ClusterIP` because it also carries the Thrift HMS ports — use a port-forward
    (`8080`, `8081`) or the front door for external HTTP(S).
-10. **Namespace isolation is enforced by admission, not by convention.** Both
-    substrate ServiceAccounts hold `jaiscloud-namespace-admin`, a cluster-scoped
-    ClusterRole with namespace create/delete plus update/patch (the identity-label
-    backfill; per-cluster Dataproc namespaces, Managed Kafka brokers), and RBAC
+10. **Namespace isolation is enforced by admission, not by convention.** Each
+    substrate ServiceAccount is bound to `jaiscloud-namespace-admin`, a
+    cluster-scoped ClusterRole with namespace create/delete plus update/patch
+    (the identity-label backfill; per-cluster Dataproc namespaces, Managed Kafka
+    brokers), through its own ClusterRoleBinding
+    (`jaiscloud-namespace-admin-aws` / `jaiscloud-namespace-admin-gcp`), and RBAC
     cannot scope a delete by label.
     `deploy/k8s/rbac-admission-policy.yaml` installs a
     `ValidatingAdmissionPolicy` + `Deny` binding (`failurePolicy: Fail`) that

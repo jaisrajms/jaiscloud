@@ -316,7 +316,7 @@ if [[ ${#missing[@]} -gt 0 ]]; then
 fi
 
 if ! "$KUBECTL" get namespace "$K8S_NAMESPACE" >/dev/null 2>&1; then
-  echo "SKIP: namespace '$K8S_NAMESPACE' not found — start the k3d cluster and apply deploy/k8s/namespace.yaml + jaiscloud-gcp.yaml"
+  echo "SKIP: namespace '$K8S_NAMESPACE' not found — start the k3d cluster and apply deploy/k8s/namespace-gcp.yaml + deploy/k8s/rbac-shared.yaml + deploy/k8s/rbac-gcp.yaml + jaiscloud-gcp.yaml"
   exit 0
 fi
 if ! "$KUBECTL" -n "$K8S_NAMESPACE" get svc jaiscloud-gcp >/dev/null 2>&1; then
@@ -432,8 +432,9 @@ if "$KUBECTL" get namespace "$DPGKE_NAMESPACE" >/dev/null 2>&1; then
 fi
 
 # ── Emulator: real Spark, and an image built from this tree ──────────────────
-log "emulator: apply deploy/k8s/rbac.yaml (per-cluster namespace create/delete)"
-"$KUBECTL" apply -f "$ROOT/deploy/k8s/rbac.yaml" >/dev/null
+log "emulator: apply deploy/k8s/rbac-shared.yaml + deploy/k8s/rbac-gcp.yaml (per-cluster namespace create/delete)"
+"$KUBECTL" apply -f "$ROOT/deploy/k8s/rbac-shared.yaml" >/dev/null
+"$KUBECTL" apply -f "$ROOT/deploy/k8s/rbac-gcp.yaml" >/dev/null
 
 if [[ "$SKIP_GCP_IMAGE_REBUILD" == "1" ]]; then
   log "emulator: SKIP_GCP_IMAGE_REBUILD=1 — reusing deployed $EMULATOR_IMAGE"

@@ -74,7 +74,7 @@ manifest disagree, the manifest wins — regenerate with
 | is the store already at the new layout? | preflight `store.present` / `store.databases` |
 | is the mesh installed? | preflight `mesh.installed` |
 | is the cluster new enough to enforce the namespace boundary? | preflight `rbac.serverVersion` (needs >= 1.30) |
-| is namespace isolation enforced? | preflight `rbac.admissionPolicy` (the ValidatingAdmissionPolicy) and `rbac.namespaceAdmin` (the cluster role binding for both substrate ServiceAccounts) |
+| is namespace isolation enforced? | preflight `rbac.admissionPolicy` (the ValidatingAdmissionPolicy) and `rbac.namespaceAdmin` (the intended substrate's `jaiscloud-namespace-admin-<cloud>` binding) |
 | image strategy | published image (default) or your own (`custom-images`) |
 | executors needed? | only if tests submit Dataproc/Kafka/Cloud Run/function work |
 
@@ -108,9 +108,13 @@ JAISCLOUD_GCP_IMAGE=<image> deploy/deploy.sh --gcp --yes
 deploy/deploy.sh --check --json           # expect store.ready=true, substrates.gcp.ready=true
 ```
 
-Omit `JAISCLOUD_GCP_IMAGE` to use the published image. The command creates the
-namespaces it needs, the store, `jaiscloud_gcp`, the substrate and waits for the
-rollout. On failure it prints the pod and its events.
+Omit `JAISCLOUD_GCP_IMAGE` to use the published image. The command creates only
+the objects the GCP substrate needs — the store (`namespace-data.yaml` +
+`postgres.yaml`), the `jaiscloud-gcp` namespace, its RBAC (`rbac-shared.yaml` +
+`rbac-gcp.yaml`), `jaiscloud_gcp` and the substrate — and never the AWS
+namespace, ServiceAccount or bindings. It also applies the namespace-isolation
+policy first, then waits for the rollout. On failure it prints the pod and its
+events.
 
 Reach it with `kubectl -n jaiscloud-gcp port-forward svc/jaiscloud-gcp 8080:8080`
 (REST) and `8081:8081` (gRPC h2c). In-cluster clients use
@@ -126,7 +130,10 @@ deploy/deploy.sh --check --json
 
 The AWS substrate is `jaiscloud:4566` (LoadBalancer on Docker Desktop; on
 kind/k3d use the port-forward the summary prints). The GCP substrate is a
-ClusterIP: port-forward it. The two never share a database.
+ClusterIP: port-forward it. The two never share a database. Each install creates
+only its own namespace and RBAC (`namespace-aws.yaml` + `rbac-aws.yaml`, or
+`namespace-gcp.yaml` + `rbac-gcp.yaml`); the store and the namespace-isolation
+policy are shared.
 
 ## Scenario 3 — the mesh (optional)
 

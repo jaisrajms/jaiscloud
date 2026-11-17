@@ -6,9 +6,13 @@ kind: IntegrationContract
 metadata:
   generator: tools/integrationcontract
   sources:
-    - deploy/k8s/namespace.yaml
+    - deploy/k8s/namespace-aws.yaml
+    - deploy/k8s/namespace-gcp.yaml
+    - deploy/k8s/namespace-data.yaml
     - deploy/k8s/postgres.yaml
-    - deploy/k8s/rbac.yaml
+    - deploy/k8s/rbac-shared.yaml
+    - deploy/k8s/rbac-aws.yaml
+    - deploy/k8s/rbac-gcp.yaml
     - deploy/k8s/rbac-admission-policy.yaml
     - deploy/k8s/jaiscloud.yaml
     - deploy/k8s/jaiscloud-gcp.yaml
@@ -40,7 +44,7 @@ topology:
     - kind: ClusterRole
       name: jaiscloud-namespace-admin
     - kind: ClusterRoleBinding
-      name: jaiscloud-namespace-admin
+      name: jaiscloud-namespace-admin-aws
       roleRef:
         kind: ClusterRole
         name: jaiscloud-namespace-admin
@@ -48,6 +52,12 @@ topology:
         - kind: ServiceAccount
           name: jaiscloud
           namespace: jaiscloud
+    - kind: ClusterRoleBinding
+      name: jaiscloud-namespace-admin-gcp
+      roleRef:
+        kind: ClusterRole
+        name: jaiscloud-namespace-admin
+      subjects:
         - kind: ServiceAccount
           name: jaiscloud-gcp
           namespace: jaiscloud-gcp
@@ -161,13 +171,6 @@ topology:
       name: jaiscloud
       namespace: jaiscloud
       automountServiceAccountToken: true
-    - kind: ConfigMap
-      name: postgres-init
-      namespace: jaiscloud-data
-      data:
-        01-gcp-db.sql: |
-          -- GCP substrate database (the GCP DSN secret points at this one).
-          CREATE DATABASE jaiscloud_gcp;
     - kind: Deployment
       name: postgres
       namespace: jaiscloud-data
@@ -463,7 +466,7 @@ playbook:
       fix: run an image that stamps jaiscloud.io/substrate + jaiscloud.io/instance-id; a pre-upgrade namespace is backfilled when next ensured. Do not remove the policy.
       symptom: namespace create/delete denied by 'jaiscloud-namespace-isolation'
     - cause: per-cluster RBAC not applied or the resolved ServiceAccount is wrong
-      fix: kubectl apply -f deploy/k8s/rbac.yaml; verify JAISCLOUD_K8S_SA / _NAMESPACE (the emulator resolves them from env or the projected token)
+      fix: kubectl apply -f deploy/k8s/rbac-shared.yaml && kubectl apply -f deploy/k8s/rbac-gcp.yaml; verify JAISCLOUD_K8S_SA / _NAMESPACE (the emulator resolves them from env or the projected token)
       symptom: driver/broker Pods Forbidden
     - cause: kind/k3d have no LoadBalancer controller
       fix: use the port-forward deploy.sh prints; the front door is the external HTTP surface
@@ -543,11 +546,12 @@ playbook:
         verify: 'deploy/deploy.sh --check --json   # rbac.admissionPolicy=true'
       namespace_admin:
         grants: namespaces get/list/watch/create/update/patch/delete (update/patch for identity-label backfill; the admission policy keeps it to owned namespaces) + rolebindings get/list/create/update/delete, cluster-wide
-        object: ClusterRole/ClusterRoleBinding jaiscloud-namespace-admin
+        manifests: deploy/k8s/rbac-shared.yaml (ClusterRoles) + rbac-aws.yaml / rbac-gcp.yaml (ServiceAccount + bindings)
+        object: ClusterRole jaiscloud-namespace-admin + per-substrate ClusterRoleBindings jaiscloud-namespace-admin-aws / jaiscloud-namespace-admin-gcp
         subjects:
           - system:serviceaccount:jaiscloud:jaiscloud (aws)
           - system:serviceaccount:jaiscloud-gcp:jaiscloud-gcp (gcp)
-        why: Dataproc creates one namespace per cluster and Managed Kafka one per broker; both substrates need it.
+        why: Dataproc creates one namespace per cluster and Managed Kafka one per broker; each substrate binds the ClusterRole to its own identity only, so a single-substrate install grants it to no other cloud.
   prerequisites:
     - check: kubectl version --client
       id: kubectl
@@ -580,8 +584,8 @@ playbook:
     executors:
       steps:
         - id: rbac
-          note: Per-cluster namespaces, driver Pods and brokers need it; without it the emulator falls back to mock.
-          run: kubectl apply -f deploy/k8s/rbac.yaml
+          note: Per-cluster namespaces, driver Pods and brokers need it; rbac-gcp.yaml binds role/namespace-admin to the GCP ServiceAccount only. Without it the emulator falls back to mock.
+          run: kubectl apply -f deploy/k8s/rbac-shared.yaml && kubectl apply -f deploy/k8s/rbac-gcp.yaml
         - id: spark-image
           run: Set JAISCLOUD_K8S_SPARK_IMAGE to a reachable image with the GCS connector (see custom-images).
         - expect: substrates.gcp.ready=true and no executors warnings

@@ -252,7 +252,8 @@ make test-e2e-dpgke-demo-k3d SKIP_GCP_IMAGE_REBUILD=1   # reuse the deployed one
    cluster;
 2. the emulator image from this tree (`_refresh-gcp-image`, unless
    `SKIP_GCP_IMAGE_REBUILD=1`), the per-cluster namespace RBAC
-   (`deploy/k8s/rbac.yaml`) and `JAISCLOUD_SPARK_EXECUTOR_MODE=k8s`;
+   (`deploy/k8s/rbac-shared.yaml` + `deploy/k8s/rbac-gcp.yaml`) and
+   `JAISCLOUD_SPARK_EXECUTOR_MODE=k8s`;
 3. `terraform apply` **on the host**, through a `kubectl port-forward`;
 4. `mvn package` + `docker build` + `docker push` (or `k3d image import`) for the
    submitter;

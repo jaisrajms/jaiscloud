@@ -118,7 +118,7 @@ else
   die "ValidatingAdmissionPolicyBinding $POLICY not found — the policy has no Deny action without it"
 fi
 kube get clusterrole jaiscloud-executor >/dev/null 2>&1 \
-  || die "clusterrole/jaiscloud-executor not found — apply deploy/k8s/rbac.yaml first (the RoleBinding probe binds it)"
+  || die "clusterrole/jaiscloud-executor not found — apply deploy/k8s/rbac-shared.yaml first (the RoleBinding probe binds it)"
 
 # Refuse before creating anything.
 if [[ "$GATE_ALLOW_RBAC" != "1" ]]; then

@@ -67,9 +67,17 @@ Everything below is idempotent; run from the repo root.
 1. **Namespaces and substrates** (owned by the deploy path, not this directory):
 
    ```bash
-   kubectl apply -f deploy/k8s/namespace.yaml      # jaiscloud, jaiscloud-gcp, jaiscloud-data
-   # ... the substrate manifests that create svc/jaiscloud and svc/jaiscloud-gcp
+   kubectl apply -f deploy/k8s/namespace-data.yaml     # the shared store
+   kubectl apply -f deploy/k8s/postgres.yaml
+   kubectl apply -f deploy/k8s/namespace-aws.yaml      # only the substrate(s) you run
+   kubectl apply -f deploy/k8s/namespace-gcp.yaml
+   # ... plus rbac-shared.yaml and the substrate's rbac-<cloud>.yaml, then the
+   # substrate manifests that create svc/jaiscloud and svc/jaiscloud-gcp
    ```
+
+   `deploy/deploy.sh` also applies
+   `deploy/k8s/rbac-admission-policy.yaml` (the namespace-isolation
+   ValidatingAdmissionPolicy) before these, on every install path.
 
    The gateway only routes; it does not create backends. `jaiscloud-gcp` must
    expose **`8081` as a gRPC (h2c) port** — see "The gRPC route" below.

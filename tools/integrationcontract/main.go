@@ -34,9 +34,13 @@ const (
 )
 
 var defaultManifests = []string{
-	"deploy/k8s/namespace.yaml",
+	"deploy/k8s/namespace-aws.yaml",
+	"deploy/k8s/namespace-gcp.yaml",
+	"deploy/k8s/namespace-data.yaml",
 	"deploy/k8s/postgres.yaml",
-	"deploy/k8s/rbac.yaml",
+	"deploy/k8s/rbac-shared.yaml",
+	"deploy/k8s/rbac-aws.yaml",
+	"deploy/k8s/rbac-gcp.yaml",
 	"deploy/k8s/rbac-admission-policy.yaml",
 	"deploy/k8s/jaiscloud.yaml",
 	"deploy/k8s/jaiscloud-gcp.yaml",
@@ -216,9 +220,9 @@ func buildContract(manifestPaths []string, playbookPath string) (*Contract, erro
 		return a.Name < b.Name
 	})
 	// A few objects are declared in two manifests on purpose (the GCP
-	// Namespace/ServiceAccount appear in both namespace.yaml/rbac.yaml and
-	// jaiscloud-gcp.yaml so the one-file install works). The contract lists each
-	// identity once.
+	// Namespace/ServiceAccount appear in both namespace-gcp.yaml/rbac-gcp.yaml
+	// and jaiscloud-gcp.yaml so the one-file install works). The contract lists
+	// each identity once.
 	objects = dedupe(objects)
 
 	contract := &Contract{

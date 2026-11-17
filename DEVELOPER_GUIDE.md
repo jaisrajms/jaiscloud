@@ -595,7 +595,8 @@ other clusters push the image to a registry you can reach.
 Both cloud substrates can run side by side in one cluster. Each lives in a
 namespace of its own, and the PostgreSQL server in a third, so that deleting or
 resetting one substrate never destroys the other's state
-(`deploy/k8s/namespace.yaml` is the source of truth — the namespaces carry the
+(`deploy/k8s/namespace-aws.yaml`, `namespace-gcp.yaml` and `namespace-data.yaml`
+are the source of truth — the namespaces carry the
 `jaiscloud.io/role` label):
 
 | namespace | role | contents |
@@ -617,8 +618,10 @@ Rules that follow and must not be relaxed:
   dir recursively, so a state file under `/data/blobs` would be captured as an
   S3 object. The blob PVC root stays the S3 base dir, which keeps the on-disk
   layout of an existing install intact.
-- The substrate ServiceAccounts hold cluster-scoped namespace lifecycle
-  (`jaiscloud-namespace-admin`: create/delete namespaces + the per-namespace
+- The substrate ServiceAccounts are each bound to the cluster-scoped namespace
+  lifecycle ClusterRole (`jaiscloud-namespace-admin`, via
+  `jaiscloud-namespace-admin-aws` / `jaiscloud-namespace-admin-gcp`:
+  create/delete namespaces + the per-namespace
   executor RoleBinding), because Dataproc clusters and Managed Kafka brokers own
   a namespace each. RBAC cannot scope a delete by label, so the boundary is
   enforced by admission: `deploy/k8s/rbac-admission-policy.yaml` installs the
@@ -668,17 +671,22 @@ make up-k8s-gcp      # optional: GCP substrate (+ the jaiscloud_gcp database)
 ```
 
 `make up-k8s` runs in order:
-1. Applies `deploy/k8s/namespace.yaml` — creates `jaiscloud`, `jaiscloud-gcp` and `jaiscloud-data`
+1. Applies `deploy/k8s/namespace-data.yaml` — creates `jaiscloud-data`, the shared store's namespace
 2. Applies `deploy/k8s/postgres.yaml` — starts PostgreSQL in `jaiscloud-data` (`postgres-pvc`, Services `:5432` / NodePort `:30543`)
-3. Applies `deploy/k8s/rbac.yaml` — ServiceAccounts, the executor Role/ClusterRole and the namespace-admin binding for both substrates (RBAC before the deployments, because they reference those identities)
-4. Applies `deploy/k8s/jaiscloud.yaml` — starts the AWS server with the PostgreSQL backend, DSN from the local `jaiscloud-dsn` Secret
-5. Waits for `deployment/postgres` in `jaiscloud-data` and `deployment/jaiscloud` in `jaiscloud`
+3. Applies `deploy/k8s/namespace-aws.yaml` — creates the AWS substrate namespace `jaiscloud`
+4. Applies `deploy/k8s/rbac-shared.yaml` + `deploy/k8s/rbac-aws.yaml` — the shared executor/namespace-admin ClusterRoles, then the AWS ServiceAccount and its bindings (RBAC before the deployment, because it references that identity)
+5. Applies `deploy/k8s/jaiscloud.yaml` — starts the AWS server with the PostgreSQL backend, DSN from the local `jaiscloud-dsn` Secret
+6. Waits for `deployment/postgres` in `jaiscloud-data` and `deployment/jaiscloud` in `jaiscloud`
 
-`make up-k8s-gcp` applies `namespace.yaml`, `postgres.yaml` and `rbac.yaml`,
-creates the `jaiscloud_gcp` database if it is missing (`postgres-gcp-db`), then
-applies `deploy/k8s/jaiscloud-gcp.yaml` (the GCP Deployment, PVCs, Secret,
-Service and its own Namespace) and waits for `deployment/jaiscloud-gcp` in
-`jaiscloud-gcp`.
+`make up-k8s-gcp` applies `namespace-data.yaml`, `postgres.yaml`,
+`namespace-gcp.yaml`, `rbac-shared.yaml` and `rbac-gcp.yaml`, creates the
+`jaiscloud_gcp` database if it is missing (`postgres-gcp-db`), then applies
+`deploy/k8s/jaiscloud-gcp.yaml` (the GCP Deployment, PVCs, Secret, Service and
+its own Namespace) and waits for `deployment/jaiscloud-gcp` in
+`jaiscloud-gcp`. An AWS-only install creates no GCP object, and a GCP-only
+install creates no AWS object: the store (`namespace-data.yaml` + `postgres.yaml`)
+and the namespace admission policy are the only shared objects
+(`deploy.sh` applies the policy on every install path).
 
 For an agent or script driving this setup, start with
 [`docs/gcp/integration/AGENTS.md`](docs/gcp/integration/AGENTS.md) and
@@ -833,7 +841,8 @@ Both resets are **database-scoped**, not store-scoped:
 - `--reset` runs `DROP DATABASE IF EXISTS jaiscloud WITH (FORCE)` +
   `CREATE DATABASE jaiscloud OWNER jaiscloud` against `deploy/postgres` in
   `jaiscloud-data`, then deletes the `jaiscloud` namespace (its blobs **and**
-  state PVCs) and re-applies `namespace.yaml` + `rbac.yaml` + `jaiscloud.yaml`.
+  state PVCs) and re-applies `namespace-aws.yaml` + `rbac-shared.yaml` +
+  `rbac-aws.yaml` + `jaiscloud.yaml`.
   The GCP substrate (namespace, PVCs, `jaiscloud_gcp`), `jaiscloud-data` and
   `postgres-pvc` are never touched. When the Istio front door is installed, the
   `jaiscloud-ca-cert` ConfigMap (which lives in the deleted namespace) is
@@ -841,6 +850,7 @@ Both resets are **database-scoped**, not store-scoped:
   workloads keep their CA source.
 - `--gcp-reset` scales `jaiscloud-gcp` to 0, deletes
   `jaiscloud-gcp-blobs-pvc`, drops/recreates `jaiscloud_gcp` and re-applies
+  `namespace-gcp.yaml` + `rbac-shared.yaml` + `rbac-gcp.yaml` +
   `jaiscloud-gcp.yaml`. The AWS substrate and `jaiscloud-data` are never touched;
   the small GCP state PVC (identity pin + TLS cert) is kept because both are
   regenerable, while the blobs PVC is deleted as part of the reset.
@@ -1009,8 +1019,9 @@ Your code calls EMR AddJobFlowSteps
 JaisCloud needs permission to create Jobs. The Spark driver (running inside the Job pod) needs permission to create executor pods. Apply the included manifest which handles both:
 
 ```bash
-kubectl apply -f deploy/k8s/namespace.yaml
-kubectl apply -f deploy/k8s/rbac.yaml
+kubectl apply -f deploy/k8s/namespace-aws.yaml
+kubectl apply -f deploy/k8s/rbac-shared.yaml
+kubectl apply -f deploy/k8s/rbac-aws.yaml
 ```
 
 This creates two service accounts in the `jaiscloud` namespace:
@@ -1149,7 +1160,7 @@ JaisCloud will automatically inject the right S3 configuration (`fs.s3a.endpoint
 | Step stays `PENDING` forever | Check `kubectl get jobs -n jaiscloud` — if no Job appears, the server likely cannot reach the K8s API. Check `JAISCLOUD_K8S_APISERVER` and the token. |
 | Step stays `RUNNING` forever | Check `kubectl get pods -n jaiscloud` — if pods are `Pending`, the image may not be loaded. Run `kubectl describe pod <name>` to see the event. |
 | Step goes to `FAILED` immediately | Check driver logs: `kubectl logs -n jaiscloud -l spark-role=driver --tail=100` |
-| `Forbidden` creating pods | The driver SA lacks RBAC. Re-apply `deploy/k8s/rbac.yaml`. Check: `kubectl auth can-i create pods -n jaiscloud --as=system:serviceaccount:jaiscloud:spark-driver` |
+| `Forbidden` creating pods | The driver SA lacks RBAC. Re-apply `deploy/k8s/rbac-shared.yaml` + `deploy/k8s/rbac-aws.yaml`. Check: `kubectl auth can-i create pods -n jaiscloud --as=system:serviceaccount:jaiscloud:spark-driver` |
 | Image pull error | Pre-pull with `docker pull apache/spark:3.5.0` and load with `kind load docker-image apache/spark:3.5.0` |
 
 ### Environment variable quick-reference
@@ -1246,7 +1257,7 @@ Set this when you want Spark and Lambda workloads isolated in a different namesp
 JAISCLOUD_K8S_NAMESPACE=spark-jobs ./jaiscloud-aws start
 ```
 
-The namespace must already exist and have the RBAC from `deploy/k8s/rbac.yaml` applied. If the namespace does not exist, Job creation silently fails and steps stay in `RUNNING` forever until the reconcile timeout fires.
+The namespace must already exist and have the RBAC from `deploy/k8s/rbac-shared.yaml` + `deploy/k8s/rbac-aws.yaml` (or `rbac-gcp.yaml` for the GCP substrate) applied. If the namespace does not exist, Job creation silently fails and steps stay in `RUNNING` forever until the reconcile timeout fires.
 
 ---
 
@@ -2012,7 +2023,7 @@ In K8s mode the Lambda executor creates **one warm Pod + ClusterIP Service per f
 |---|---|
 | Kubernetes cluster | Docker Desktop, kind, minikube, or a remote cluster |
 | `JAISCLOUD_EXECUTOR_MODE=k8s` | Controls executor selection at startup |
-| In-cluster RBAC | Apply `deploy/k8s/rbac.yaml` — grants Jobs, Pods, Services permissions in the `jaiscloud` namespace |
+| In-cluster RBAC | Apply `deploy/k8s/rbac-shared.yaml` + `deploy/k8s/rbac-aws.yaml` — grants Jobs, Pods, Services permissions in the `jaiscloud` namespace |
 | A Lambda container image pullable from the cluster | Use the echo image or your own |
 
 ##### RBAC
@@ -2020,8 +2031,9 @@ In K8s mode the Lambda executor creates **one warm Pod + ClusterIP Service per f
 Apply the included manifest (grants all needed permissions in the `jaiscloud` namespace):
 
 ```bash
-kubectl apply -f deploy/k8s/namespace.yaml
-kubectl apply -f deploy/k8s/rbac.yaml
+kubectl apply -f deploy/k8s/namespace-aws.yaml
+kubectl apply -f deploy/k8s/rbac-shared.yaml
+kubectl apply -f deploy/k8s/rbac-aws.yaml
 ```
 
 ##### Running K8s mode tests
@@ -2077,7 +2089,7 @@ Export `LAMBDA_E2E_K8S_IMAGE` before running.
 Image may not be pullable. Check `kubectl describe pod -n jaiscloud` for `ImagePullBackOff`. For kind/minikube: `kind load docker-image jaiscloud-lambda-echo`.
 
 **"Forbidden" creating Pods/Services**  
-Apply `deploy/k8s/rbac.yaml` and verify `kubectl auth can-i create pods -n jaiscloud --as=system:serviceaccount:jaiscloud:jaiscloud`.
+Apply `deploy/k8s/rbac-shared.yaml` + `deploy/k8s/rbac-aws.yaml` and verify `kubectl auth can-i create pods -n jaiscloud --as=system:serviceaccount:jaiscloud:jaiscloud`.
 
 **Invocation timeout**  
 K8s cold start includes image pull + pod scheduling. Increase `LAMBDA_E2E_INVOKE_TIMEOUT=10m` on first run. Subsequent invocations reuse the warm pod and are fast.

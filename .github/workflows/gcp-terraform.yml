@@ -170,13 +170,15 @@ jobs:
 
       - name: Deploy the emulator
         run: |
-          # Three namespaces (deploy/k8s/namespace.yaml): jaiscloud is the AWS
-          # substrate, jaiscloud-gcp the GCP substrate, jaiscloud-data the shared
-          # PostgreSQL server. Postgres is one server hosting `jaiscloud` (AWS)
-          # and `jaiscloud_gcp` (GCP).
-          kubectl apply -f deploy/k8s/namespace.yaml
+          # Shared store (jaiscloud-data) + the GCP substrate; no AWS object is
+          # created. Postgres is one server hosting `jaiscloud` (AWS) and
+          # `jaiscloud_gcp` (GCP).
+          kubectl apply -f deploy/k8s/rbac-admission-policy.yaml
+          kubectl apply -f deploy/k8s/namespace-data.yaml
           kubectl apply -f deploy/k8s/postgres.yaml
-          kubectl apply -f deploy/k8s/rbac.yaml
+          kubectl apply -f deploy/k8s/namespace-gcp.yaml
+          kubectl apply -f deploy/k8s/rbac-shared.yaml
+          kubectl apply -f deploy/k8s/rbac-gcp.yaml
           kubectl apply -f deploy/k8s/jaiscloud-gcp.yaml
           # The manifest names the build host's registry; use the imported tag
           # and never let kubelet try to pull it from a registry. Hold the GCP
@@ -190,9 +192,10 @@ jobs:
 
       - name: Bootstrap the jaiscloud_gcp database
         run: |
-          # deploy/k8s/postgres.yaml's postgres-init ConfigMap only runs on a
-          # FRESH postgres-pvc. Create the GCP database explicitly so this works
-          # on an existing volume too; the guard keeps the step idempotent.
+          # deploy/k8s/postgres.yaml creates only the AWS database
+          # (POSTGRES_DB=jaiscloud) and declares no initdb script, so create the
+          # GCP database explicitly before the pod starts; the guard keeps the
+          # step idempotent.
           kubectl -n jaiscloud-data exec deploy/postgres -- \
             psql -U jaiscloud -d postgres -tAc "SELECT 1 FROM pg_database WHERE datname='jaiscloud_gcp'" | grep -q 1 || \
           kubectl -n jaiscloud-data exec deploy/postgres -- \
