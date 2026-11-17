@@ -46,7 +46,11 @@
 #   Secret    jaiscloud-wildcard   in istio-system   (kubernetes.io/tls,
 #                                   tls.crt/tls.key + ca.crt for clients)
 #   ConfigMap jaiscloud-ca-cert    in each of CM_NAMESPACES (default
-#                                   "jaiscloud jaiscloud-gcp"), key `ca.crt`
+#                                   "jaiscloud jaiscloud-gcp"), key `ca.crt`,
+#                                   labelled jaiscloud.io/issuer=mesh — the
+#                                   preflight only judges labelled copies as
+#                                   JaisCloud's own (an unlabelled copy is a
+#                                   host-issued CA it does not diagnose)
 #
 # The ConfigMap shape is not invented here: internal/platform/config.go defaults
 # JAISCLOUD_PLATFORM_TLS_CA_SOURCES to
@@ -270,9 +274,10 @@ kc -n "$SECRET_NS" create secret generic "$SECRET_NAME" \
     --dry-run=client -o yaml | kc apply -f - >/dev/null
 
 for ns in $CM_NAMESPACES; do
-  log "applying ConfigMap $ns/$CM_NAME (key ca.crt)"
+  log "applying ConfigMap $ns/$CM_NAME (key ca.crt, label jaiscloud.io/issuer=mesh)"
   kc -n "$ns" create configmap "$CM_NAME" \
       --from-file=ca.crt="$OUT_DIR/ca.crt" \
+      --labels=jaiscloud.io/issuer=mesh \
       --dry-run=client -o yaml | kc apply -f - >/dev/null
 done
 

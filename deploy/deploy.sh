@@ -191,6 +191,12 @@ ok()    { printf '\033[1;32m[OK]\033[0m    %s\n' "$*"; }
 warn()  { printf '\033[1;33m[WARN]\033[0m  %s\n' "$*"; }
 die()   { printf '\033[1;31m[ERROR]\033[0m %s\n' "$*" >&2; exit 1; }
 
+# b64decode — stdin base64 -> stdout. macOS's base64 (BSD) spells the decode flag
+# -D, GNU coreutils spells it -d; openssl is the portable last resort.
+b64decode() {
+  base64 -d 2>/dev/null || base64 -D 2>/dev/null || openssl base64 -d -A 2>/dev/null || true
+}
+
 usage() {
   cat <<'EOF'
 deploy.sh — build and deploy the JaisCloud substrates (AWS + GCP) to local Kubernetes
@@ -433,7 +439,7 @@ confirm() {
     info "No answer (no TTY) — aborted; re-run with --yes / ASSUME_YES=1 to skip prompts."
     exit 1
   fi
-  [[ "${yn,,}" == "y" ]] || { info "Aborted."; exit 0; }
+  [[ "$(printf '%s' "$yn" | tr '[:upper:]' '[:lower:]')" == "y" ]] || { info "Aborted."; exit 0; }
 }
 
 wait_for_rollout() {
@@ -1026,15 +1032,16 @@ external_host() {
 # values are resolved when the pod is created, so an in-place Secret update alone
 # would leave a crash-looping pod on the old DSN.
 apply_external_dsn_secret() {
-  local cloud=$1 ns secret dsn
+  local cloud=$1 ns secret dsn dsn_var
   substrate_vars "$cloud"
   ns=$NS
+  dsn_var=$(printf 'JAISCLOUD_%s_DSN' "$(printf '%s' "$cloud" | tr '[:lower:]' '[:upper:]')")
   if [[ "$cloud" == "aws" ]]; then secret="jaiscloud-dsn"; else secret="jaiscloud-gcp-dsn"; fi
   dsn=$(external_dsn "$cloud")
-  [[ -n "$dsn" ]] || die "no external DSN for '$cloud' — set --store-dsn/JAISCLOUD_STORE_DSN (or JAISCLOUD_${cloud^^}_DSN)"
+  [[ -n "$dsn" ]] || die "no external DSN for '$cloud' — set --store-dsn/JAISCLOUD_STORE_DSN (or $dsn_var)"
   case "$dsn" in
     postgres://*|postgresql://*) ;;
-    *) die "JAISCLOUD_${cloud^^}_DSN must start with postgres:// or postgresql://" ;;
+    *) die "$dsn_var must start with postgres:// or postgresql://" ;;
   esac
   info "Pointing $ns/secret/$secret at the external store..."
   kubectl -n "$ns" create secret generic "$secret" \
@@ -1671,11 +1678,12 @@ restore_aws_ca_configmap() {
   if ! kubectl -n "$istio_ns" get secret "$secret" &>/dev/null; then
     return 0
   fi
-  ca="$(kubectl -n "$istio_ns" get secret "$secret" -o jsonpath='{.data.ca\.crt}' 2>/dev/null | base64 -d || true)"
+  ca="$(kubectl -n "$istio_ns" get secret "$secret" -o jsonpath='{.data.ca\.crt}' 2>/dev/null | b64decode || true)"
   [[ -n "$ca" ]] || return 0
   info "Restoring ConfigMap $NAMESPACE_AWS/jaiscloud-ca-cert from $istio_ns/$secret..."
   kubectl -n "$NAMESPACE_AWS" create configmap jaiscloud-ca-cert \
-    --from-literal=ca.crt="$ca" --dry-run=client -o yaml | kubectl apply -f - >/dev/null
+    --from-literal=ca.crt="$ca" --labels=jaiscloud.io/issuer=mesh \
+    --dry-run=client -o yaml | kubectl apply -f - >/dev/null
 }
 
 # ── install record (jaiscloud-data/jaiscloud-install) ────────────────────────
