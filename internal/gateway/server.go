@@ -138,6 +138,10 @@ func (s *Server) buildRouter() {
 		// by the GCP binary; 501 on a binary that does not wire it.
 		r.Get("/projects", s.adminHandler.Projects)
 		r.Post("/reset", s.adminHandler.Reset)
+		// Lifecycle: quiesce every engine hook before a deliberate scale-down,
+		// and recreate its compute on resume. Data/PVCs/namespaces survive.
+		r.Post("/park", s.adminHandler.Park)
+		r.Post("/resume", s.adminHandler.Resume)
 		r.Get("/export", s.adminHandler.Export)
 		r.Post("/import", s.adminHandler.Import)
 		r.Get("/lambda/code/{account}/{function}/{qualifier}", s.adminHandler.LambdaCodeHandler)

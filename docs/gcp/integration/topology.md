@@ -87,6 +87,48 @@ Advice is relative to that intent:
 - `--strict` exits 1 when any non-optional recommendation or leak warning
   exists; optional work (the mesh) never fails it.
 
+## Lifecycle: running, parked, deleted, reset
+
+Presence is not the same as being allowed to drop data. The lifecycle modes are
+deliberately separated by *what they destroy*:
+
+| mode | substrate compute | namespaces | PVCs (blobs + state) | databases | resource records (instance ID, LROs, topic/service records) |
+|---|---|---|---|---|---|
+| `--park <cloud>` | terminated (Deployment scaled to 0, engine runtimes stopped, executor Pods/Jobs reaped) | kept | kept | kept | kept |
+| `--resume <cloud>` | recreated (scale to 1, then `POST /_jaiscloud/resume`) | kept | kept | kept | kept; warns when the image digest changed |
+| `--switch <target>` | other substrate parked, target resumed | kept | kept | kept | kept |
+| `--delete [aws\|gcp\|both]` | removed (Deployment/Service/DSN Secret; AWS ConfigMap too) | kept | kept | kept | kept |
+| `--reset` / `--gcp-reset` | removed, then reinstalled | **deleted** for that substrate | **deleted** (blobs; GCP keeps its state PVC) | **dropped and recreated** for that substrate | **lost** for that substrate |
+
+Park is the only deliberate compute teardown that never touches data. Before the
+Deployment scales down, the emulator makes its own control plane honest through
+`POST /_jaiscloud/park`:
+
+- **Dataproc** — every non-terminal job is cancelled (`CancelJob`), so no job is
+  left RUNNING with a dead driver. Clusters are control-plane records and are
+  left alone; a RUNNING cluster with no driver is normal and the next job creates
+  a driver.
+- **Managed Kafka** — every cluster's broker Pod and Service is deleted, but not
+  the per-cluster namespace and not the cluster/topic metadata. **Kafka topics
+  are lost**: the broker has no PVC, so its log dir dies with the Pod. Topic
+  records survive and are recreated on the broker by the next data-plane call.
+  `Resume` starts a fresh broker per cluster.
+- **Cloud Run** — every service's revision runtimes are removed; the Service and
+  Revision records stay. `Resume` recreates the runtime for the service's
+  latest-ready revision only.
+- **Cloud Functions** — no hook: each invocation's Pod is reaped by the
+  workload teardown.
+
+Long-running operations (Dataproc job submission, Managed Kafka/Cloud Run LROs)
+are persisted records with their stored terminal state, not live goroutines:
+park does not rewrite them, and an LRO that was already done stays done. Use the
+emulator's operation read to resettle anything outstanding before parking.
+
+`deploy.sh --park` reaches the emulator through a temporary port-forward on a
+free port in `18080–18089` and requires `curl`; a `404` means the running image
+predates the park/resume API (rebuild and redeploy it). A failed hook is fatal
+unless `PARK_FORCE=1`, which warns and continues with the scale/teardown.
+
 ## Invariants
 
 1. **The store outlives the substrates.** `jaiscloud-data` is never deleted by a

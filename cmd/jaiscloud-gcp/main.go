@@ -1391,6 +1391,20 @@ func startCmd() *cobra.Command {
 			adminHandler.RegisterResetter(stores.resources)
 			adminHandler.RegisterResetter(containerCore)
 			adminHandler.RegisterResetter(runCore)
+			// Lifecycle hooks (POST /_jaiscloud/park|resume): the emulator
+			// quiesces its own compute before deploy.sh scales it down, and
+			// recreates it on resume. Only compute is touched — records,
+			// PVCs and namespaces stay, so no store migration can run.
+			if dataprocCore != nil {
+				adminHandler.RegisterParker(dataprocCore)
+				adminHandler.RegisterResumer(dataprocCore)
+			}
+			adminHandler.RegisterParker(managedKafkaCore)
+			adminHandler.RegisterResumer(managedKafkaCore)
+			if runCore != nil {
+				adminHandler.RegisterParker(runCore)
+				adminHandler.RegisterResumer(runCore)
+			}
 			adminHandler.RegisterResetter(stores.blobs)
 			adminHandler.RegisterResetter(storageP)
 			adminHandler.RegisterResetter(storageGRPC)
@@ -1476,6 +1490,7 @@ func startCmd() *cobra.Command {
 				Cloud:     "gcp",
 				Region:    cfg.Region,
 				AccountID: cfg.ProjectID,
+				ProjectID: cfg.ProjectID,
 				Version:   version,
 				StateDir:  stateDir,
 			})

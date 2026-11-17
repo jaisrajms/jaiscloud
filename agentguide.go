@@ -36,6 +36,7 @@ const AgentGuideContractAPIVersion = "jaiscloud.dev/integration/v1"
 //go:embed deploy/deploy.sh
 //go:embed scripts/integration-preflight.sh
 //go:embed scripts/rbac-isolation-gate.sh
+//go:embed scripts/lifecycle-gate.sh
 var assets embed.FS
 
 // Text is the short, self-contained brief printed by `agent-guide`. It is
@@ -94,6 +95,7 @@ A. No Kubernetes: run the emulator
   clients:
 %s
   isolation: POST /_jaiscloud/reset   seeding: GET /_jaiscloud/export + POST /_jaiscloud/import
+  lifecycle: POST /_jaiscloud/park + /resume   deploy.sh --park/--resume/--switch (compute stops, data survives)
   deterministic: --deterministic --time 2026-01-01T00:00:00Z --seed 1
   persistence: --dsn postgres://...:5432/%s --blob-dir /tmp/blobs (one database per cloud)
 
@@ -111,6 +113,7 @@ Topology (exact objects/ports/env/images in --json)
 Do not
   - rewrite :authority/Host in the mesh (GKE vs Managed Kafka, Cloud Run, S3 virtual-hosted)
   - delete namespace jaiscloud-data or pvc postgres-pvc (shared store)
+  - run --reset/--gcp-reset to stop compute; use --park/--resume (data survives)
   - run --reset/--gcp-reset on state you care about; test-dual-substrate-k8s needs ALLOW_RESET=1
   - expose 443 on the GCP Service by default; TLS terminates at the front door
   - apply deploy/k8s/istio/*.yaml (the glob includes object-less dns.yaml)

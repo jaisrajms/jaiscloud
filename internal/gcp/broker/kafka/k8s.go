@@ -305,6 +305,50 @@ func (b *k8sBroker) StopCluster(ctx context.Context, project, location, cluster 
 	return nil
 }
 
+// ParkCluster terminates a cluster's broker Pod and Service but keeps the
+// cluster metadata and its per-cluster namespace: a park is compute-destructive
+// and data-retentive, so Resume (ensureBroker) can recreate the broker in place
+// without a store migration. Unlike StopCluster it never deletes an owned
+// namespace.
+func (b *k8sBroker) ParkCluster(ctx context.Context, project, location, cluster string) error {
+	key := ClusterKey{Project: project, Location: location, Cluster: cluster}
+	name := brokerResourceName(key)
+
+	b.mu.Lock()
+	ns, tracked := b.namespaces[key]
+	b.mu.Unlock()
+	if !tracked {
+		// Untracked (a reaped/absent cluster): best-effort against the derived
+		// namespace. Deleting an absent workload is a no-op.
+		ns = ClusterNamespace(project, location, cluster)
+	}
+
+	reapErr := k8shelpers.DeleteWorkload(ctx, b.client, ns, name)
+	if !tracked && ns != b.namespace {
+		// A previous process may have started this broker in the process-wide
+		// fallback namespace; reap it too (the resource name is deterministic).
+		if perr := k8shelpers.DeleteWorkload(ctx, b.client, b.namespace, name); perr != nil && reapErr == nil {
+			reapErr = perr
+		}
+	}
+
+	// Drop the endpoint and its pooled admin: a parked cluster has no live
+	// broker, so a later data-plane call must not use a dead address (Resume
+	// restarts one).
+	b.mu.Lock()
+	ep := b.endpoints[key]
+	delete(b.endpoints, key)
+	delete(b.namespaces, key)
+	b.mu.Unlock()
+	if ep != "" {
+		b.admins.close(ep)
+	}
+	if reapErr != nil {
+		return fmt.Errorf("managedkafka broker: %w", reapErr)
+	}
+	return nil
+}
+
 // Reset stops and reaps every tracked broker, then sweeps any broker resources
 // left in the namespace that this process never tracked (a failed partial
 // create, or a previous instance's leftovers). The manager stays usable: a

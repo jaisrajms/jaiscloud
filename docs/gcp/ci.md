@@ -232,6 +232,18 @@ through a port-forward. Run the client as a Pod/Job in the cluster, or use the
 **You still do not need the mesh here** — executors and functions call the
 emulator over Service DNS.
 
+### Stopping compute between test phases
+
+A long-lived k8s install can pause the emulator without losing state:
+`deploy/deploy.sh --park gcp` posts `/park` (jobs cancelled, brokers/revision
+runtimes stopped), scales the Deployment to 0 and reaps executor Pods/Jobs, while
+keeping the database, PVCs (including the instance-ID state PVC), namespaces and
+records. `--resume gcp` brings it back in one rollout and warns if the image
+digest changed; `--switch aws --yes` parks one substrate and resumes the other.
+`--delete [aws|gcp|both]` removes workloads only. The CI gate is
+`GATE_ALLOW_LIFECYCLE=1 make test-lifecycle-k8s` (compute-destructive; both
+substrates must be installed from a build that has the park/resume API).
+
 ---
 
 ## Mode D — clients that insist on https

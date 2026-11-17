@@ -365,6 +365,24 @@ running the AWS reset and asserting the object, the database and the GCP PVCs
 are intact. (The gate is destructive by design, so it refuses without
 `ALLOW_RESET=1`.)
 
+Stopping compute without losing data is a separate mode:
+
+```bash
+./deploy/deploy.sh --park gcp               # stop GCP compute; keep its data
+./deploy/deploy.sh --resume gcp             # one rollout; warns on an image change
+./deploy/deploy.sh --switch aws --yes       # park GCP (when installed), resume AWS
+./deploy/deploy.sh --delete gcp             # remove GCP workloads only (aws|gcp|both)
+```
+
+`--park` first calls the emulator's `POST /_jaiscloud/park`, where Dataproc
+cancels non-terminal jobs, Managed Kafka deletes its broker Pods/Services
+(topics are lost — the broker has no PVC — but cluster/topic records survive) and
+Cloud Run removes revision runtimes (records survive), then scales the Deployment
+to 0 and reaps executor Pods/Jobs. The database, blobs/state PVCs (instance ID),
+namespaces, CA and resource records are kept. `GATE_ALLOW_LIFECYCLE=1 make
+test-lifecycle-k8s` proves retention across park/resume and both switch
+directions.
+
 The standalone binary remains the default path — no cluster, no mesh, no
 Postgres; see [Quick Start](#quick-start).
 

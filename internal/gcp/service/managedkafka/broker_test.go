@@ -22,6 +22,7 @@ type fakeBroker struct {
 	err      error
 	ensured  []string
 	stopped  []string
+	parked   []string
 	reset    bool
 
 	// Topic data-plane behaviour + call recording.
@@ -94,6 +95,12 @@ func (f *fakeBroker) Endpoint(_, _, _ string) string { return f.endpoint }
 func (f *fakeBroker) StopCluster(_ context.Context, project, location, cluster string) error {
 	f.stopped = append(f.stopped, f.key(project, location, cluster))
 	return nil
+}
+
+// ParkCluster makes the fake a clusterParker: the k8s broker's park path.
+func (f *fakeBroker) ParkCluster(_ context.Context, project, location, cluster string) error {
+	f.parked = append(f.parked, f.key(project, location, cluster))
+	return f.err
 }
 
 func (f *fakeBroker) Reset(_ context.Context) error {

@@ -31,7 +31,21 @@
 #                                   # one-time: move the pre-split store from
 #                                   # ns jaiscloud into jaiscloud-data, and the
 #                                   # old GCP object bytes into jaiscloud-gcp
-#   ./deploy/deploy.sh --delete     # remove the AWS workloads; keep every PVC and Postgres
+#   ./deploy/deploy.sh --delete [aws|gcp|both]
+#                                   # remove workloads only (default aws); keep every PVC and
+#                                   # PostgreSQL database. `both` does each substrate.
+#   ./deploy/deploy.sh --park <aws|gcp>
+#                                   # deliberate, compute-destructive, data-retentive: the
+#                                   # emulator cancels jobs and stops broker/revision
+#                                   # workloads, then the Deployment scales to 0; the
+#                                   # database, PVCs, state PVC (instance ID), namespaces,
+#                                   # CA and resource records survive
+#   ./deploy/deploy.sh --resume <aws|gcp>
+#                                   # scale back to 1, recreate the engine runtimes, and warn
+#                                   # when the binary digest changed while parked
+#   ./deploy/deploy.sh --switch <aws|gcp>
+#                                   # park the other substrate (when installed), then resume
+#                                   # this one; `--switch both` is invalid
 #   ./deploy/deploy.sh --reset      # AWS-only, database-scoped: drop the `jaiscloud` db +
 #                                   # the AWS namespace/PVC; GCP (`jaiscloud_gcp`, its PVC)
 #                                   # and Postgres survive
@@ -135,7 +149,27 @@ Usage:
                                   by hand; BLOB_MIGRATE_IMAGE overrides busybox).
                                   Keeps both old PVCs as rollback copies, and
                                   refuses when the new postgres-pvc already exists.
-  ./deploy/deploy.sh --delete     Remove the AWS workloads; keep ALL PVCs and Postgres
+  ./deploy/deploy.sh --delete [aws|gcp|both]
+                                  Remove workloads only (default aws): the Deployment,
+                                  Service and DSN Secret (AWS keeps its ConfigMap); every
+                                  PVC and database is kept, as is the other substrate.
+  ./deploy/deploy.sh --park <aws|gcp>
+                                  Deliberate, compute-destructive, data-retentive park:
+                                  call POST /_jaiscloud/park (cancel jobs, stop Managed
+                                  Kafka brokers and Cloud Run revisions), scale the
+                                  substrate Deployment to 0, delete executor Pods/Jobs
+                                  (and the ECR proxy) in the substrate and its labelled
+                                  `gcp-*` namespaces, and annotate the namespace parked.
+                                  Keeps: database, blobs/state PVCs (instance ID), the
+                                  namespaces, the CA and every resource record.
+  ./deploy/deploy.sh --resume <aws|gcp>
+                                  Scale the substrate back to 1, wait for its rollout,
+                                  POST /_jaiscloud/resume (recreate brokers/revisions),
+                                  and warn if the running image digest changed while
+                                  parked (a store migration may run).
+  ./deploy/deploy.sh --switch <aws|gcp>
+                                  Park the other substrate (when installed), then resume
+                                  this one. There is no `--switch both`.
   ./deploy/deploy.sh --reset      AWS-only, database-scoped reset: drop/recreate the
                                   `jaiscloud` database, delete the jaiscloud namespace (its
                                   blobs and state PVCs), then re-apply the AWS manifests
@@ -171,6 +205,10 @@ Usage:
 Environment:
   ASSUME_YES=1                    Non-interactive, same as --yes
   SKIP_IMAGE_BUILD=1              Skip `docker build`, same as --skip-build
+  PARK_FORCE=1                    With --park/--resume: warn and continue when the
+                                  emulator's /_jaiscloud hook returns a non-2xx
+                                  (the scale/teardown still runs; the endpoint is
+                                  reached through a free port in 18080-18089)
 
 Reset semantics (both are database-scoped, never store-wide):
   --reset      drops only the AWS database `jaiscloud` (and the AWS blobs PVC)
@@ -263,6 +301,300 @@ scale_to_zero() {
   fi
   kubectl -n "$ns" scale deployment "$deployment" --replicas=0 --timeout=120s >/dev/null
   kubectl -n "$ns" wait --for=delete pod -l "$selector" --timeout=120s >/dev/null 2>&1 ||     warn "$deployment pods in $ns did not terminate within 120s"
+}
+
+# ── lifecycle helpers (park / resume / switch) ──────────────────────────────
+# Park is compute-destructive and data-retentive: the emulator quiesces its own
+# engine compute through POST /_jaiscloud/park before the Deployment is scaled
+# to 0, and everything persisted — databases, PVCs (blobs + state/instance ID),
+# namespaces, CA and resource records — survives. Resume brings the compute back
+# without re-applying a manifest, so exactly one rollout happens per direction.
+
+# substrate_vars <aws|gcp> — set the per-cloud names the helpers below use.
+substrate_vars() {
+  case "$1" in
+    aws)
+      NS="$NAMESPACE_AWS"; DEPLOY="jaiscloud"; SVC="jaiscloud"
+      PORT=4566; SELECTOR="app=jaiscloud"; DB="$AWS_DB"
+      BLOBS_PVC="${AWS_PVCS[0]}"; STATE_PVC="jaiscloud-state-pvc" ;;
+    gcp)
+      NS="$NAMESPACE_GCP"; DEPLOY="jaiscloud-gcp"; SVC="jaiscloud-gcp"
+      PORT=8080; SELECTOR="app=jaiscloud-gcp"; DB="$GCP_DB"
+      BLOBS_PVC="$GCP_PVC"; STATE_PVC="jaiscloud-gcp-state-pvc" ;;
+    *) die "unknown substrate '$1' (want aws or gcp)" ;;
+  esac
+}
+
+# Annotation reads use jsonpath bracket notation: annotation keys contain dots
+# and slashes, which the dot-path form cannot express reliably. A missing key
+# reads as empty.
+ns_annotation() { # ns_annotation <namespace> <key>
+  kubectl get namespace "$1" \
+    -o jsonpath="{.metadata.annotations['$2']}" 2>/dev/null || true
+}
+
+# free_local_port — the first unbound port in 18080-18089. The check runs in a
+# subshell so a failed /dev/tcp open cannot leak an fd into this shell.
+free_local_port() {
+  local p
+  for p in $(seq 18080 18089); do
+    if ! (exec 3<>"/dev/tcp/127.0.0.1/$p") 2>/dev/null; then
+      printf '%s' "$p"
+      return 0
+    fi
+  done
+  return 1
+}
+
+PORT_FORWARD_PIDS=()
+PORT_FORWARD_PORT=""
+
+stop_port_forwards() {
+  local pid
+  for pid in ${PORT_FORWARD_PIDS+"${PORT_FORWARD_PIDS[@]}"}; do
+    kill "$pid" >/dev/null 2>&1 || true
+    wait "$pid" >/dev/null 2>&1 || true
+  done
+  PORT_FORWARD_PIDS=()
+  PORT_FORWARD_PORT=""
+}
+
+# port_forward <namespace> <service> <remote-port> — forward to a free local
+# port and wait for /_jaiscloud/health. Sets PORT_FORWARD_PORT; every spawned
+# pid is killed by the EXIT trap and by stop_port_forwards.
+port_forward() {
+  local ns=$1 svc=$2 remote=$3 local_port log i
+  local_port=$(free_local_port) || die "no free local port in 18080-18089 — stop the process using one"
+  log=$(mktemp "${TMPDIR:-/tmp}/jaiscloud-portforward.XXXXXX.log")
+  trap 'stop_port_forwards' EXIT
+  info "Port-forwarding $ns/svc/$svc -> 127.0.0.1:$local_port ..."
+  kubectl -n "$ns" port-forward "svc/$svc" "$local_port:$remote" --address 127.0.0.1 >"$log" 2>&1 &
+  PORT_FORWARD_PIDS+=("$!")
+  for i in $(seq 1 60); do
+    if curl -sf --max-time 2 "http://127.0.0.1:$local_port/_jaiscloud/health" >/dev/null 2>&1; then
+      PORT_FORWARD_PORT=$local_port
+      rm -f "$log"
+      return 0
+    fi
+    sleep 0.5
+  done
+  warn "port-forward $ns/svc/$svc did not answer /_jaiscloud/health:"
+  sed 's/^/    /' "$log" >&2 || true
+  stop_port_forwards
+  rm -f "$log"
+  return 1
+}
+
+# admin_post <local-port> <park|resume> — POST the lifecycle hook and report the
+# body. A 404 means the running image predates the endpoint; any other non-2xx
+# is fatal unless PARK_FORCE=1.
+admin_post() {
+  local port=$1 path=$2 body code
+  body=$(mktemp "${TMPDIR:-/tmp}/jaiscloud-hook.XXXXXX.json")
+  code=$(curl -sS --max-time 120 -o "$body" -w '%{http_code}' \
+    -X POST "http://127.0.0.1:$port/_jaiscloud/$path" || true)
+  if [[ "$code" == "404" ]]; then
+    sed 's/^/    /' "$body" >&2 || true
+    rm -f "$body"
+    die "POST /_jaiscloud/$path returned 404: the running image predates the park/resume API. Rebuild it and redeploy (or k3d image import/kind load + --skip-build), then retry"
+  fi
+  if [[ "$code" != 2* ]]; then
+    warn "POST /_jaiscloud/$path returned HTTP ${code:-<none>}:"
+    sed 's/^/    /' "$body" >&2 || true
+    rm -f "$body"
+    if [[ "${PARK_FORCE:-0}" == "1" ]]; then
+      warn "PARK_FORCE=1 — continuing after the failed '$path' hook"
+      return 0
+    fi
+    die "the emulator's '$path' hook failed; fix it and retry (PARK_FORCE=1 continues anyway)"
+  fi
+  info "POST /_jaiscloud/$path -> HTTP $code"
+  sed 's/^/    /' "$body" || true
+  rm -f "$body"
+}
+
+# ensure_park_annotations <cloud> <image> <image-id> <version> — the namespace
+# record the preflight and a later resume read. Empty values are not stored.
+ensure_park_annotations() {
+  local cloud=$1 image=$2 image_id=$3 version=$4
+  substrate_vars "$cloud"
+  local args=(
+    "jaiscloud.io/state=parked"
+    "jaiscloud.io/parked-at=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  )
+  [[ -n "$image" ]] && args+=("jaiscloud.io/parked-image=$image")
+  [[ -n "$image_id" ]] && args+=("jaiscloud.io/parked-image-id=$image_id")
+  [[ -n "$version" ]] && args+=("jaiscloud.io/parked-version=$version")
+  kubectl annotate namespace "$NS" "${args[@]}" --overwrite >/dev/null
+}
+
+# delete_executor_workloads <cloud> — remove executor-created Pods/Jobs inside
+# the substrate namespace and inside every namespace it owns. Namespaces and
+# Services stay (a parked substrate keeps its addressing and its records).
+delete_executor_workloads() {
+  local cloud=$1 ns
+  kubectl -n "$NS" delete jobs --all --ignore-not-found
+  kubectl -n "$NS" delete pods --all --ignore-not-found
+  # The ECR pull-through proxy is a JaisCloud-managed workload, not the substrate.
+  kubectl -n "$NS" delete deployments -l managed-by=jaiscloud --ignore-not-found
+  for ns in $(kubectl get namespaces \
+      -l "jaiscloud.io/managed-by=jaiscloud,jaiscloud.io/substrate=$cloud" \
+      -o name 2>/dev/null | sed 's|^namespace/||'); do
+    [[ "$ns" == "$NS" ]] && continue
+    info "Terminating executor workloads in $ns (namespace and Services survive)..."
+    kubectl -n "$ns" delete jobs,pods,deployments,statefulsets --all --ignore-not-found
+  done
+}
+
+# park_substrate <cloud> — quiesce compute, scale to 0, keep everything else.
+park_substrate() {
+  local cloud=$1 other replicas image image_id version
+  substrate_vars "$cloud"
+  if [[ "$cloud" == "aws" ]]; then other=gcp; else other=aws; fi
+
+  if ! kubectl get namespace "$NS" &>/dev/null; then
+    info "namespace $NS does not exist — nothing to park for '$cloud'."
+    return 0
+  fi
+  if ! kubectl -n "$NS" get deployment "$DEPLOY" &>/dev/null; then
+    info "deployment/$DEPLOY is absent in $NS (the $cloud substrate is not installed here);"
+    info "cleaning labelled executor workloads only — this is a delete, not a park."
+    delete_executor_workloads "$cloud"
+    return 0
+  fi
+
+  replicas=$(kubectl -n "$NS" get deployment "$DEPLOY" -o jsonpath='{.spec.replicas}')
+  image=$(kubectl -n "$NS" get deployment "$DEPLOY" \
+    -o jsonpath='{.spec.template.spec.containers[0].image}' 2>/dev/null || true)
+  if [[ "$replicas" == "0" ]]; then
+    info "deployment/$DEPLOY is already scaled to 0 — ensuring the park record."
+    ensure_park_annotations "$cloud" "$image" \
+      "$(ns_annotation "$NS" "jaiscloud.io/parked-image-id")" \
+      "$(ns_annotation "$NS" "jaiscloud.io/parked-version")"
+    record_intent "$cloud" parked
+    return 0
+  fi
+
+  image_id=$(kubectl -n "$NS" get pods -l "$SELECTOR" \
+    -o jsonpath='{.items[0].status.containerStatuses[0].imageID}' 2>/dev/null || true)
+  port_forward "$NS" "$SVC" "$PORT"
+  version=$(curl -sS --max-time 10 \
+    "http://127.0.0.1:$PORT_FORWARD_PORT/_jaiscloud/doctor" 2>/dev/null \
+    | sed -n 's/.*"version":"\([^"]*\)".*/\1/p' || true)
+  info "Parking $cloud: cancelling jobs and stopping engine runtimes..."
+  admin_post "$PORT_FORWARD_PORT" park
+  stop_port_forwards
+
+  info "Scaling deployment/$DEPLOY to 0 in $NS..."
+  kubectl -n "$NS" scale deployment "$DEPLOY" --replicas=0 --timeout=120s >/dev/null
+  kubectl -n "$NS" wait --for=delete pod -l "$SELECTOR" --timeout=120s >/dev/null 2>&1 \
+    || warn "the $DEPLOY pod did not terminate within 120s"
+
+  info "Terminating executor workloads (Pods, Jobs, ECR proxy) in $NS..."
+  delete_executor_workloads "$cloud"
+
+  ensure_park_annotations "$cloud" "$image" "$image_id" "$version"
+  record_intent "$cloud" parked
+
+  ok "$cloud substrate parked. Survives: database '$DB', pvc/$BLOBS_PVC, pvc/$STATE_PVC,"
+  ok "instance ID, namespaces, CA and every resource record. Terminated: the substrate"
+  ok "pod, Dataproc jobs, Managed Kafka brokers, Cloud Run revisions and executor pods."
+  echo ""
+  echo "  Resume with: $0 --resume $cloud"
+  echo "  Switch with: $0 --switch $other"
+  echo ""
+}
+
+# resume_substrate <cloud> — scale to 1, recreate compute, warn on image change.
+resume_substrate() {
+  local cloud=$1 state parked_image parked_id new_id
+  substrate_vars "$cloud"
+
+  if ! kubectl get namespace "$NS" &>/dev/null; then
+    die "namespace $NS does not exist — install the $cloud substrate first (see $0 --help)"
+  fi
+  if ! kubectl -n "$NS" get deployment "$DEPLOY" &>/dev/null; then
+    die "deployment/$DEPLOY is missing in $NS — run deploy.sh to install the $cloud substrate"
+  fi
+
+  state=$(ns_annotation "$NS" "jaiscloud.io/state")
+  parked_image=$(ns_annotation "$NS" "jaiscloud.io/parked-image")
+  parked_id=$(ns_annotation "$NS" "jaiscloud.io/parked-image-id")
+  if [[ -z "$state" && -z "$parked_image" && -z "$parked_id" ]]; then
+    warn "namespace $NS is not marked parked — resuming anyway"
+  fi
+
+  info "Scaling deployment/$DEPLOY to 1 in $NS..."
+  kubectl -n "$NS" scale deployment "$DEPLOY" --replicas=1 >/dev/null
+  wait_for_rollout "deployment/$DEPLOY" "$NS"
+
+  port_forward "$NS" "$SVC" "$PORT"
+  info "Resuming $cloud: recreating engine runtimes..."
+  admin_post "$PORT_FORWARD_PORT" resume
+  new_id=$(kubectl -n "$NS" get pods -l "$SELECTOR" \
+    -o jsonpath='{.items[0].status.containerStatuses[0].imageID}' 2>/dev/null || true)
+  stop_port_forwards
+
+  if [[ -n "$parked_id" && -n "$new_id" && "$parked_id" != "$new_id" ]]; then
+    warn "binary changed while parked: store migrations may run"
+    warn "  parked: $parked_id"
+    warn "  now:    $new_id"
+  fi
+
+  kubectl annotate namespace "$NS" "jaiscloud.io/state=running" --overwrite >/dev/null
+  kubectl annotate namespace "$NS" \
+    jaiscloud.io/parked-at- jaiscloud.io/parked-image- \
+    jaiscloud.io/parked-image-id- jaiscloud.io/parked-version- \
+    --overwrite >/dev/null
+  record_intent "$cloud" running
+  ok "$cloud substrate resumed in $NS."
+  print_endpoints
+}
+
+# switch_substrate <target> — park the other substrate when installed, resume target.
+switch_substrate() {
+  local target=$1 other
+  [[ "$target" == "both" ]] && die "--switch takes aws or gcp, not both"
+  substrate_vars "$target" # validates the target
+  if [[ "$target" == "aws" ]]; then other=gcp; else other=aws; fi
+  confirm "Switch to the $target substrate (park $other, then resume $target)?"
+  substrate_vars "$other"
+  if kubectl get namespace "$NS" &>/dev/null; then
+    park_substrate "$other"
+  else
+    info "the $other substrate is not installed — nothing to park"
+  fi
+  resume_substrate "$target"
+}
+
+# delete_substrate <cloud> — remove the workloads only; every PVC and database stays.
+delete_substrate() {
+  local cloud=$1
+  substrate_vars "$cloud"
+  if ! kubectl get namespace "$NS" &>/dev/null; then
+    info "namespace $NS does not exist — nothing to delete for '$cloud'."
+    return 0
+  fi
+  info "Removing the $cloud workloads in $NS (persisted data is preserved)..."
+  if [[ "$cloud" == "aws" ]]; then
+    kubectl delete deployment jaiscloud -n "$NS" --ignore-not-found
+    kubectl delete service    jaiscloud -n "$NS" --ignore-not-found
+    kubectl delete configmap  jaiscloud-config -n "$NS" --ignore-not-found
+    kubectl delete secret     jaiscloud-dsn    -n "$NS" --ignore-not-found
+  else
+    # No ConfigMap: the GCP substrate reads its configuration from env/DSN.
+    kubectl delete deployment jaiscloud-gcp -n "$NS" --ignore-not-found
+    kubectl delete service    jaiscloud-gcp -n "$NS" --ignore-not-found
+    kubectl delete secret     jaiscloud-gcp-dsn -n "$NS" --ignore-not-found
+  fi
+  record_intent "$cloud" absent 0
+  ok "$cloud workloads removed. Persisted data retained:"
+  kubectl get pvc "$BLOBS_PVC" -n "$NS" --no-headers 2>/dev/null \
+    && echo "    $NS/pvc/$BLOBS_PVC" || true
+  kubectl get pvc "$STATE_PVC" -n "$NS" --no-headers 2>/dev/null \
+    && echo "    $NS/pvc/$STATE_PVC" || true
+  kubectl get pvc "$POSTGRES_PVC" -n "$NAMESPACE_DATA" --no-headers 2>/dev/null \
+    && echo "    $NAMESPACE_DATA/pvc/$POSTGRES_PVC" || true
 }
 
 # migrate_blobs <src-ns> <src-pvc> <dst-ns> <dst-pvc>
@@ -622,9 +954,22 @@ PREFLIGHT_JSON=0
 PREFLIGHT_STRICT=0
 PREFLIGHT_SUBSTRATE=""
 PREFLIGHT_DESIRED=""
+DELETE_TARGET="aws"
+LIFECYCLE_TARGET=""
 while (($#)); do
   case "$1" in
-    --delete)        MODE="delete" ;;
+    --delete)        MODE="delete"
+                     case "${2:-}" in aws|gcp|both) DELETE_TARGET="$2"; shift ;; esac ;;
+    --delete=*)      MODE="delete"; DELETE_TARGET="${1#*=}" ;;
+    --park)          [[ -n "${2:-}" ]] || die "--park needs a value (aws or gcp)"
+                     MODE="park"; LIFECYCLE_TARGET="$2"; shift ;;
+    --park=*)        MODE="park"; LIFECYCLE_TARGET="${1#*=}" ;;
+    --resume)        [[ -n "${2:-}" ]] || die "--resume needs a value (aws or gcp)"
+                     MODE="resume"; LIFECYCLE_TARGET="$2"; shift ;;
+    --resume=*)      MODE="resume"; LIFECYCLE_TARGET="${1#*=}" ;;
+    --switch)        [[ -n "${2:-}" ]] || die "--switch needs a value (aws or gcp)"
+                     MODE="switch"; LIFECYCLE_TARGET="$2"; shift ;;
+    --switch=*)      MODE="switch"; LIFECYCLE_TARGET="${1#*=}" ;;
     --reset)         MODE="reset" ;;
     --gcp)           MODE="gcp" ;;
     --gcp-reset)     MODE="gcp-reset" ;;
@@ -649,6 +994,20 @@ while (($#)); do
   shift
 done
 
+case "$MODE" in
+  park|resume|switch)
+    case "$LIFECYCLE_TARGET" in
+      aws|gcp) ;;
+      both)    die "--$MODE takes aws or gcp, not 'both'" ;;
+      *)       die "--$MODE takes aws or gcp (got '${LIFECYCLE_TARGET:-}')" ;;
+    esac ;;
+  delete)
+    case "$DELETE_TARGET" in
+      aws|gcp|both) ;;
+      *) die "--delete takes aws, gcp or both (got '$DELETE_TARGET')" ;;
+    esac ;;
+esac
+
 # ── --check: read-only inspection (never mutates) ───────────────────────────
 
 if [[ "$MODE" == "check" ]]; then
@@ -670,6 +1029,39 @@ plan() { printf '  + %s\n' "$*"; }
 plan_install_record() {
   plan "kubectl -n $NAMESPACE_DATA get configmap $INSTALL_CONFIGMAP -o jsonpath='{.data}'   # merge installed += $1"
   plan "kubectl -n $NAMESPACE_DATA create configmap $INSTALL_CONFIGMAP --from-literal=schema=1 --from-literal=installed=<merged> --from-literal=desired=<merged, $2> --dry-run=client -o yaml | kubectl apply -f -"
+}
+
+# plan_lifecycle_park <cloud> / plan_lifecycle_resume <cloud> — the exact steps
+# the lifecycle helpers run (no manifest is re-applied in either direction).
+plan_lifecycle_park() {
+  local cloud=$1
+  substrate_vars "$cloud"
+  plan "# park $cloud: compute-destructive, data-retentive"
+  plan "kubectl get namespace $NS   # absent -> nothing to park; deployment absent -> clean executor workloads only"
+  plan "kubectl -n $NS get deployment $DEPLOY -o jsonpath='{.spec.replicas}'   # 0 -> already parked"
+  plan "kubectl -n $NS get deployment $DEPLOY -o jsonpath='{.spec.template.spec.containers[0].image}'"
+  plan "kubectl -n $NS get pods -l $SELECTOR -o jsonpath='{.items[0].status.containerStatuses[0].imageID}'"
+  plan "kubectl -n $NS port-forward svc/$SVC <free 18080-18089>:$PORT   # wait for /_jaiscloud/health"
+  plan "curl -sS -X POST http://127.0.0.1:<port>/_jaiscloud/park   # jobs cancelled; broker/revision runtimes stopped"
+  plan "kubectl -n $NS scale deployment $DEPLOY --replicas=0 --timeout=120s"
+  plan "kubectl -n $NS wait --for=delete pod -l $SELECTOR --timeout=120s"
+  plan "kubectl -n $NS delete jobs --all; delete pods --all; delete deployments -l managed-by=jaiscloud   # ECR proxy"
+  plan "for ns in the namespaces labelled jaiscloud.io/managed-by=jaiscloud,jaiscloud.io/substrate=$cloud (other than $NS): kubectl -n \$ns delete jobs,pods,deployments,statefulsets --all"
+  plan "kubectl annotate namespace $NS jaiscloud.io/state=parked jaiscloud.io/parked-at=... jaiscloud.io/parked-image=... jaiscloud.io/parked-image-id=... jaiscloud.io/parked-version=... --overwrite"
+}
+
+plan_lifecycle_resume() {
+  local cloud=$1
+  substrate_vars "$cloud"
+  plan "# resume $cloud: one rollout, no manifest re-apply, no image check"
+  plan "kubectl get namespace $NS   # missing -> die 'install it first'; deployment missing -> die 'run deploy.sh'"
+  plan "kubectl get namespace $NS -o jsonpath=\"{.metadata.annotations['jaiscloud.io/state']}\"   # warn when not parked"
+  plan "kubectl -n $NS scale deployment $DEPLOY --replicas=1"
+  plan "kubectl -n $NS rollout status deployment/$DEPLOY --timeout=120s"
+  plan "kubectl -n $NS port-forward svc/$SVC <free 18080-18089>:$PORT   # wait for /_jaiscloud/health"
+  plan "curl -sS -X POST http://127.0.0.1:<port>/_jaiscloud/resume   # brokers/revisions recreated"
+  plan "# compare the new pod imageID with jaiscloud.io/parked-image-id; warn when the binary changed"
+  plan "kubectl annotate namespace $NS jaiscloud.io/state=running --overwrite; kubectl annotate namespace $NS jaiscloud.io/parked-at- jaiscloud.io/parked-image- jaiscloud.io/parked-image-id- jaiscloud.io/parked-version-"
 }
 
 print_plan() {
@@ -749,8 +1141,34 @@ print_plan() {
       plan_install_record "gcp" "gcp=running"
       ;;
     delete)
-      plan "kubectl -n $NAMESPACE_AWS delete deployment jaiscloud service jaiscloud configmap jaiscloud-config secret jaiscloud-dsn"
-      plan_install_record "aws" "aws=absent"
+      local target
+      for target in $(if [[ "$DELETE_TARGET" == "both" ]]; then echo "aws gcp"; else echo "$DELETE_TARGET"; fi); do
+        substrate_vars "$target"
+        if [[ "$target" == "aws" ]]; then
+          plan "kubectl -n $NS delete deployment jaiscloud service jaiscloud configmap jaiscloud-config secret jaiscloud-dsn"
+        else
+          plan "kubectl -n $NS delete deployment jaiscloud-gcp service jaiscloud-gcp secret jaiscloud-gcp-dsn"
+        fi
+        plan "kubectl -n $NAMESPACE_DATA get configmap $INSTALL_CONFIGMAP -o jsonpath='{.data}'   # keeps installed; sets desired $target=absent only when it was installed"
+        plan "# keeps pvc/$BLOBS_PVC, pvc/$STATE_PVC, database '$DB', namespace $NS and the store"
+      done
+      ;;
+    park)
+      plan_lifecycle_park "$LIFECYCLE_TARGET"
+      plan_install_record "$LIFECYCLE_TARGET" "$LIFECYCLE_TARGET=parked"
+      plan "# keeps: database '$DB', pvc/$BLOBS_PVC, pvc/$STATE_PVC (instance ID), namespaces, CA, resource records"
+      ;;
+    resume)
+      plan_lifecycle_resume "$LIFECYCLE_TARGET"
+      plan_install_record "$LIFECYCLE_TARGET" "$LIFECYCLE_TARGET=running"
+      ;;
+    switch)
+      local other
+      if [[ "$LIFECYCLE_TARGET" == "aws" ]]; then other=gcp; else other=aws; fi
+      plan "# switch to $LIFECYCLE_TARGET: park $other (when installed), then resume $LIFECYCLE_TARGET"
+      plan_lifecycle_park "$other"
+      plan_lifecycle_resume "$LIFECYCLE_TARGET"
+      plan_install_record "$other,$LIFECYCLE_TARGET" "$other=parked,$LIFECYCLE_TARGET=running"
       ;;
     *) plan "# unknown mode: $mode" ;;
   esac
@@ -762,29 +1180,42 @@ if [[ "$PLAN" == "1" ]]; then
   exit 0
 fi
 
-# ── --delete: remove AWS workloads, keep every PVC ───────────────────────────
+# ── --delete [aws|gcp|both]: remove workloads, keep every PVC ───────────────
 
 if [[ "$MODE" == "delete" ]]; then
   check_context
-  info "Removing the AWS workloads in $NAMESPACE_AWS (persisted data is preserved)..."
-  kubectl delete deployment jaiscloud -n "$NAMESPACE_AWS" --ignore-not-found
-  kubectl delete service    jaiscloud -n "$NAMESPACE_AWS" --ignore-not-found
-  kubectl delete configmap  jaiscloud-config -n "$NAMESPACE_AWS" --ignore-not-found
-  kubectl delete secret     jaiscloud-dsn    -n "$NAMESPACE_AWS" --ignore-not-found
-  record_intent aws absent 0
-  ok "AWS workloads removed. Persisted data retained:"
-  for pvc in "${AWS_PVCS[@]}"; do
-    kubectl get pvc "$pvc" -n "$NAMESPACE_AWS" --no-headers 2>/dev/null \
-      && echo "    $NAMESPACE_AWS/pvc/$pvc" || true
+  targets=(aws)
+  if [[ "$DELETE_TARGET" == "both" ]]; then
+    targets=(aws gcp)
+  elif [[ "$DELETE_TARGET" == "gcp" ]]; then
+    targets=(gcp)
+  fi
+  for target in "${targets[@]}"; do
+    delete_substrate "$target"
+    echo ""
   done
-  kubectl get pvc "$GCP_PVC" -n "$NAMESPACE_GCP" --no-headers 2>/dev/null \
-    && echo "    $NAMESPACE_GCP/pvc/$GCP_PVC" || true
-  kubectl get pvc "$POSTGRES_PVC" -n "$NAMESPACE_DATA" --no-headers 2>/dev/null \
-    && echo "    $NAMESPACE_DATA/pvc/$POSTGRES_PVC" || true
-  echo ""
-  echo "  Data is still on disk. Re-deploy the AWS substrate with: $0"
-  echo "  To reset the AWS substrate too, run:                      $0 --reset"
-  echo "  The GCP substrate and Postgres were not touched."
+  echo "  Data is still on disk. Re-deploy a substrate with: $0 (AWS) / $0 --gcp (GCP)"
+  echo "  To reset a substrate's database and namespace too: $0 --reset / $0 --gcp-reset"
+  [[ "$DELETE_TARGET" == "both" ]] || echo "  The other substrate and Postgres were not touched."
+  exit 0
+fi
+
+# ── --park / --resume / --switch: lifecycle without data loss ────────────────
+
+if [[ "$MODE" == "park" || "$MODE" == "resume" || "$MODE" == "switch" ]]; then
+  require kubectl
+  require curl
+  check_context
+  if [[ "$MODE" == "park" ]]; then
+    confirm "Park the $LIFECYCLE_TARGET substrate? This terminates all its jobs and engine compute but keeps its data."
+  fi
+  if [[ "$MODE" == "switch" ]]; then
+    switch_substrate "$LIFECYCLE_TARGET"
+  elif [[ "$MODE" == "park" ]]; then
+    park_substrate "$LIFECYCLE_TARGET"
+  else
+    resume_substrate "$LIFECYCLE_TARGET"
+  fi
   exit 0
 fi
 

@@ -161,6 +161,7 @@ func TestAgentGuideFiles(t *testing.T) {
 		"deploy/ci/ci-tls/gen.sh",
 		"scripts/integration-preflight.sh",
 		"scripts/rbac-isolation-gate.sh",
+		"scripts/lifecycle-gate.sh",
 		"docs/gcp/integration/AGENTS.md",
 		"docs/gcp/integration/contract.yaml",
 		"docs/gcp/integration/topology.md",

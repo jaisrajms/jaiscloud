@@ -89,6 +89,7 @@ deploy/deploy.sh --check --json
 ├─ store ready, substrate missing .................. deploy that substrate
 ├─ rbac.admissionPolicy=false (a substrate exists) . install-rbac-policy (K8s >= 1.30; non-optional)
 ├─ substrates ready, need external real hostnames .. mesh
+├─ need compute off but data kept ................. park / switch (then resume)
 ├─ Dataproc/Kafka/Cloud Run jobs fail .............. executors (rbac + spark image)
 └─ nothing to do ................................... verify + stop
 ```
@@ -167,7 +168,42 @@ and `destructive`. The blob copy needs a pullable `busybox`; preload it, or set
 If the new store already exists the command refuses — do **not** delete the new
 PVC unless you have confirmed it is disposable.
 
-## Scenario 5 — your own build
+## Scenario 5 — park / resume / switch (keep the data, stop the compute)
+
+Park is the deliberate, compute-destructive, data-retentive mode: it terminates
+the substrate and every executor workload but keeps the database, the blobs and
+state PVCs (including the instance ID), the namespaces, the CA and all resource
+records.
+
+```bash
+deploy/deploy.sh --park aws --plan        # review: no manifests re-applied
+deploy/deploy.sh --park gcp               # stop GCP compute, keep its data
+deploy/deploy.sh --resume gcp             # one rollout; warns if the image digest changed
+deploy/deploy.sh --switch aws --yes       # park GCP (when installed), resume AWS
+```
+
+Before scaling the Deployment to 0, `deploy.sh` calls the emulator's
+`POST /_jaiscloud/park`, where each engine quiesces itself: Dataproc cancels
+non-terminal jobs, Managed Kafka deletes broker Pods/Services (keeping cluster
+and topic *records*; broker topic data is lost because the broker has no PVC),
+and Cloud Run removes revision runtimes (keeping Service/Revision records).
+`Resume` runs the reverse through `POST /_jaiscloud/resume`. A 404 from either
+endpoint means the running image predates the API — rebuild and redeploy.
+
+The switch direction is always park-then-resume, so only one substrate's compute
+runs at a time. `--delete [aws|gcp|both]` is the workload-only alternative: it
+removes the Deployment/Service (and DSN Secret, plus the AWS ConfigMap) but never
+the PVCs or the database; the other substrate is untouched unless you pass
+`both`.
+
+Verify with the lifecycle gate (compute-destructive; needs both substrates
+installed from a build that has the park/resume API):
+
+```bash
+GATE_ALLOW_LIFECYCLE=1 make test-lifecycle-k8s
+```
+
+## Scenario 6 — your own build
 
 Build, deliver (push or `k3d image import`/`kind load`), then
 `JAISCLOUD_GCP_IMAGE=<image> deploy/deploy.sh --gcp --yes`. Dataproc also needs a
@@ -214,9 +250,11 @@ ServiceAccount that does not carry its own identity.
 | the pack, from the binary | `jaiscloud-gcp agent-guide` / `--json` / `--emit DIR` (`--force` to overwrite) |
 | preview | `deploy/deploy.sh <mode> --plan` |
 | install AWS / GCP | `deploy/deploy.sh [--yes]` / `deploy/deploy.sh --gcp --yes` |
+| park / resume / switch (compute only) | `deploy/deploy.sh --park <aws\|gcp>` / `--resume <aws\|gcp>` / `--switch <aws\|gcp> --yes` |
 | migrate | `deploy/deploy.sh --migrate-store --yes` |
-| delete workloads (keep data) | `deploy/deploy.sh --delete` |
+| delete workloads (keep data) | `deploy/deploy.sh --delete [aws\|gcp\|both]` |
 | resets (destructive, scoped) | `--reset` (AWS) / `--gcp-reset` (GCP) |
 | namespace boundary | preflight `rbac.*`; `GATE_ALLOW_RBAC=1 KUBE_CONTEXT=<ctx> make test-rbac-isolation-k8s` (server-side dry runs, K8s >= 1.30) |
-| gates | `make check-deploy-images`, `make check-integration-contract`, `make test-istio-smoke`, `ALLOW_RESET=1 make test-dual-substrate-k8s`, `make gcp-ci-preflight` |
+| gates | `make check-deploy-images`, `make check-integration-contract`, `make test-istio-smoke`, `ALLOW_RESET=1 make test-dual-substrate-k8s`, `GATE_ALLOW_LIFECYCLE=1 make test-lifecycle-k8s`, `make gcp-ci-preflight` |
 | emulator state API | `GET /_jaiscloud/health`, `GET /_jaiscloud/doctor`, `POST /_jaiscloud/reset`, `GET /_jaiscloud/export`, `POST /_jaiscloud/import`, `POST /_jaiscloud/clock` |
+| emulator lifecycle API | `POST /_jaiscloud/park`, `POST /_jaiscloud/resume` (engine hooks; called by `deploy.sh --park`/`--resume`) |

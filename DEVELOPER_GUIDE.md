@@ -830,7 +830,10 @@ outside the cluster.
 
 ```bash
 make down-k8s                   # removes the AWS workloads; every PVC is kept
-./deploy/deploy.sh --delete     # same, from the deploy script (data survives)
+./deploy/deploy.sh --delete [aws|gcp|both]  # same, from the deploy script (data survives)
+./deploy/deploy.sh --park <aws|gcp>         # stop compute too; data still survives
+./deploy/deploy.sh --resume <aws|gcp>       # bring that substrate back
+./deploy/deploy.sh --switch <aws|gcp> --yes # park the other, resume this
 ./deploy/deploy.sh --reset      # AWS-only reset: drop the `jaiscloud` database +
                                 # the jaiscloud namespace (its blobs PVC)
 ./deploy/deploy.sh --gcp-reset  # GCP-only reset: drop `jaiscloud_gcp` + the GCP blobs PVC
@@ -858,6 +861,45 @@ Both resets are **database-scoped**, not store-scoped:
 Add `--yes` (or `ASSUME_YES=1`) to run either non-interactively, and
 `--skip-build` (or `SKIP_IMAGE_BUILD=1`) to skip the `docker build` when the
 image was already imported into the cluster (`k3d image import`, CI).
+
+### Park, resume and switch (keep the data, stop the compute)
+
+`--delete` removes workloads; `--park` goes further and also stops the engine
+compute, while still keeping every piece of data. It is the deliberate,
+compute-destructive, data-retentive mode:
+
+```bash
+./deploy/deploy.sh --park gcp             # POST /_jaiscloud/park, then scale to 0
+./deploy/deploy.sh --resume gcp           # scale to 1, rollout, POST /_jaiscloud/resume
+./deploy/deploy.sh --switch aws --yes     # park GCP (when installed), resume AWS
+./deploy/deploy.sh --delete [aws|gcp|both]  # workloads only (default aws)
+```
+
+Park runs `POST /_jaiscloud/park` through a temporary port-forward before the
+Deployment scales down, so the emulator quiesces its own control plane: Dataproc
+cancels every non-terminal job (clusters are control-plane records and are left
+RUNNING), Managed Kafka deletes each broker's Pod/Service but keeps its
+per-cluster namespace and the cluster/topic records (broker topics are lost — the
+broker has no PVC), and Cloud Run removes revision runtimes while keeping
+Service/Revision records. Cloud Functions need no hook. The namespace is then
+annotated `jaiscloud.io/state=parked` with `parked-at`, `parked-image`,
+`parked-image-id` and `parked-version`; the install record becomes
+`<cloud>=parked`.
+
+Resume scales the Deployment to 1, waits for the rollout, posts
+`/_jaiscloud/resume` (Kafka brokers and Cloud Run runtimes are recreated;
+Dataproc is a no-op; every hook is idempotent), compares the new pod's imageID
+with `parked-image-id` and warns when the binary changed (store migrations may
+run), then annotates the namespace `state=running` and removes the `parked-*`
+annotations. Neither direction re-applies a manifest or rebuilds an image, so
+there is exactly one rollout. Park deletes executor Pods/Jobs in the substrate
+namespace and in every namespace labelled
+`jaiscloud.io/managed-by=jaiscloud,jaiscloud.io/substrate=<cloud>`, but never a
+namespace or a Service.
+
+`--delete [aws|gcp|both]` is the workload-only option: it removes the
+Deployment, Service and DSN Secret (and the AWS `jaiscloud-config` ConfigMap) and
+records `<cloud>=absent`, but keeps the PVCs, databases and namespaces.
 
 The isolation guarantee is exercised by a gate, not just asserted in prose:
 

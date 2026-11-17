@@ -170,7 +170,7 @@ JAISCLOUD_IMAGE   ?= jaisraj/jaiscloud-aws:latest
         server-gcp server-gcp-ephemeral server-gcp-postgres \
         server-ui server-ui-gcp stop-server up-docker down-docker up-k8s up-k8s-gcp down-k8s \
         postgres-up postgres-reset postgres-down postgres-gcp-db \
-        test-dual-substrate-k8s test-rbac-isolation-k8s test-istio-smoke _use-gcp-image check-deploy-images \
+        test-dual-substrate-k8s test-rbac-isolation-k8s test-lifecycle-k8s test-istio-smoke _use-gcp-image check-deploy-images \
         gen-integration-contract check-integration-contract integration-preflight \
         test-integration test-integration-gcp test-lro-async-gcp test-throttle-gcp test-gcp-load test-gcp-mutation test-gcp-mutation-ratchet test-gcp-mutation-update \
         test-e2e-emr-docker test-e2e-emrcontainers-k8s test-e2e-eventbridge \
@@ -2716,6 +2716,11 @@ test-dual-substrate-k8s: ## Dual-substrate isolation gate — writes GCP state, 
 test-rbac-isolation-k8s: ## Admission gate — proves each substrate ServiceAccount can delete only its own labelled namespaces (needs ALLOW_RBAC=1, K8s >= 1.30, the policy applied)
 	GATE_ALLOW_RBAC=$(ALLOW_RBAC) \
 	  scripts/rbac-isolation-gate.sh
+
+test-lifecycle-k8s: ## Park/resume/switch gate — seeds an S3 and a GCS object, then proves park keeps data and namespaces and resume/switch keep both instances' state (compute-destructive: needs GATE_ALLOW_LIFECYCLE=1; both substrates installed from this branch)
+	GATE_ALLOW_LIFECYCLE=$(GATE_ALLOW_LIFECYCLE) \
+	  NS_AWS=$(K8S_NAMESPACE_AWS) NS_GCP=$(K8S_NAMESPACE_GCP) NS_DATA=$(K8S_NAMESPACE_DATA) \
+	  scripts/lifecycle-gate.sh
 
 test-e2e-cloudrun-java: _check-gcp-samples-prereq _refresh-gcp-image ## OPTIONAL floci-gcp Java interop smoke (not a compliance gate) against the k3d emulator with Cloud Run k8s execution, through the in-cluster portmux (asserts CloudRunTest 7/7; JAVA_HOME/mvn on PATH — see AGENTS.md)
 	@test -d $(FLOCI_COMPAT_DIR)/sdk-test-java || (echo "ERROR: $(FLOCI_COMPAT_DIR)/sdk-test-java not found — set FLOCI_COMPAT_DIR"; exit 1)

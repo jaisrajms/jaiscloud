@@ -72,6 +72,10 @@ lifecycle:
       - "--reset: desired aws=running (after the reinstall)"
       - "--gcp-reset: desired gcp=running"
       - "--migrate-store: installed aws,gcp, desired both running"
+      - "--park <cloud>: desired <cloud>=parked"
+      - "--resume <cloud>: desired <cloud>=running"
+      - "--switch <target>: desired other=parked, target=running"
+      - "--delete <cloud>: installed kept, desired <cloud>=absent (an uninstalled cloud is not added)"
     skipped_when: "jaiscloud-data does not exist (a warning, not a reason to create the store)"
   states:
     running: "Deployment present, spec.replicas > 0, availableReplicas >= 1"
@@ -204,6 +208,36 @@ scenarios:
         run: "kubectl -n jaiscloud-gcp set env deploy/jaiscloud-gcp JAISCLOUD_K8S_SPARK_IMAGE=<spark image with the GCS connector>"
         note: "Dataproc jobs cannot run without it; plain apache/spark cannot read gs://."
 
+  park-resume-switch:
+    summary: "Stop the compute without losing the data: park one substrate, resume it, or switch between them."
+    preconditions:
+      - "both substrate namespaces exist and their Deployments are Ready"
+      - "the running image contains POST /_jaiscloud/park and /resume (rebuild/redeploy otherwise)"
+    note: "Park is compute-destructive and data-retentive. The database, blobs and state PVCs (instance ID), namespaces, CA and resource records survive; engine compute does not."
+    steps:
+      - id: plan
+        run: "deploy/deploy.sh --park aws --plan"
+        expect: "lifecycle steps printed; no manifest is applied"
+      - id: park
+        run: "deploy/deploy.sh --park aws"
+        expect: "POST /_jaiscloud/park (jobs cancelled, broker/revision runtimes stopped); Deployment scaled to 0; executor Pods/Jobs and the ECR proxy reaped; namespace annotated jaiscloud.io/state=parked"
+        keeps: ["database jaiscloud", "pvc jaiscloud-blobs-pvc", "pvc jaiscloud-state-pvc (instance ID)", "namespace jaiscloud and its Service", "resource records"]
+        destructive: true
+      - id: use-other
+        run: "Read/write the GCP substrate (port-forward 8080, or --switch gcp)"
+        expect: "GCP state unaffected by the AWS park"
+      - id: resume
+        run: "deploy/deploy.sh --resume aws"
+        expect: "scale to 1, rollout, POST /_jaiscloud/resume, state=running and parked-* annotations cleared"
+        note: "A changed image digest is a warning: store migrations may run."
+      - id: switch
+        run: "deploy/deploy.sh --switch gcp --yes"
+        expect: "AWS parked, GCP resumed; --switch both is invalid"
+      - id: verify
+        run: "GATE_ALLOW_LIFECYCLE=1 make test-lifecycle-k8s"
+        expect: "seeded S3 and GCS objects, both instance IDs, both databases, the PVCs and a labelled fixture namespace survive park/resume/switch"
+        destructive: true
+
   executors:
     summary: "Enable Dataproc / Managed Kafka / Cloud Run on Kubernetes."
     steps:
@@ -268,6 +302,9 @@ failure_taxonomy:
   - symptom: "/_jaiscloud/import refuses with 'existing state found'"
     cause: "the instance already holds state"
     fix: "add reset_first=true, or POST /_jaiscloud/reset first"
+  - symptom: "deploy.sh --park/--resume reports POST /_jaiscloud/park returned 404"
+    cause: "the running image predates the park/resume API"
+    fix: "rebuild the image and redeploy (or k3d image import / kind load + --skip-build), then retry; do not delete data to work around it"
 
 do_not:
   - action: "Rewrite :authority / the Host header anywhere in the mesh"
@@ -299,6 +336,10 @@ destructive:
   - command: "make test-dual-substrate-k8s"
     deletes: ["database jaiscloud (through --reset)"]
     guards: ["ALLOW_RESET=1"]
+  - command: "deploy/deploy.sh --park <aws|gcp>"
+    deletes: ["substrate Pod and Deployment replicas", "executor Pods/Jobs and the ECR proxy", "Dataproc jobs (cancelled), Managed Kafka broker Pods/Services, Cloud Run revision runtimes"]
+    keeps: ["databases", "blobs and state PVCs (instance ID)", "namespaces and Services", "CA", "resource records"]
+    guards: ["an explicit --park <cloud>", "a failed hook is fatal unless PARK_FORCE=1"]
 
 tooling:
   agent_guide:
@@ -306,17 +347,19 @@ tooling:
     note: "The binary embeds this pack; --emit writes the deployment kit (manifests, deploy.sh, preflight, Istio/CI assets, docs) for users who only have an image or a release binary. In-cluster: kubectl -n <ns> exec deploy/<workload> -- /jaiscloud agent-guide."
   deploy_sh:
     entry: "deploy/deploy.sh"
-    modes: ["(default) aws install", "--gcp", "--migrate-store", "--delete", "--reset", "--gcp-reset", "--check [--substrate aws|gcp|both] [--desired aws=running,gcp=parked]", "--plan", "--skip-build", "--yes"]
+    modes: ["(default) aws install", "--gcp", "--migrate-store", "--delete [aws|gcp|both]", "--park <aws|gcp>", "--resume <aws|gcp>", "--switch <aws|gcp>", "--reset", "--gcp-reset", "--check [--substrate aws|gcp|both] [--desired aws=running,gcp=parked]", "--plan", "--skip-build", "--yes"]
     exit_codes: {0: success, 1: failure, 2: usage/refused}
   make:
     entry: "make help"
-    targets: ["up-k8s", "up-k8s-gcp", "postgres-gcp-db", "down-k8s", "check-deploy-images", "test-istio-smoke", "test-dual-substrate-k8s", "test-rbac-isolation-k8s", "gcp-ci-preflight"]
+    targets: ["up-k8s", "up-k8s-gcp", "postgres-gcp-db", "down-k8s", "check-deploy-images", "test-istio-smoke", "test-dual-substrate-k8s", "test-rbac-isolation-k8s", "test-lifecycle-k8s", "gcp-ci-preflight"]
   emulator_api:
     base: "REST port (8080 GCP / 4566 AWS)"
     endpoints:
       - "GET /_jaiscloud/health -> {\"status\":\"ok\"}"
       - "GET /_jaiscloud/doctor (+ ?verbose=true) -> JSON diagnostics"
       - "POST /_jaiscloud/reset[?account=&region=] -> wipe state"
+      - "POST /_jaiscloud/park -> quiesce engine compute (jobs cancelled, broker/revision runtimes stopped); data survives"
+      - "POST /_jaiscloud/resume -> recreate engine compute (brokers/revisions; Dataproc is a no-op); idempotent"
       - "GET /_jaiscloud/export -> gzip tarball of all state"
       - "POST /_jaiscloud/import[?reset_first=true&dry_run=true] -> restore"
       - "POST /_jaiscloud/clock {\"mode\":\"fixed|offset\",\"time\":...} -> deterministic time"
