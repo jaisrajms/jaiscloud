@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"jaiscloud"
 	"jaiscloud/internal/admin"
 	"jaiscloud/internal/blobfs"
 	"jaiscloud/internal/certstore"
@@ -206,10 +207,20 @@ var (
 const defaultHost = "http://localhost:8080"
 
 func main() {
+	var helpAgent bool
 	root := &cobra.Command{
 		Use:   "jaiscloud-gcp",
 		Short: "JaisCloud GCP - local GCP emulator",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if helpAgent {
+				fmt.Print(jaiscloud.AgentGuideText("gcp", version, commit, date))
+				return nil
+			}
+			return cmd.Help()
+		},
 	}
+	root.Flags().BoolVar(&helpAgent, "help-agent", false, "print integration instructions for an LLM agent and exit")
+	root.AddCommand(jaiscloud.AgentGuideCommand("gcp", version, commit, date))
 	root.AddCommand(startCmd())
 	root.AddCommand(versionCmd())
 	root.AddCommand(envCmd())

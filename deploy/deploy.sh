@@ -25,6 +25,11 @@
 #                                   # and Postgres survive
 #   ./deploy/deploy.sh --gcp-reset  # GCP-only, database-scoped: drop the `jaiscloud_gcp`
 #                                   # db + the GCP blobs PVC; AWS and Postgres survive
+#   ./deploy/deploy.sh --check      # READ-ONLY inspection: cluster state, legacy
+#                                   # detection, store, substrates, mesh, next steps
+#   ./deploy/deploy.sh --check --json # same as machine-readable JSON (--strict: exit 1
+#                                   # when something is missing)
+#   ./deploy/deploy.sh --plan       # print the commands a mode would run, then exit
 #   ./deploy/deploy.sh --skip-build # do not run `docker build`; use the image already
 #                                   # imported into the cluster (SKIP_IMAGE_BUILD=1)
 #   ./deploy/deploy.sh --yes        # non-interactive (ASSUME_YES=1)
@@ -110,6 +115,13 @@ Usage:
                                   delete jaiscloud-gcp-blobs-pvc, drop/recreate
                                   `jaiscloud_gcp`, then re-apply jaiscloud-gcp.yaml. The AWS
                                   substrate and jaiscloud-data are never touched.
+  --check                         READ-ONLY: inspect the cluster (namespaces, legacy
+                                  layout, store, substrates, mesh) and print the next
+                                  safe step. Alias for scripts/integration-preflight.sh.
+  --json                          With --check: machine-readable JSON.
+  --strict                        With --check: exit 1 unless nothing is missing.
+  --plan                          Print the kubectl/docker/psql commands this mode would
+                                  run, then exit 0 without executing them.
   --skip-build                    Do not run `docker build`; deploy the image already
                                   imported into the cluster (SKIP_IMAGE_BUILD=1). Useful
                                   with `k3d image import` and other CI paths.
@@ -411,6 +423,9 @@ print_endpoints() {
 # ── argument parsing ─────────────────────────────────────────────────────────
 
 MODE="deploy"
+PLAN=0
+PREFLIGHT_JSON=0
+PREFLIGHT_STRICT=0
 while (($#)); do
   case "$1" in
     --delete)        MODE="delete" ;;
@@ -418,6 +433,10 @@ while (($#)); do
     --gcp)           MODE="gcp" ;;
     --gcp-reset)     MODE="gcp-reset" ;;
     --migrate-store) MODE="migrate-store" ;;
+    --check)         MODE="check" ;;
+    --json)          PREFLIGHT_JSON=1 ;;
+    --strict)        PREFLIGHT_STRICT=1 ;;
+    --plan)          PLAN=1 ;;
     -y|--yes)        ASSUME_YES=1 ;;
     --skip-build)    SKIP_IMAGE_BUILD=1 ;;
     -h|--help)       usage; exit 0 ;;
@@ -427,6 +446,88 @@ while (($#)); do
   esac
   shift
 done
+
+# ── --check: read-only inspection (never mutates) ───────────────────────────
+
+if [[ "$MODE" == "check" ]]; then
+  args=()
+  [[ "$PREFLIGHT_JSON" == "1" ]] && args+=(--json)
+  [[ "$PREFLIGHT_STRICT" == "1" ]] && args+=(--strict)
+  exec "$REPO_ROOT/scripts/integration-preflight.sh" ${args+"${args[@]}"}
+fi
+
+# ── --plan: print what the selected mode would run, without running it ──────
+
+plan() { printf '  + %s\n' "$*"; }
+
+print_plan() {
+  local mode=$1
+  info "Plan for mode '$mode' (nothing is executed)"
+  case "$mode" in
+    deploy)
+      if [[ "$SKIP_IMAGE_BUILD" == "1" ]]; then
+        plan "# docker build skipped (SKIP_IMAGE_BUILD=1)"
+      else
+        plan "docker build -t $IMAGE $REPO_ROOT"
+        plan "docker tag $IMAGE $AWS_MANIFEST_IMAGE"
+        plan "# kind load / k3d image import when the context is kind-*/k3d-*"
+      fi
+      plan "kubectl apply -f $K8S_DIR/namespace.yaml"
+      plan "kubectl apply -f $K8S_DIR/postgres.yaml"
+      plan "kubectl apply -f $K8S_DIR/rbac.yaml"
+      plan "kubectl apply -f $K8S_DIR/jaiscloud.yaml"
+      plan "kubectl -n $NAMESPACE_DATA rollout status deployment/postgres --timeout=120s"
+      plan "kubectl -n $NAMESPACE_AWS rollout status deployment/jaiscloud --timeout=120s"
+      ;;
+    gcp)
+      plan "kubectl apply -f $K8S_DIR/namespace.yaml"
+      plan "kubectl apply -f $K8S_DIR/postgres.yaml"
+      plan "kubectl apply -f $K8S_DIR/rbac.yaml"
+      plan "kubectl -n $NAMESPACE_DATA rollout status deployment/postgres --timeout=120s"
+      plan "kubectl -n $NAMESPACE_DATA exec deploy/postgres -- psql ... 'SELECT 1 ... jaiscloud_gcp' || CREATE DATABASE jaiscloud_gcp"
+      plan "kubectl apply -f $K8S_DIR/jaiscloud-gcp.yaml"
+      [[ -n "${JAISCLOUD_GCP_IMAGE:-}" ]] && plan "kubectl -n $NAMESPACE_GCP set image deployment/jaiscloud-gcp jaiscloud-gcp=$JAISCLOUD_GCP_IMAGE"
+      plan "kubectl -n $NAMESPACE_GCP rollout status deployment/jaiscloud-gcp --timeout=180s"
+      ;;
+    migrate-store)
+      local OLD_NS="${LEGACY_NAMESPACE:-$NAMESPACE_AWS}"
+      plan "kubectl -n $NAMESPACE_AWS scale deployment jaiscloud --replicas=0   # when present"
+      plan "kubectl -n $OLD_NS scale deployment postgres --replicas=0            # legacy GCP too, when present"
+      plan "kubectl -n $OLD_NS exec deploy/postgres -- pg_dump -Fc -d jaiscloud > <tmp>"
+      plan "kubectl apply -f $K8S_DIR/namespace.yaml"
+      plan "kubectl apply -f $K8S_DIR/postgres.yaml"
+      plan "kubectl -n $NAMESPACE_DATA exec -i deploy/postgres -- pg_restore ... -d jaiscloud < <tmp>"
+      plan "kubectl -n $NAMESPACE_DATA exec -i deploy/postgres -- pg_restore ... -d jaiscloud_gcp < <tmp>"
+      plan "kubectl -n $OLD_NS delete deployment postgres; delete service postgres postgres-external"
+      plan "# legacy GCP: apply jaiscloud-gcp.yaml, scale to 0, tar-copy the blob PVC, scale to 1, delete the old Deployment/Service"
+      plan "kubectl apply -f $K8S_DIR/jaiscloud.yaml"
+      ;;
+    reset)
+      plan "kubectl -n $NAMESPACE_AWS scale deployment jaiscloud --replicas=0   # when present"
+      plan "kubectl -n $NAMESPACE_DATA exec deploy/postgres -- psql -c 'DROP DATABASE IF EXISTS jaiscloud WITH (FORCE)' -c 'CREATE DATABASE jaiscloud OWNER jaiscloud'"
+      plan "kubectl delete namespace $NAMESPACE_AWS"
+      plan "kubectl apply -f $K8S_DIR/namespace.yaml"
+      plan "kubectl apply -f $K8S_DIR/rbac.yaml"
+      plan "kubectl apply -f $K8S_DIR/jaiscloud.yaml"
+      ;;
+    gcp-reset)
+      plan "kubectl -n $NAMESPACE_GCP scale deployment jaiscloud-gcp --replicas=0   # when present"
+      plan "kubectl -n $NAMESPACE_GCP delete pvc $GCP_PVC"
+      plan "kubectl -n $NAMESPACE_DATA exec deploy/postgres -- psql -c 'DROP DATABASE IF EXISTS jaiscloud_gcp WITH (FORCE)' -c 'CREATE DATABASE jaiscloud_gcp OWNER jaiscloud'"
+      plan "kubectl apply -f $K8S_DIR/jaiscloud-gcp.yaml"
+      ;;
+    delete)
+      plan "kubectl -n $NAMESPACE_AWS delete deployment jaiscloud service jaiscloud configmap jaiscloud-config secret jaiscloud-dsn"
+      ;;
+    *) plan "# unknown mode: $mode" ;;
+  esac
+  info "Re-run without --plan to execute."
+}
+
+if [[ "$PLAN" == "1" ]]; then
+  print_plan "$MODE"
+  exit 0
+fi
 
 # ── --delete: remove AWS workloads, keep every PVC ───────────────────────────
 

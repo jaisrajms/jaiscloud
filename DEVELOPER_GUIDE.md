@@ -667,6 +667,12 @@ applies `deploy/k8s/jaiscloud-gcp.yaml` (the GCP Deployment, PVCs, Secret,
 Service and its own Namespace) and waits for `deployment/jaiscloud-gcp` in
 `jaiscloud-gcp`.
 
+For an agent or script driving this setup, start with
+[`docs/gcp/integration/AGENTS.md`](docs/gcp/integration/AGENTS.md) and
+`./deploy/deploy.sh --check --json` (read-only: namespaces, legacy detection,
+store, substrates, mesh, next step). The facts live in the generated
+[`contract.yaml`](docs/gcp/integration/contract.yaml).
+
 The GCP manifest defaults to the published multi-arch image
 (`jaisraj/jaiscloud-gcp:latest`). To run your own build:
 `JAISCLOUD_GCP_IMAGE=<image> ./deploy/deploy.sh --gcp`, or

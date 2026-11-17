@@ -321,6 +321,7 @@ secret.
 
 ## See also
 
+- [`docs/gcp/integration/AGENTS.md`](integration/AGENTS.md) — the same integration steps as a runbook for an LLM agent, with `deploy.sh --check --json` to inspect a cluster first.
 - [`README-GCP.md`](../../README-GCP.md) — the emulator guide and SDK endpoint list.
 - [`docs/gcp/testability.md`](testability.md) — what a local run may be trusted to prove.
 - [`deploy/k8s/istio/README.md`](../../deploy/k8s/istio/README.md) — the front door.

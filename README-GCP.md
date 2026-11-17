@@ -269,6 +269,16 @@ make up-k8s-gcp           # apply namespace/postgres/rbac/jaiscloud-gcp.yaml, wa
 kubectl port-forward -n jaiscloud-gcp svc/jaiscloud-gcp 8080:8080
 ```
 
+**Automating this?** [`docs/gcp/integration/AGENTS.md`](docs/gcp/integration/AGENTS.md)
+is a runbook for an LLM agent or script; its generated
+[`contract.yaml`](docs/gcp/integration/contract.yaml) carries the facts
+(namespaces, objects, images, env, ports) plus the upgrade/detection playbook;
+`./deploy/deploy.sh --check --json` reports the cluster's state read-only and
+prints the next safe step (it also detects a pre-split install). If you only have
+the container image or a release binary, the binary carries the same pack:
+`jaiscloud-gcp agent-guide` (brief), `--json` (contract), `--emit DIR` (the
+deployment kit: manifests, `deploy.sh`, preflight, Istio/CI assets, docs).
+
 The single-file manifest still works on a bare cluster (it declares its own
 Namespace and the `jaiscloud-gcp` ServiceAccount). The Postgres server and the
 `jaiscloud_gcp` database have to exist for the pod to become Ready, and

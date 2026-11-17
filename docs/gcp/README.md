@@ -7,6 +7,7 @@ reference material it links to.
 | document | what it is |
 |---|---|
 | [`wire-contract.md`](wire-contract.md) | What the emulator's fidelity matrix promises: the per-operation/per-transport wire contract, the pinned API artifacts, the CI gates, and the surfaces that are explicitly non-`ga`. |
+| [`integration/`](integration/) | The agent/automation integration pack: a task-oriented runbook ([`AGENTS.md`](integration/AGENTS.md)), a generated machine-readable [contract](integration/contract.yaml) with the upgrade/detection playbook, the [topology invariants](integration/topology.md), and the read-only preflight (`deploy.sh --check --json`). |
 | [`testability.md`](testability.md) | The local-testability contract: per service, what a local run may be trusted to prove and what must be verified on real GCP, plus the behaviour classes (`p1`–`p5`) the depth gate requires. |
 | [`ci.md`](ci.md) | Running JaisCloud in **your** CI: service containers (GitHub Actions, GitLab, Compose), Postgres-backed runs, the executor tests that need pods, and clients that insist on `https://` (native TLS, a thin proxy, or the Istio front door). Assets in [`deploy/ci/`](../../deploy/ci/). |
 | [`bigquery-sql-engine.md`](bigquery-sql-engine.md) | Decision record (BQ0) freezing the BigQuery engine choice (pure-Go in-process SQLite, one engine in memory and `--dsn` modes) and the v1 dialect subset. |

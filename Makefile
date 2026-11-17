@@ -165,6 +165,7 @@ JAISCLOUD_IMAGE   ?= jaisraj/jaiscloud-aws:latest
         server-ui server-ui-gcp stop-server up-docker down-docker up-k8s up-k8s-gcp down-k8s \
         postgres-up postgres-reset postgres-down postgres-gcp-db \
         test-dual-substrate-k8s test-istio-smoke _use-gcp-image check-deploy-images \
+        gen-integration-contract check-integration-contract integration-preflight \
         test-integration test-integration-gcp test-lro-async-gcp test-throttle-gcp test-gcp-load test-gcp-mutation test-gcp-mutation-ratchet test-gcp-mutation-update \
         test-e2e-emr-docker test-e2e-emrcontainers-k8s test-e2e-eventbridge \
         test-e2e-dpc-docker test-e2e-dpc-k8s \
@@ -486,7 +487,7 @@ test-dataproc-streaming: ## Dataproc streaming/restart contract tests (schedulin
 	  ./internal/gcp/service/dataproc/ ./internal/sparkhelpers/ ./internal/gcp/transport/rest/dataproc/ ./internal/gcp/transport/grpc/dataproc/
 
 test-gcp-tools: ## Unit tests for the dev tools (gcpstatus, paginationcheck, vulnallow, terraform)
-	go test -race -count=1 ./tools/gcpstatus/... ./tools/lint/... ./tools/vulnallow/... ./tools/tfcapture/... ./tools/providerschema/... ./tools/tfdifferential/...
+	go test -race -count=1 . ./tools/gcpstatus/... ./tools/lint/... ./tools/vulnallow/... ./tools/tfcapture/... ./tools/providerschema/... ./tools/integrationcontract/... ./tools/tfdifferential/...
 
 test-release: ## Release artifact smoke tests for jaiscloud-gcp (needs a goreleaser snapshot in dist/)
 	go test -count=1 -tags release ./tests/release/...
@@ -2347,12 +2348,12 @@ test-gcp-lifecycle: ## FC5 lifecycle + ownership harness (both transports, in-pr
 	go test -race -count=1 ./tests/gcplifecycle/...
 
 gcp-ci-preflight: ## Mirror CI's offline GCP gates before pushing (unit+race, lint, coverage, ledger, fidelity)
-	$(MAKE) --no-print-directory check-deploy-images
+	$(MAKE) --no-print-directory check-deploy-images check-integration-contract
 	go test -race -count=1 ./internal/gcp/... ./internal/sparkhelpers/... ./internal/k8shelpers/... ./internal/platform/... ./internal/executor/...
 	$(MAKE) --no-print-directory test-gcp-lifecycle test-gcp-provider-capture
 	$(MAKE) --no-print-directory test-gcp-coverage
 	$(MAKE) --no-print-directory gcp-status-behavioral-gate gcp-status-depth-gate
-	go test -race -count=1 ./tools/gcpstatus/... ./tools/lint/... ./tools/vulnallow/... ./tools/tfcapture/... ./tools/providerschema/... ./tools/tfcoverage/... ./tools/tfcorpus/... ./tools/tfdifferential/...
+	go test -race -count=1 . ./tools/gcpstatus/... ./tools/lint/... ./tools/vulnallow/... ./tools/tfcapture/... ./tools/providerschema/... ./tools/tfcoverage/... ./tools/tfcorpus/... ./tools/integrationcontract/... ./tools/tfdifferential/...
 	go run ./tools/lint/gcplint ./internal/gcp/... ./cmd/jaiscloud-gcp
 	$(MAKE) --no-print-directory check-gcp-field-coverage
 	$(MAKE) --no-print-directory check-gcp-terraform-coverage
@@ -2677,6 +2678,15 @@ test-e2e-demo-spine-k3d: _check-gcp-samples-prereq _refresh-gcp-image ## Whole-s
 
 test-istio-smoke: ## Istio front-door gate: GKE-not-Kafka, GCS, gRPC over h2c and STS through the gateway (needs deploy/k8s/istio installed)
 	./scripts/istio-smoke.sh
+
+gen-integration-contract: ## Regenerate docs/gcp/integration/contract.yaml from the manifests + playbook
+	go run ./tools/integrationcontract
+
+check-integration-contract: ## Fail when the committed integration contract is stale
+	go run ./tools/integrationcontract -check
+
+integration-preflight: ## READ-ONLY cluster inspection for agents (PREFLIGHT_FLAGS="--json --strict")
+	scripts/integration-preflight.sh $(PREFLIGHT_FLAGS)
 
 check-deploy-images: ## Fail if a substrate Deployment's image points at a private/local registry
 	@if grep -nE '^[[:space:]]+image:[[:space:]]+(10\.|192\.168\.|172\.(1[6-9]|2[0-9]|3[01])\.|localhost)' \

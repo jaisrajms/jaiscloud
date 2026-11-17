@@ -59,6 +59,7 @@ import (
 	sesprovider "jaiscloud/internal/aws/provider/ses"
 
 	// G-PENDING new providers
+	"jaiscloud"
 	"jaiscloud/internal/adapter"
 	"jaiscloud/internal/admin"
 	awsconfigprovider "jaiscloud/internal/aws/provider/awsconfig"
@@ -112,10 +113,20 @@ var (
 )
 
 func main() {
+	var helpAgent bool
 	root := &cobra.Command{
 		Use:   "jaiscloud-aws",
 		Short: "JaisCloud AWS - local AWS emulator",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if helpAgent {
+				fmt.Print(jaiscloud.AgentGuideText("aws", version, commit, date))
+				return nil
+			}
+			return cmd.Help()
+		},
 	}
+	root.Flags().BoolVar(&helpAgent, "help-agent", false, "print integration instructions for an LLM agent and exit")
+	root.AddCommand(jaiscloud.AgentGuideCommand("aws", version, commit, date))
 	root.AddCommand(startCmd())
 	root.AddCommand(versionCmd())
 	root.AddCommand(envCmd())
