@@ -79,7 +79,7 @@ func EnsureWorkload(ctx context.Context, client kubernetes.Interface, spec Workl
 	if len(spec.Ports) == 0 {
 		return "", fmt.Errorf("k8shelpers: workload %s has no ports", name)
 	}
-	if err := EnsureNamespace(ctx, client, spec.Namespace, map[string]string{"managed-by": "jaiscloud"}); err != nil {
+	if err := EnsureNamespace(ctx, client, spec.Namespace, OwnerNamespaceLabels("")); err != nil {
 		return "", fmt.Errorf("k8shelpers: workload %s: ensure namespace: %w", name, err)
 	}
 	if err := ensureWorkloadService(ctx, client, spec, name); err != nil {

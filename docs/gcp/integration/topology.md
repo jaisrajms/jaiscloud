@@ -96,7 +96,12 @@ Advice is relative to that intent:
    S3 base dir (`/data/blobs`) so existing objects keep their layout.
 5. **Each substrate has one identity.** `JAISCLOUD_INSTANCE_ID` is pinned
    (`aws-substrate-1`, `gcp-substrate-1`) and workloads carry it, so one
-   substrate's startup sweep cannot reap the other's. Parallel deployments on a
+   substrate's startup sweep cannot reap the other's. Namespaces the emulator
+   creates carry the same identity in `jaiscloud.io/substrate` and
+   `jaiscloud.io/instance-id`, and `ListManagedNamespaces` /
+   `SweepManagedNamespaces` / `DeleteManagedNamespace` filter on them: a
+   namespace the other substrate (or another instance of this one) created is
+   invisible to the sweep and refused by delete. Parallel deployments on a
    shared cluster need distinct IDs *and* namespaces.
 6. **The mesh is only the front door.** Nothing inside a substrate transits it:
    Spark drivers/executors, Cloud Run revision Pods, function Pods and Managed
@@ -109,15 +114,36 @@ Advice is relative to that intent:
    Postgres. Do not make the mesh, RBAC or a DSN required to start the binary.
 8. **Per-resource namespaces are the emulator's.** Dataproc clusters and Managed
    Kafka brokers create `gcp-*` namespaces labelled
-   `jaiscloud.io/managed-by=jaiscloud` and `jaiscloud.io/service=<svc>`, and bind
-   the executor ClusterRole there for the emulator's *own* resolved
-   ServiceAccount. Those namespaces are deleted with their resource; adopted
-   namespaces are left alone.
+   `jaiscloud.io/managed-by=jaiscloud`, `jaiscloud.io/service=<svc>` and the
+   identity labels above, and bind the executor ClusterRole there for the
+   emulator's *own* resolved ServiceAccount (the RoleBinding carries the same
+   labels). Those namespaces are deleted with their resource; adopted namespaces
+   are left alone. A namespace an older emulator created before identity labels
+   existed is backfilled in place when it is next ensured, and is otherwise left
+   untouched — the sweep cannot prove it is ours.
 9. **Reaching each substrate.** The AWS Service is a `LoadBalancer` (localhost
    convenience on Docker Desktop; pending on kind/k3d). The GCP Service is a
    `ClusterIP` because it also carries the Thrift HMS ports — use a port-forward
    (`8080`, `8081`) or the front door for external HTTP(S).
-10. **Upgrade is a data move.** The pre-split layout ran Postgres and the GCP
+10. **Namespace isolation is enforced by admission, not by convention.** Both
+    substrate ServiceAccounts hold `jaiscloud-namespace-admin`, a cluster-scoped
+    ClusterRole with namespace create/delete plus update/patch (the identity-label
+    backfill; per-cluster Dataproc namespaces, Managed Kafka brokers), and RBAC
+    cannot scope a delete by label.
+    `deploy/k8s/rbac-admission-policy.yaml` installs a
+    `ValidatingAdmissionPolicy` + `Deny` binding (`failurePolicy: Fail`) that
+    matches only those two ServiceAccounts and requires a namespace
+    create/update/delete to carry `jaiscloud.io/managed-by=jaiscloud` and the
+    caller's own `jaiscloud.io/substrate`; a namespace already owned by the
+    other substrate cannot be relabelled or deleted. RoleBindings created by
+    those identities must carry the same labels. **Prerequisite: Kubernetes
+    >= 1.30** (ValidatingAdmissionPolicy is GA there); `deploy/deploy.sh`
+    refuses an older cluster before creating anything, and
+    `scripts/rbac-isolation-gate.sh` proves the allow/deny matrix with
+    server-side dry runs. An operator's own `kubectl` is not matched, so the
+    documented reset paths (`--reset` deletes the `jaiscloud` namespace) keep
+    working.
+11. **Upgrade is a data move.** The pre-split layout ran Postgres and the GCP
     emulator in `jaiscloud`; a PVC cannot change namespace. `--migrate-store`
     dumps the old store into both databases, copies the old GCP blob PVC into
     `jaiscloud-gcp`, removes the legacy workloads and keeps both old PVCs as
@@ -128,6 +154,9 @@ Advice is relative to that intent:
 
 - **Objects, ports, env, images, PVCs, secrets (keys), RBAC subjects**:
   [`contract.yaml`](contract.yaml), generated from the manifests.
+- **The namespace boundary**: `deploy/k8s/rbac-admission-policy.yaml`
+  (ValidatingAdmissionPolicy + binding), reported by the preflight as
+  `rbac.admissionPolicy` and verified by `scripts/rbac-isolation-gate.sh`.
 - **Commands, detection predicates, failure taxonomy, destructive operations**:
   the `playbook` section of `contract.yaml` (authored in
   [`playbook.yaml`](playbook.yaml)).

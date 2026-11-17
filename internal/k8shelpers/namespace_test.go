@@ -170,6 +170,226 @@ func TestListAndSweepManagedNamespaces(t *testing.T) {
 	}
 }
 
+// withIdentity sets the process identity for a test and restores the legacy
+// (identity-less) behaviour afterwards. Identity is process-wide, so these tests
+// must not run in parallel.
+func withIdentity(t *testing.T, substrate, instanceID string) {
+	t.Helper()
+	SetIdentity(substrate, instanceID)
+	t.Cleanup(func() { SetIdentity("", "") })
+}
+
+func TestIdentityLabelsOnCreatedNamespace(t *testing.T) {
+	withIdentity(t, "gcp", "gcp-substrate-1")
+	client := fake.NewSimpleClientset()
+	ctx := context.Background()
+
+	created, err := EnsureManagedNamespace(ctx, client, "gcp-dataproc-p-c1-cafebabe", "dataproc")
+	if err != nil || !created {
+		t.Fatalf("EnsureManagedNamespace = %v, %v; want true, nil", created, err)
+	}
+	ns, err := client.CoreV1().Namespaces().Get(ctx, "gcp-dataproc-p-c1-cafebabe", metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("namespace not created: %v", err)
+	}
+	for key, want := range map[string]string{
+		managedByLabel: ManagedByValue,
+		serviceLabel:   "dataproc",
+		substrateLabel: "gcp",
+		instanceLabel:  "gcp-substrate-1",
+	} {
+		if got := ns.Labels[key]; got != want {
+			t.Errorf("label %s = %q; want %q (labels %v)", key, got, want, ns.Labels)
+		}
+	}
+	if !IsManagedNamespace(ns, "dataproc") {
+		t.Fatalf("identity-labelled namespace is not managed: %v", ns.Labels)
+	}
+
+	// The workload path (EnsureNamespace/EnsureWorkload) stamps the same identity
+	// and omits the service label rather than writing an empty value.
+	labels := OwnerNamespaceLabels("")
+	if labels[substrateLabel] != "gcp" || labels[instanceLabel] != "gcp-substrate-1" {
+		t.Fatalf("OwnerNamespaceLabels(\"\") = %v; want substrate/instance labels", labels)
+	}
+	if _, ok := labels[serviceLabel]; ok {
+		t.Fatalf("OwnerNamespaceLabels(\"\") wrote an empty service label: %v", labels)
+	}
+}
+
+func TestIdentityLabelValueSanitizedAndTruncated(t *testing.T) {
+	withIdentity(t, "gcp", "GCP_Instance.ONE/with-a-very-long-suffix-0123456789012345678901234567890123456789")
+	labels := OwnerNamespaceLabels("dataproc")
+	got := labels[instanceLabel]
+	if len(got) > maxLabelValueLength {
+		t.Fatalf("instance label %q is %d chars, over %d", got, len(got), maxLabelValueLength)
+	}
+	if !dns1123Label.MatchString(got) {
+		t.Fatalf("instance label %q is not a valid label value", got)
+	}
+}
+
+func TestIdentityScopesListAndDelete(t *testing.T) {
+	client := fake.NewSimpleClientset()
+
+	// Seed one namespace per substrate with the labels that substrate's emulator
+	// would stamp. OwnerNamespaceLabels is process-wide, so build the maps
+	// explicitly (switching identity mid-test would relabel both).
+	awsLabels := map[string]string{
+		managedByLabel: ManagedByValue,
+		serviceLabel:   "dataproc",
+		substrateLabel: "aws",
+		instanceLabel:  "aws-substrate-1",
+	}
+	gcpLabels := map[string]string{
+		managedByLabel: ManagedByValue,
+		serviceLabel:   "dataproc",
+		substrateLabel: "gcp",
+		instanceLabel:  "gcp-substrate-1",
+	}
+	if _, err := client.CoreV1().Namespaces().Create(context.Background(), &corev1.Namespace{
+		ObjectMeta: metav1.ObjectMeta{Name: "aws-dp-1", Labels: awsLabels},
+	}, metav1.CreateOptions{}); err != nil {
+		t.Fatalf("seed aws namespace: %v", err)
+	}
+	if _, err := client.CoreV1().Namespaces().Create(context.Background(), &corev1.Namespace{
+		ObjectMeta: metav1.ObjectMeta{Name: "gcp-dp-1", Labels: gcpLabels},
+	}, metav1.CreateOptions{}); err != nil {
+		t.Fatalf("seed gcp namespace: %v", err)
+	}
+
+	withIdentity(t, "aws", "aws-substrate-1")
+	ctx := context.Background()
+
+	names, err := ListManagedNamespaces(ctx, client, "dataproc")
+	if err != nil {
+		t.Fatalf("ListManagedNamespaces: %v", err)
+	}
+	if len(names) != 1 || names[0] != "aws-dp-1" {
+		t.Fatalf("ListManagedNamespaces = %v; want only the aws namespace", names)
+	}
+
+	deleted, err := DeleteManagedNamespace(ctx, client, "gcp-dp-1", "dataproc")
+	if err != nil || deleted {
+		t.Fatalf("DeleteManagedNamespace(other substrate) = %v, %v; want false, nil", deleted, err)
+	}
+	if _, err := client.CoreV1().Namespaces().Get(ctx, "gcp-dp-1", metav1.GetOptions{}); err != nil {
+		t.Fatal("the other substrate's namespace was deleted")
+	}
+
+	deleted, err = DeleteManagedNamespace(ctx, client, "aws-dp-1", "dataproc")
+	if err != nil || !deleted {
+		t.Fatalf("DeleteManagedNamespace(own) = %v, %v; want true, nil", deleted, err)
+	}
+
+	// A sweep must also leave the other substrate alone (and, with this
+	// identity, cannot even see it: nothing left to delete).
+	n, err := SweepManagedNamespaces(ctx, client, "dataproc")
+	if err != nil || n != 0 {
+		t.Fatalf("SweepManagedNamespaces = %d, %v; want 0, nil", n, err)
+	}
+	if _, err := client.CoreV1().Namespaces().Get(ctx, "gcp-dp-1", metav1.GetOptions{}); err != nil {
+		t.Fatal("the sweep deleted the other substrate's namespace")
+	}
+}
+
+func TestIdentityEmptyRestoresLegacyBehaviour(t *testing.T) {
+	withIdentity(t, "aws", "aws-substrate-1")
+	SetIdentity("", "")
+
+	client := fake.NewSimpleClientset()
+	ctx := context.Background()
+	created, err := EnsureManagedNamespace(ctx, client, "gcp-dataproc-p-c1-feedf00d", "dataproc")
+	if err != nil || !created {
+		t.Fatalf("EnsureManagedNamespace = %v, %v; want true, nil", created, err)
+	}
+	ns, err := client.CoreV1().Namespaces().Get(ctx, "gcp-dataproc-p-c1-feedf00d", metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("namespace not created: %v", err)
+	}
+	if _, ok := ns.Labels[substrateLabel]; ok {
+		t.Fatalf("substrate label written without an identity: %v", ns.Labels)
+	}
+	if _, ok := ns.Labels[instanceLabel]; ok {
+		t.Fatalf("instance label written without an identity: %v", ns.Labels)
+	}
+	// A pre-identity namespace (managed-by + service only) is managed again.
+	legacy := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{
+		Name:   "legacy",
+		Labels: map[string]string{managedByLabel: ManagedByValue, serviceLabel: "dataproc"},
+	}}
+	if !IsManagedNamespace(legacy, "dataproc") {
+		t.Fatal("legacy namespace is not managed without an identity")
+	}
+	names, err := ListManagedNamespaces(ctx, client, "dataproc")
+	if err != nil || len(names) != 1 || names[0] != "gcp-dataproc-p-c1-feedf00d" {
+		t.Fatalf("ListManagedNamespaces = %v, %v; want the created namespace", names, err)
+	}
+}
+
+func TestBackfillIdentityLabels(t *testing.T) {
+	client := fake.NewSimpleClientset(
+		// Created by a pre-upgrade emulator: ownership labels, no identity.
+		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{
+			Name:   "gcp-dataproc-p-c1-0123abcd",
+			Labels: map[string]string{managedByLabel: ManagedByValue, serviceLabel: "dataproc"},
+		}},
+		// Adopted: no ownership label, must never be relabelled.
+		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{
+			Name:   "shared",
+			Labels: map[string]string{"team": "platform"},
+		}},
+		// Another substrate's namespace: must not be claimed.
+		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{
+			Name: "gcp-dataproc-p-c1-99999999",
+			Labels: map[string]string{
+				managedByLabel: ManagedByValue,
+				serviceLabel:   "dataproc",
+				substrateLabel: "aws",
+				instanceLabel:  "aws-substrate-1",
+			},
+		}},
+	)
+	ctx := context.Background()
+	withIdentity(t, "gcp", "gcp-substrate-1")
+
+	created, err := EnsureManagedNamespace(ctx, client, "gcp-dataproc-p-c1-0123abcd", "dataproc")
+	if err != nil || created {
+		t.Fatalf("EnsureManagedNamespace(pre-upgrade) = %v, %v; want false, nil", created, err)
+	}
+	ns, err := client.CoreV1().Namespaces().Get(ctx, "gcp-dataproc-p-c1-0123abcd", metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("namespace read: %v", err)
+	}
+	if ns.Labels[substrateLabel] != "gcp" || ns.Labels[instanceLabel] != "gcp-substrate-1" {
+		t.Fatalf("identity labels not backfilled: %v", ns.Labels)
+	}
+	if !IsManagedNamespace(ns, "dataproc") {
+		t.Fatal("backfilled namespace is still not managed")
+	}
+
+	for name, want := range map[string]map[string]string{
+		"shared":                     {"team": "platform"},
+		"gcp-dataproc-p-c1-99999999": {managedByLabel: ManagedByValue, serviceLabel: "dataproc", substrateLabel: "aws", instanceLabel: "aws-substrate-1"},
+	} {
+		if _, err := EnsureManagedNamespace(ctx, client, name, "dataproc"); err != nil {
+			t.Fatalf("EnsureManagedNamespace(%s): %v", name, err)
+		}
+		got, err := client.CoreV1().Namespaces().Get(ctx, name, metav1.GetOptions{})
+		if err != nil {
+			t.Fatalf("namespace %s read: %v", name, err)
+		}
+		for k, v := range want {
+			if got.Labels[k] != v {
+				t.Fatalf("%s label %s = %q; want %q (labels %v)", name, k, got.Labels[k], v, got.Labels)
+			}
+		}
+		if _, ok := got.Labels[instanceLabel]; ok && got.Labels[instanceLabel] == "gcp-substrate-1" {
+			t.Fatalf("%s was relabelled with this instance's identity: %v", name, got.Labels)
+		}
+	}
+}
+
 func TestEnsureNamespaceRBACForSubjects(t *testing.T) {
 	client := fake.NewSimpleClientset()
 	ctx := context.Background()

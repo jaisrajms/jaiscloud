@@ -1,0 +1,149 @@
+---
+# Dual-substrate namespace isolation (DLC4, K8s >= 1.30).
+#
+# Both substrate ServiceAccounts hold `jaiscloud-namespace-admin`, a
+# cluster-scoped ClusterRole that includes namespace create/update/delete: Dataproc
+# clusters and Managed Kafka brokers own a namespace each, and teardown deletes
+# it. RBAC cannot scope a delete by label, so before this policy either substrate
+# *could* delete the other's namespace. This ValidatingAdmissionPolicy is the
+# boundary: a namespace request made by a substrate identity must carry
+# `jaiscloud.io/managed-by=jaiscloud` and that caller's own
+# `jaiscloud.io/substrate` label.
+#
+# Scope: only the two JaisCloud ServiceAccounts (matchConditions). An operator's
+# kubectl (`deploy/deploy.sh --reset`, `kubectl delete namespace jaiscloud`) is
+# not affected, so the documented reset paths keep working.
+#
+# Cluster prerequisite: Kubernetes >= 1.30 (ValidatingAdmissionPolicy is GA in
+# 1.30). deploy.sh refuses to install without it; the preflight reports
+# rbac.admissionPolicy and scripts/rbac-isolation-gate.sh proves the deny.
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: jaiscloud-namespace-isolation
+  labels:
+    app.kubernetes.io/part-of: jaiscloud
+    jaiscloud.io/component: isolation
+spec:
+  # Fail closed: if the policy cannot be evaluated the request is rejected. A
+  # namespace delete is destructive and label-scoped, so "unknown" must not mean
+  # "allow".
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      # A namespace is cluster-scoped; the emulator creates it with its ownership
+      # and identity labels and deletes only what it created.
+      - apiGroups: [""]
+        apiVersions: ["v1"]
+        operations: ["CREATE", "UPDATE", "DELETE"]
+        resources: ["namespaces"]
+        scope: Cluster
+      # The executor RoleBinding created per managed namespace. Creation is
+      # guarded best-effort: a ValidatingAdmissionPolicy cannot read the target
+      # Namespace's labels, so this only proves the request was made by a
+      # JaisCloud identity and carries that identity's substrate label.
+      - apiGroups: ["rbac.authorization.k8s.io"]
+        apiVersions: ["v1"]
+        operations: ["CREATE", "UPDATE"]
+        resources: ["rolebindings"]
+        scope: Namespaced
+  matchConditions:
+    - name: jaiscloud-substrate-serviceaccount
+      expression: >-
+        request.userInfo.username == 'system:serviceaccount:jaiscloud:jaiscloud' ||
+        request.userInfo.username == 'system:serviceaccount:jaiscloud-gcp:jaiscloud-gcp'
+  variables:
+    # The substrate the caller speaks for. matchConditions restricts the usernames
+    # to the two known identities, so the negative arm is the GCP substrate.
+    - name: substrate
+      expression: >-
+        request.userInfo.username == 'system:serviceaccount:jaiscloud:jaiscloud'
+        ? 'aws' : 'gcp'
+  validations:
+    # Namespace CREATE: the caller's own ownership + substrate labels are
+    # required. `object.metadata.labels != null` is the null-safe guard (a
+    # request without labels has no map to test membership in).
+    - expression: >-
+        request.operation != 'CREATE' ||
+        request.resource.resource != 'namespaces' ||
+        (object.metadata.labels != null &&
+         'jaiscloud.io/managed-by' in object.metadata.labels &&
+         object.metadata.labels['jaiscloud.io/managed-by'] == 'jaiscloud' &&
+         'jaiscloud.io/substrate' in object.metadata.labels &&
+         object.metadata.labels['jaiscloud.io/substrate'] == variables.substrate)
+      message: >-
+        namespace isolation: a JaisCloud-created namespace must carry
+        jaiscloud.io/managed-by=jaiscloud and jaiscloud.io/substrate equal to the
+        caller's substrate.
+
+    # Namespace DELETE: only a namespace that carries this caller's own labels
+    # may be deleted. This is what stops one substrate from deleting the other's
+    # per-cluster/broker namespaces.
+    - expression: >-
+        request.operation != 'DELETE' ||
+        request.resource.resource != 'namespaces' ||
+        (oldObject.metadata.labels != null &&
+         'jaiscloud.io/managed-by' in oldObject.metadata.labels &&
+         oldObject.metadata.labels['jaiscloud.io/managed-by'] == 'jaiscloud' &&
+         'jaiscloud.io/substrate' in oldObject.metadata.labels &&
+         oldObject.metadata.labels['jaiscloud.io/substrate'] == variables.substrate)
+      message: >-
+        namespace isolation: this namespace is not labelled as owned by the
+        caller's substrate (jaiscloud.io/substrate), so it cannot be deleted.
+
+    # Namespace UPDATE/PATCH: the namespace must already be emulator-owned and
+    # must not belong to another substrate, and the new object must carry the
+    # caller's own labels.
+    #
+    # The old-substrate test deliberately allows a *missing* substrate label: that
+    # is the pre-upgrade namespace the emulator backfills in place
+    # (k8shelpers.backfillIdentityLabels) when it next ensures it. A namespace
+    # that already carries a substrate label is locked to it, so the other
+    # substrate can neither relabel it as its own nor delete it.
+    - expression: >-
+        request.operation != 'UPDATE' ||
+        request.resource.resource != 'namespaces' ||
+        (oldObject.metadata.labels != null &&
+         'jaiscloud.io/managed-by' in oldObject.metadata.labels &&
+         oldObject.metadata.labels['jaiscloud.io/managed-by'] == 'jaiscloud' &&
+         (!('jaiscloud.io/substrate' in oldObject.metadata.labels) ||
+          oldObject.metadata.labels['jaiscloud.io/substrate'] == variables.substrate) &&
+         object.metadata.labels != null &&
+         'jaiscloud.io/managed-by' in object.metadata.labels &&
+         object.metadata.labels['jaiscloud.io/managed-by'] == 'jaiscloud' &&
+         'jaiscloud.io/substrate' in object.metadata.labels &&
+         object.metadata.labels['jaiscloud.io/substrate'] == variables.substrate)
+      message: >-
+        namespace isolation: a namespace can only be updated by the substrate
+        that owns it; a namespace labelled with the other substrate cannot be
+        relabelled or claimed.
+
+    # RoleBinding CREATE/UPDATE: the executor RoleBinding a substrate creates in
+    # a managed namespace must carry the same ownership/identity labels. This
+    # does not prove which namespace the binding lives in (a policy cannot read
+    # the Namespace object); it is a consistency guard for the emulator's own
+    # writes, not the namespace boundary itself.
+    - expression: >-
+        request.resource.resource != 'rolebindings' ||
+        (object.metadata.labels != null &&
+         'jaiscloud.io/managed-by' in object.metadata.labels &&
+         object.metadata.labels['jaiscloud.io/managed-by'] == 'jaiscloud' &&
+         'jaiscloud.io/substrate' in object.metadata.labels &&
+         object.metadata.labels['jaiscloud.io/substrate'] == variables.substrate)
+      message: >-
+        namespace isolation: a RoleBinding created by a JaisCloud substrate must
+        carry jaiscloud.io/managed-by=jaiscloud and its own
+        jaiscloud.io/substrate label.
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: jaiscloud-namespace-isolation
+  labels:
+    app.kubernetes.io/part-of: jaiscloud
+    jaiscloud.io/component: isolation
+spec:
+  policyName: jaiscloud-namespace-isolation
+  # Deny (not Warn/Audit): the policy is the enforcement, so a violating request
+  # fails. The policy itself is fail-closed (failurePolicy: Fail).
+  validationActions: ["Deny"]

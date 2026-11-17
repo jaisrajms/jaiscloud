@@ -9,6 +9,7 @@ metadata:
     - deploy/k8s/namespace.yaml
     - deploy/k8s/postgres.yaml
     - deploy/k8s/rbac.yaml
+    - deploy/k8s/rbac-admission-policy.yaml
     - deploy/k8s/jaiscloud.yaml
     - deploy/k8s/jaiscloud-gcp.yaml
   notes: Images, ports, env and claims are the manifest defaults. Secret values are deliberately omitted (key names only). Run make check-integration-contract after changing a manifest.
@@ -67,6 +68,16 @@ topology:
         app.kubernetes.io/part-of: jaiscloud
         jaiscloud.io/role: substrate
         jaiscloud.io/substrate: gcp
+    - kind: ValidatingAdmissionPolicy
+      name: jaiscloud-namespace-isolation
+      labels:
+        app.kubernetes.io/part-of: jaiscloud
+        jaiscloud.io/component: isolation
+    - kind: ValidatingAdmissionPolicyBinding
+      name: jaiscloud-namespace-isolation
+      labels:
+        app.kubernetes.io/part-of: jaiscloud
+        jaiscloud.io/component: isolation
     - kind: ConfigMap
       name: jaiscloud-config
       namespace: jaiscloud
@@ -434,6 +445,8 @@ playbook:
       why: the glob includes dns.yaml, which intentionally contains no Kubernetes objects
     - action: Expose port 443 on the GCP Service by default
       why: TLS terminates at the front door; the pod's own HTTPS listener is REST-only and cluster-internal
+    - action: Remove, weaken or bypass the jaiscloud-namespace-isolation policy
+      why: both substrate ServiceAccounts hold cluster-wide namespace delete; the ValidatingAdmissionPolicy is the only boundary between their per-cluster namespaces
     - action: Edit a manifest in a running cluster by hand
       why: deploy.sh/up-k8s apply the repository manifests; changes drift and check-deploy-images/contract checks will not see them
   failure_taxonomy:
@@ -446,6 +459,9 @@ playbook:
     - cause: older image against a store migrated by a newer build
       fix: run the same release that migrated the store, or restore the store from a backup
       symptom: CrashLoopBackOff with 'applied migration count N is ahead of this binary M'
+    - cause: an emulator build predates the substrate/instance labels, or the request is for a namespace labelled with the other substrate
+      fix: run an image that stamps jaiscloud.io/substrate + jaiscloud.io/instance-id; a pre-upgrade namespace is backfilled when next ensured. Do not remove the policy.
+      symptom: namespace create/delete denied by 'jaiscloud-namespace-isolation'
     - cause: per-cluster RBAC not applied or the resolved ServiceAccount is wrong
       fix: kubectl apply -f deploy/k8s/rbac.yaml; verify JAISCLOUD_K8S_SA / _NAMESPACE (the emulator resolves them from env or the projected token)
       symptom: driver/broker Pods Forbidden
@@ -505,6 +521,33 @@ playbook:
       degraded: 'probe-only: present and scaled up, but nothing is available'
       parked: Deployment scaled to spec.replicas=0; namespaces, PVCs, databases and state survive
       running: Deployment present, spec.replicas > 0, availableReplicas >= 1
+  platform:
+    kubernetes:
+      check: 'deploy/deploy.sh --check --json   # rbac.serverVersion + rbac.admissionPolicy'
+      enforced_by: deploy/deploy.sh require_isolation_prereqs() — refuses install/reset/migrate on < 1.30 or when the VAP API is missing
+      minimum_version: "1.30"
+      reason: ValidatingAdmissionPolicy (admissionregistration.k8s.io/v1) is GA in 1.30; RBAC cannot scope a namespace delete by label.
+    rbac:
+      admission_policy:
+        apply: 'kubectl apply -f deploy/k8s/rbac-admission-policy.yaml   # idempotent; deploy.sh applies it on every install path'
+        gate: 'GATE_ALLOW_RBAC=1 KUBE_CONTEXT=<ctx> make test-rbac-isolation-k8s   # server-side dry runs: allow own, deny the other''s, both directions'
+        limitation: Admission cannot read the target Namespace's labels, so the RoleBinding rule is a write-shape guard, not the namespace boundary.
+        mode: 'failurePolicy: Fail, validationActions: [Deny], matched only to the two substrate ServiceAccounts'
+        namespace_rules:
+          create: must carry jaiscloud.io/managed-by=jaiscloud and jaiscloud.io/substrate=<caller's substrate>
+          delete: oldObject must carry jaiscloud.io/managed-by=jaiscloud and the caller's jaiscloud.io/substrate
+          update: the old AND new object must carry the caller's labels — another substrate's namespace cannot be relabelled or claimed
+        object: ValidatingAdmissionPolicy + ValidatingAdmissionPolicyBinding jaiscloud-namespace-isolation (deploy/k8s/rbac-admission-policy.yaml)
+        operator_paths: The policy matches only the two ServiceAccounts; kubectl applied by the operator (including --reset deleting the jaiscloud namespace) is unaffected.
+        rolebinding_rule: create/update must carry jaiscloud.io/managed-by=jaiscloud and the caller's substrate label
+        verify: 'deploy/deploy.sh --check --json   # rbac.admissionPolicy=true'
+      namespace_admin:
+        grants: namespaces get/list/watch/create/update/patch/delete (update/patch for identity-label backfill; the admission policy keeps it to owned namespaces) + rolebindings get/list/create/update/delete, cluster-wide
+        object: ClusterRole/ClusterRoleBinding jaiscloud-namespace-admin
+        subjects:
+          - system:serviceaccount:jaiscloud:jaiscloud (aws)
+          - system:serviceaccount:jaiscloud-gcp:jaiscloud-gcp (gcp)
+        why: Dataproc creates one namespace per cluster and Managed Kafka one per broker; both substrates need it.
   prerequisites:
     - check: kubectl version --client
       id: kubectl
@@ -517,6 +560,9 @@ playbook:
     - check: kubectl config current-context
       id: cluster-kind
       note: kind/k3d nodes cannot see the host's image store; deploy.sh loads built images for those contexts.
+    - check: 'kubectl version -o json   # parse serverVersion.minor (>= 30)'
+      id: kubernetes-version
+      note: Dual-substrate namespace isolation is a ValidatingAdmissionPolicy (GA in 1.30); deploy.sh refuses an older server before creating anything.
   scenarios:
     custom-images:
       steps:
@@ -677,6 +723,7 @@ playbook:
         - check-deploy-images
         - test-istio-smoke
         - test-dual-substrate-k8s
+        - test-rbac-isolation-k8s
         - gcp-ci-preflight
   verification:
     - expect: jaiscloud (substrate/aws), jaiscloud-gcp (substrate/gcp), jaiscloud-data (data)
@@ -698,4 +745,7 @@ playbook:
       expect: 13/13 passed; destructive (drops the AWS database)
       id: isolation-gate
       run: KUBE_CONTEXT=<ctx> ALLOW_RESET=1 make test-dual-substrate-k8s
+    - expect: '11/11 passed: each substrate ServiceAccount may delete only its own labelled namespace, cannot relabel the other''s, may backfill a pre-upgrade namespace, and an unlabelled RoleBinding is denied (server-side dry runs, no install change)'
+      id: rbac-isolation
+      run: GATE_ALLOW_RBAC=1 KUBE_CONTEXT=<ctx> make test-rbac-isolation-k8s
   version: 1

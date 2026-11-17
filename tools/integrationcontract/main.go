@@ -37,6 +37,7 @@ var defaultManifests = []string{
 	"deploy/k8s/namespace.yaml",
 	"deploy/k8s/postgres.yaml",
 	"deploy/k8s/rbac.yaml",
+	"deploy/k8s/rbac-admission-policy.yaml",
 	"deploy/k8s/jaiscloud.yaml",
 	"deploy/k8s/jaiscloud-gcp.yaml",
 }

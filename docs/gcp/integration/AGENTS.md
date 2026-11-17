@@ -55,6 +55,11 @@ manifest disagree, the manifest wins — regenerate with
 - **Never rewrite `:authority`/`Host`** in the mesh. Never apply
   `deploy/k8s/istio/*.yaml` (the glob includes object-less `dns.yaml`).
 - **Do not delete `jaiscloud-data`** or its PVC. It is both substrates' store.
+- **Do not remove or weaken `jaiscloud-namespace-isolation`.** Both substrate
+  ServiceAccounts hold cluster-wide namespace delete; that ValidatingAdmissionPolicy
+  (K8s >= 1.30) is the only thing keeping one substrate out of the other's
+  per-cluster namespaces. If it is missing, apply
+  `deploy/k8s/rbac-admission-policy.yaml` instead of proceeding.
 - **Keep the standalone path true**: no step may make the mesh, RBAC or Postgres
   required to start the emulator.
 
@@ -68,6 +73,8 @@ manifest disagree, the manifest wins — regenerate with
 | legacy pre-split layout? | preflight `legacy.postgresInAws` / `legacy.gcpInAws` |
 | is the store already at the new layout? | preflight `store.present` / `store.databases` |
 | is the mesh installed? | preflight `mesh.installed` |
+| is the cluster new enough to enforce the namespace boundary? | preflight `rbac.serverVersion` (needs >= 1.30) |
+| is namespace isolation enforced? | preflight `rbac.admissionPolicy` (the ValidatingAdmissionPolicy) and `rbac.namespaceAdmin` (the cluster role binding for both substrate ServiceAccounts) |
 | image strategy | published image (default) or your own (`custom-images`) |
 | executors needed? | only if tests submit Dataproc/Kafka/Cloud Run/function work |
 
@@ -80,10 +87,17 @@ deploy/deploy.sh --check --json
 │   ├─ only GCP tests? ............................. new-install-gcp
 │   └─ both substrates? ............................ new-install-both
 ├─ store ready, substrate missing .................. deploy that substrate
+├─ rbac.admissionPolicy=false (a substrate exists) . install-rbac-policy (K8s >= 1.30; non-optional)
 ├─ substrates ready, need external real hostnames .. mesh
 ├─ Dataproc/Kafka/Cloud Run jobs fail .............. executors (rbac + spark image)
 └─ nothing to do ................................... verify + stop
 ```
+
+A missing policy is a non-optional recommendation: `deploy/deploy.sh` (any
+install/reset path) applies `deploy/k8s/rbac-admission-policy.yaml` for you, and
+refuses to run on Kubernetes < 1.30. If the server is older, the warning says so
+and the cluster cannot enforce the policy — upgrade the cluster (or run each
+substrate on its own) rather than removing the check.
 
 ## Scenario 1 — new install (GCP only)
 
@@ -180,7 +194,9 @@ One namespace and one `JAISCLOUD_INSTANCE_ID` per instance. The shipped manifest
 pin single values because they describe one deployment; copy them and change both
 for a shared cluster, otherwise one instance's startup sweep can reap another's
 Pods (the sweep only sees its own IDs, but the namespace/DB pair is the real
-boundary).
+boundary). Namespaces the emulator creates are stamped with the instance ID and
+substrate, and the admission policy refuses a namespace request from a substrate
+ServiceAccount that does not carry its own identity.
 
 ## Tooling summary
 
@@ -194,5 +210,6 @@ boundary).
 | migrate | `deploy/deploy.sh --migrate-store --yes` |
 | delete workloads (keep data) | `deploy/deploy.sh --delete` |
 | resets (destructive, scoped) | `--reset` (AWS) / `--gcp-reset` (GCP) |
+| namespace boundary | preflight `rbac.*`; `GATE_ALLOW_RBAC=1 KUBE_CONTEXT=<ctx> make test-rbac-isolation-k8s` (server-side dry runs, K8s >= 1.30) |
 | gates | `make check-deploy-images`, `make check-integration-contract`, `make test-istio-smoke`, `ALLOW_RESET=1 make test-dual-substrate-k8s`, `make gcp-ci-preflight` |
 | emulator state API | `GET /_jaiscloud/health`, `GET /_jaiscloud/doctor`, `POST /_jaiscloud/reset`, `GET /_jaiscloud/export`, `POST /_jaiscloud/import`, `POST /_jaiscloud/clock` |

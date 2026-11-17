@@ -26,6 +26,14 @@
 #   recommended, and a non-installed cloud with objects in the cluster is
 #   reported as a leak warning.
 #
+# RBAC/namespace isolation:
+#   Both substrate ServiceAccounts hold cluster-wide namespace delete; the
+#   namespace boundary between them is the ValidatingAdmissionPolicy
+#   jaiscloud-namespace-isolation (K8s >= 1.30). The JSON reports
+#   rbac.namespaceAdmin, rbac.admissionPolicy and rbac.serverVersion, and a
+#   missing policy on a cluster with a substrate is a warning plus a
+#   non-optional install-rbac-policy recommendation (so --strict fails).
+#
 # Also reachable as: deploy/deploy.sh --check [--json] [--strict]
 #                    [--substrate ...] [--desired ...]
 #
@@ -250,6 +258,29 @@ if ! kc cluster-info >/dev/null 2>&1; then
   exit 1
 fi
 
+# ── platform: Kubernetes version + the namespace-isolation objects ──────────
+# Both substrate ServiceAccounts hold cluster-wide namespace delete; the
+# ValidatingAdmissionPolicy (K8s >= 1.30) is the boundary between them. This is a
+# read-only probe: `kubectl get`/`kubectl version` only.
+SERVER_INFO=$(kc version -o json 2>/dev/null || true)
+SERVER_INFO=$(printf '%s' "$SERVER_INFO" | tr -d '[:space:]')
+SERVER_VERSION=$(printf '%s' "$SERVER_INFO" | sed -n 's/.*"serverVersion":{[^}]*"gitVersion":"\([^"]*\)".*/\1/p')
+SERVER_MINOR=$(printf '%s' "$SERVER_INFO" | sed -n 's/.*"serverVersion":{[^}]*"minor":"\([^"]*\)".*/\1/p')
+if [[ -z "$SERVER_VERSION" ]]; then
+  # Older/newer kubectl may not print serverVersion in `version -o json`.
+  SERVER_VERSION=$(kc get --raw /version 2>/dev/null \
+    | tr -d '[:space:]' | sed -n 's/.*"gitVersion":"\([^"]*\)".*/\1/p' || true)
+fi
+if [[ -z "$SERVER_MINOR" ]]; then
+  SERVER_MINOR=$(kc get --raw /version 2>/dev/null \
+    | tr -d '[:space:]' | sed -n 's/.*"minor":"\([^"]*\)".*/\1/p' || true)
+fi
+SERVER_MINOR=${SERVER_MINOR//[!0-9]/}
+SERVER_OLD=0
+if [[ -n "$SERVER_MINOR" ]] && (( SERVER_MINOR < 30 )); then SERVER_OLD=1; fi
+VAP_PRESENT=$(probe_ok kc get validatingadmissionpolicy jaiscloud-namespace-isolation)
+NAMESPACE_ADMIN_PRESENT=$(probe_ok kc get clusterrolebinding jaiscloud-namespace-admin)
+
 NS_AWS_P=$(ns_present "$NS_AWS"); NS_GCP_P=$(ns_present "$NS_GCP"); NS_DATA_P=$(ns_present "$NS_DATA")
 ROLE_AWS=$(field "" namespace "$NS_AWS" '{{index .metadata.labels "jaiscloud.io/role"}}' 2>/dev/null || true)
 [[ -z "$ROLE_AWS" ]] && ROLE_AWS=""
@@ -281,6 +312,12 @@ GCP_PRIVATE=$(private_registry "$GCP_IMAGE")
 GCP_STATE=$(substrate_state "$NS_GCP" jaiscloud-gcp "$GCP_PRESENT")
 GCP_REPLICAS=$(deployment_replicas "$NS_GCP" jaiscloud-gcp "$GCP_PRESENT")
 GCP_IMAGE_ID=$(pod_image_id "$NS_GCP" jaiscloud-gcp)
+
+# A substrate is present when either substrate namespace or Deployment exists:
+# the namespace-admin binding is cluster-wide, so isolation matters even for a
+# parked or half-removed install.
+SUBSTRATE_PRESENT=0
+[[ "$AWS_PRESENT" == "1" || "$GCP_PRESENT" == "1" || "$NS_AWS_P" == "1" || "$NS_GCP_P" == "1" ]] && SUBSTRATE_PRESENT=1
 
 # ── intent: flag > install record (jaiscloud-data/jaiscloud-install) > inferred ─
 RECORD_PRESENT=$(probe_ok kc -n "$NS_DATA" get configmap jaiscloud-install)
@@ -378,6 +415,17 @@ SKEW_GCP=$(migration_skew_warning "$NS_GCP" jaiscloud-gcp)
 [[ "$STORE_DEPLOY" == "0" && -n "$STORE_PVC" ]] && \
   warn_add "pvc postgres-pvc exists in $NS_DATA but deployment/postgres is missing"
 for leak in ${LEAKS+"${LEAKS[@]}"}; do warn_add "$leak"; done
+if [[ "$SUBSTRATE_PRESENT" == "1" && "$VAP_PRESENT" == "0" ]]; then
+  if [[ "$SERVER_OLD" == "1" ]]; then
+    warn_add "namespace isolation is not enforced: Kubernetes 1.$SERVER_MINOR predates ValidatingAdmissionPolicy (>= 1.30), so this cluster cannot enforce deploy/k8s/rbac-admission-policy.yaml and one substrate can delete the other's namespaces"
+    rec_add "install-rbac-policy" "kubectl apply -f deploy/k8s/rbac-admission-policy.yaml" \
+      "namespace isolation is not enforced; upgrade to Kubernetes >= 1.30 (server is 1.$SERVER_MINOR) and apply the policy" "false"
+  else
+    warn_add "namespace isolation is not enforced: ValidatingAdmissionPolicy jaiscloud-namespace-isolation is missing; one substrate can delete the other's namespaces"
+    rec_add "install-rbac-policy" "kubectl apply -f deploy/k8s/rbac-admission-policy.yaml" \
+      "namespace isolation is not enforced (K8s >= 1.30 required); apply the policy" "false"
+  fi
+fi
 
 # Recommendations are relative to intent: only an installed cloud is ever told
 # to deploy, and it is non-optional when it is absent. Clouds outside the
@@ -497,6 +545,8 @@ if [[ "$JSON" == "1" ]]; then
   printf '  "mesh": {"namespace": %s, "istiod": %s, "ingressGateway": %s, "tlsSecret": %s, "crds": %s, "gateway": %s, "virtualServices": %s, "destinationRules": %s, "address": "%s"},\n' \
     "$(b "$MESH_NS")" "$(b "$MESH_ISTIOD")" "$(b "$MESH_GATEWAY")" "$(b "$MESH_SECRET")" "$(b "$MESH_CRD")" \
     "$(b "$MESH_GW")" "${MESH_VS:-0}" "${MESH_DR:-0}" "$(json_escape "$MESH_ADDR")"
+  printf '  "rbac": {"namespaceAdmin": %s, "admissionPolicy": %s, "serverVersion": "%s"},\n' \
+    "$(b "$NAMESPACE_ADMIN_PRESENT")" "$(b "$VAP_PRESENT")" "$(json_escape "$SERVER_VERSION")"
   printf '  "warnings": ['
   first=1
   for w in ${WARNINGS+"${WARNINGS[@]}"}; do
@@ -546,6 +596,20 @@ else
     ok_ "gcp: state=$GCP_STATE replicas=$GCP_REPLICAS $GCP_IMAGE ready=$([[ "$GCP_READY" == "1" ]] && echo yes || echo no) pull=$GCP_PULL${GCP_IMAGE_ID:+ imageID=$GCP_IMAGE_ID}"
   else
     miss_ "gcp: state=$GCP_STATE $NS_GCP/deployment/jaiscloud-gcp"
+  fi
+  head_ "rbac"
+  say "  server     ${SERVER_VERSION:-unknown}"
+  if [[ "$NAMESPACE_ADMIN_PRESENT" == "1" ]]; then
+    ok_ "clusterrolebinding jaiscloud-namespace-admin (both substrate ServiceAccounts)"
+  else
+    miss_ "clusterrolebinding jaiscloud-namespace-admin"
+  fi
+  if [[ "$VAP_PRESENT" == "1" ]]; then
+    ok_ "ValidatingAdmissionPolicy jaiscloud-namespace-isolation enforces the namespace boundary"
+  elif [[ "$SERVER_OLD" == "1" ]]; then
+    miss_ "ValidatingAdmissionPolicy jaiscloud-namespace-isolation (Kubernetes 1.$SERVER_MINOR cannot enforce it; >= 1.30 required)"
+  else
+    miss_ "ValidatingAdmissionPolicy jaiscloud-namespace-isolation (namespace isolation not enforced)"
   fi
   head_ "mesh (optional)"
   if [[ "$MESH_NS" == "1" ]]; then

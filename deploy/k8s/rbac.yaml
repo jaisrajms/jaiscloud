@@ -94,7 +94,13 @@ metadata:
 rules:
   - apiGroups: [""]
     resources: ["namespaces"]
-    verbs: ["get", "list", "watch", "create", "delete"]
+    # update/patch carry the identity-label backfill onto a namespace an older
+    # emulator created before jaiscloud.io/substrate + jaiscloud.io/instance-id
+    # existed. The ValidatingAdmissionPolicy jaiscloud-namespace-isolation
+    # (deploy/k8s/rbac-admission-policy.yaml) keeps this scoped: a substrate may
+    # only update a namespace that already carries its own labels, so it cannot
+    # relabel the other substrate's namespace as its own.
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
   - apiGroups: ["rbac.authorization.k8s.io"]
     resources: ["rolebindings"]
     verbs: ["get", "list", "create", "update", "delete"]

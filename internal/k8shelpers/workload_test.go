@@ -25,6 +25,42 @@ func testPod(name string, labels map[string]string) corev1.Pod {
 	}
 }
 
+func TestEnsureWorkloadNamespaceCarriesIdentity(t *testing.T) {
+	withIdentity(t, "gcp", "gcp-substrate-1")
+	client := fake.NewSimpleClientset()
+	ctx := context.Background()
+	name := "wl-identity"
+	if _, err := EnsureWorkload(ctx, client, WorkloadSpec{
+		Namespace: "jaiscloud",
+		Pod:       testPod(name, map[string]string{"app": name}),
+		Ports:     []ServicePort{{Name: "http", Port: 8080}},
+		Probe:     func(string) bool { return true },
+	}); err != nil {
+		t.Fatalf("EnsureWorkload: %v", err)
+	}
+	ns, err := client.CoreV1().Namespaces().Get(ctx, "jaiscloud", metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("namespace not created: %v", err)
+	}
+	if ns.Labels[managedByLabel] != ManagedByValue ||
+		ns.Labels[substrateLabel] != "gcp" ||
+		ns.Labels[instanceLabel] != "gcp-substrate-1" {
+		t.Fatalf("workload namespace labels = %v; want managed-by/substrate/instance", ns.Labels)
+	}
+	// The executor RoleBinding must carry the same labels: the admission policy
+	// requires the substrate label on a RoleBinding created by a substrate SA.
+	if err := EnsureNamespaceRBAC(ctx, client, "jaiscloud", "jaiscloud-gcp", "jaiscloud-gcp"); err != nil {
+		t.Fatalf("EnsureNamespaceRBAC: %v", err)
+	}
+	rb, err := client.RbacV1().RoleBindings("jaiscloud").Get(ctx, ExecutorRoleBindingName, metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("rolebinding: %v", err)
+	}
+	if rb.Labels[substrateLabel] != "gcp" || rb.Labels[managedByLabel] != ManagedByValue {
+		t.Fatalf("rolebinding labels = %v; want managed-by/substrate", rb.Labels)
+	}
+}
+
 func TestEnsureWorkloadLifecycle(t *testing.T) {
 	client := fake.NewSimpleClientset()
 	ctx := context.Background()

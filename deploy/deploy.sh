@@ -11,6 +11,10 @@
 # Requirements:
 #   - Docker Desktop with Kubernetes enabled (or any cluster `kubectl` points at)
 #   - kubectl pointing at that cluster
+#   - Kubernetes >= 1.30: the two substrate ServiceAccounts hold cluster-wide
+#     namespace delete, so namespace isolation is enforced by the
+#     ValidatingAdmissionPolicy in deploy/k8s/rbac-admission-policy.yaml (VAP is
+#     GA in 1.30). deploy.sh refuses an older cluster before creating anything.
 #
 # Usage:
 #   ./deploy/deploy.sh              # build image + apply the AWS substrate manifests
@@ -93,6 +97,10 @@ Topology (three namespaces, one Postgres server):
   jaiscloud-gcp   GCP substrate   Deployment jaiscloud-gcp, PVC jaiscloud-gcp-blobs-pvc
   jaiscloud-data  PostgreSQL      Deployment postgres, PVC postgres-pvc
                                   databases: jaiscloud (AWS), jaiscloud_gcp (GCP)
+
+Requires Kubernetes >= 1.30: both substrate ServiceAccounts hold cluster-wide
+namespace delete, so the namespace boundary between them is enforced by the
+ValidatingAdmissionPolicy in deploy/k8s/rbac-admission-policy.yaml.
 
 Usage:
   ./deploy/deploy.sh              Build the image and apply the AWS substrate
@@ -368,10 +376,57 @@ check_context() {
   fi
 }
 
+# server_minor — the Kubernetes server's minor version ("30" for v1.30.x), or ""
+# when it cannot be read. `kubectl version -o jsonpath` is not supported by every
+# kubectl ("--output must be 'yaml' or 'json'"), so the JSON is parsed with sed;
+# the raw /version endpoint is the fallback.
+server_minor() {
+  local raw minor
+  raw=$(kubectl version -o json 2>/dev/null || true)
+  minor=$(printf '%s' "$raw" | tr -d '[:space:]' \
+    | sed -n 's/.*"serverVersion":{[^}]*"minor":"\([^"]*\)".*/\1/p')
+  if [[ -z "$minor" ]]; then
+    raw=$(kubectl get --raw /version 2>/dev/null || true)
+    minor=$(printf '%s' "$raw" | tr -d '[:space:]' | sed -n 's/.*"minor":"\([^"]*\)".*/\1/p')
+  fi
+  printf '%s' "${minor//[!0-9]/}"
+}
+
+# require_isolation_prereqs — refuse to install where the dual-substrate boundary
+# cannot be enforced. Both substrate ServiceAccounts hold cluster-wide namespace
+# delete (per-cluster namespaces, Managed Kafka brokers), and RBAC cannot scope a
+# delete by label; the ValidatingAdmissionPolicy in
+# deploy/k8s/rbac-admission-policy.yaml is what keeps one substrate out of the
+# other's namespaces. It needs Kubernetes >= 1.30 (VAP GA), so this fails before
+# anything is created instead of installing a cluster with no boundary.
+require_isolation_prereqs() {
+  local minor api
+  minor=$(server_minor)
+  if [[ -z "$minor" ]]; then
+    die "cannot read the Kubernetes server version — dual-substrate isolation requires Kubernetes >= 1.30 (ValidatingAdmissionPolicy)"
+  fi
+  if (( minor < 30 )); then
+    die "JaisCloud dual-substrate isolation requires Kubernetes >= 1.30 (the server is 1.$minor): ValidatingAdmissionPolicy cannot enforce namespace isolation — upgrade the cluster, or run each substrate on its own cluster"
+  fi
+  api=$(kubectl get --raw /apis/admissionregistration.k8s.io/v1 2>/dev/null || true)
+  if [[ "$api" != *validatingadmissionpolicies* ]]; then
+    die "the cluster's admissionregistration.k8s.io/v1 API does not serve validatingadmissionpolicies — JaisCloud dual-substrate isolation requires Kubernetes >= 1.30 with ValidatingAdmissionPolicy enabled"
+  fi
+}
+
+# apply_isolation_policy — idempotent apply of the ValidatingAdmissionPolicy and
+# its binding. Applies before any namespace/executor object so every namespace a
+# substrate creates from now on is admitted under the boundary.
+apply_isolation_policy() {
+  kubectl apply -f "$K8S_DIR/rbac-admission-policy.yaml"
+}
+
 # apply_aws — rbac.yaml must be applied after namespace.yaml (it declares
 # ServiceAccounts in both substrate namespaces and cluster-scoped bindings) and
 # before the deployments that reference those identities.
 apply_aws() {
+  require_isolation_prereqs
+  apply_isolation_policy
   kubectl apply -f "$K8S_DIR/namespace.yaml"
   kubectl apply -f "$K8S_DIR/postgres.yaml"
   kubectl apply -f "$K8S_DIR/rbac.yaml"
@@ -586,6 +641,7 @@ print_plan() {
         plan "docker tag $IMAGE $AWS_MANIFEST_IMAGE"
         plan "# kind load / k3d image import when the context is kind-*/k3d-*"
       fi
+      plan "kubectl apply -f $K8S_DIR/rbac-admission-policy.yaml   # namespace isolation (K8s >= 1.30)"
       plan "kubectl apply -f $K8S_DIR/namespace.yaml"
       plan "kubectl apply -f $K8S_DIR/postgres.yaml"
       plan "kubectl apply -f $K8S_DIR/rbac.yaml"
@@ -595,6 +651,7 @@ print_plan() {
       plan_install_record "aws" "aws=running"
       ;;
     gcp)
+      plan "kubectl apply -f $K8S_DIR/rbac-admission-policy.yaml   # namespace isolation (K8s >= 1.30)"
       plan "kubectl apply -f $K8S_DIR/namespace.yaml"
       plan "kubectl apply -f $K8S_DIR/postgres.yaml"
       plan "kubectl apply -f $K8S_DIR/rbac.yaml"
@@ -610,6 +667,7 @@ print_plan() {
       plan "kubectl -n $NAMESPACE_AWS scale deployment jaiscloud --replicas=0   # when present"
       plan "kubectl -n $OLD_NS scale deployment postgres --replicas=0            # legacy GCP too, when present"
       plan "kubectl -n $OLD_NS exec deploy/postgres -- pg_dump -Fc -d jaiscloud > <tmp>"
+      plan "kubectl apply -f $K8S_DIR/rbac-admission-policy.yaml   # namespace isolation (K8s >= 1.30)"
       plan "kubectl apply -f $K8S_DIR/namespace.yaml"
       plan "kubectl apply -f $K8S_DIR/postgres.yaml"
       plan "kubectl -n $NAMESPACE_DATA exec -i deploy/postgres -- pg_restore ... -d jaiscloud < <tmp>"
@@ -623,6 +681,7 @@ print_plan() {
       plan "kubectl -n $NAMESPACE_AWS scale deployment jaiscloud --replicas=0   # when present"
       plan "kubectl -n $NAMESPACE_DATA exec deploy/postgres -- psql -c 'DROP DATABASE IF EXISTS jaiscloud WITH (FORCE)' -c 'CREATE DATABASE jaiscloud OWNER jaiscloud'"
       plan "kubectl delete namespace $NAMESPACE_AWS"
+      plan "kubectl apply -f $K8S_DIR/rbac-admission-policy.yaml   # namespace isolation (K8s >= 1.30)"
       plan "kubectl apply -f $K8S_DIR/namespace.yaml"
       plan "kubectl apply -f $K8S_DIR/rbac.yaml"
       plan "kubectl apply -f $K8S_DIR/jaiscloud.yaml"
@@ -632,6 +691,7 @@ print_plan() {
       plan "kubectl -n $NAMESPACE_GCP scale deployment jaiscloud-gcp --replicas=0   # when present"
       plan "kubectl -n $NAMESPACE_GCP delete pvc $GCP_PVC"
       plan "kubectl -n $NAMESPACE_DATA exec deploy/postgres -- psql -c 'DROP DATABASE IF EXISTS jaiscloud_gcp WITH (FORCE)' -c 'CREATE DATABASE jaiscloud_gcp OWNER jaiscloud'"
+      plan "kubectl apply -f $K8S_DIR/rbac-admission-policy.yaml   # namespace isolation (K8s >= 1.30)"
       plan "kubectl apply -f $K8S_DIR/jaiscloud-gcp.yaml"
       plan_install_record "gcp" "gcp=running"
       ;;
@@ -683,6 +743,8 @@ if [[ "$MODE" == "reset" ]]; then
   warn "the '$GCP_DB' database, or the $NAMESPACE_GCP namespace/PVC."
   confirm "Are you sure?"
   check_context
+  require_isolation_prereqs
+  apply_isolation_policy
 
   info "Scaling the AWS deployment to zero..."
   scale_to_zero "$NAMESPACE_AWS" jaiscloud app=jaiscloud
@@ -716,6 +778,8 @@ if [[ "$MODE" == "gcp-reset" ]]; then
   warn "$NAMESPACE_DATA, or $POSTGRES_PVC."
   confirm "Are you sure?"
   check_context
+  require_isolation_prereqs
+  apply_isolation_policy
 
   info "Scaling the GCP deployment to zero..."
   # The pod must actually be gone before its RWO claim can be deleted (a PVC
@@ -744,6 +808,9 @@ fi
 
 if [[ "$MODE" == "gcp" ]]; then
   check_context
+  require_isolation_prereqs
+  info "Applying the namespace-isolation admission policy..."
+  apply_isolation_policy
   info "Applying the shared namespaces, Postgres and RBAC..."
   kubectl apply -f "$K8S_DIR/namespace.yaml"
   kubectl apply -f "$K8S_DIR/postgres.yaml"
@@ -765,6 +832,8 @@ fi
 
 if [[ "$MODE" == "migrate-store" ]]; then
   check_context
+  require_isolation_prereqs
+  apply_isolation_policy
   # Before the namespace split, Postgres ran as deployment/postgres in the AWS
   # namespace and held both clouds' schemas in database `jaiscloud`.
   OLD_NS="${LEGACY_NAMESPACE:-$NAMESPACE_AWS}"

@@ -35,6 +35,7 @@ const AgentGuideContractAPIVersion = "jaiscloud.dev/integration/v1"
 //go:embed all:deploy/ci
 //go:embed deploy/deploy.sh
 //go:embed scripts/integration-preflight.sh
+//go:embed scripts/rbac-isolation-gate.sh
 var assets embed.FS
 
 // Text is the short, self-contained brief printed by `agent-guide`. It is
@@ -113,6 +114,7 @@ Do not
   - run --reset/--gcp-reset on state you care about; test-dual-substrate-k8s needs ALLOW_RESET=1
   - expose 443 on the GCP Service by default; TLS terminates at the front door
   - apply deploy/k8s/istio/*.yaml (the glob includes object-less dns.yaml)
+  - remove the jaiscloud-namespace-isolation admission policy (it is the namespace boundary; K8s >= 1.30)
 
 The kit has the full docs: docs/gcp/integration/{AGENTS.md,topology.md,contract.yaml},
 docs/gcp/ci.md, llms.txt. Read AGENTS.md first; act on deploy.sh --check --json, not on guesses.

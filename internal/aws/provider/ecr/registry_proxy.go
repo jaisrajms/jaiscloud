@@ -18,6 +18,7 @@ import (
 
 	ecrstore "jaiscloud/internal/aws/store/ecr"
 	"jaiscloud/internal/clock"
+	"jaiscloud/internal/k8shelpers"
 )
 
 const (
@@ -141,7 +142,14 @@ func (p *RegistryProxy) ensureNamespace(ctx context.Context) error {
 		return err
 	}
 	ns := &corev1.Namespace{
-		ObjectMeta: metav1.ObjectMeta{Name: p.namespace},
+		ObjectMeta: metav1.ObjectMeta{
+			Name: p.namespace,
+			// The registry proxy creates the process namespace when it is
+			// missing; the ownership/identity labels are what the dual-substrate
+			// admission policy requires from a namespace-created-by-a-substrate
+			// request (and what keeps the sweep from mistaking it for data).
+			Labels: k8shelpers.OwnerNamespaceLabels(""),
+		},
 	}
 	_, err = p.k8sClient.CoreV1().Namespaces().Create(ctx, ns, metav1.CreateOptions{})
 	if k8serrors.IsAlreadyExists(err) {

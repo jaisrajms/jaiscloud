@@ -163,6 +163,11 @@ func startCmd() *cobra.Command {
 			stateDir, _ := config.ResolveStateDir(os.Getenv("JAISCLOUD_STATE_DIR"))
 			instanceID, idSource := config.LoadOrCreateInstanceID(stateDir)
 			slog.Info("instance id", "id", instanceID, "source", idSource, "state_dir", stateDir)
+			// Stamp every namespace this substrate creates with its identity, so
+			// the sweep/delete paths (and the dual-substrate admission policy)
+			// can prove ownership and never touch the other substrate's
+			// namespaces on a shared cluster.
+			k8shelpers.SetIdentity("aws", instanceID)
 
 			s, err := initStores(ctx, cfg, instanceID)
 			if err != nil {

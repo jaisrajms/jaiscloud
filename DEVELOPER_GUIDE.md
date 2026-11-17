@@ -583,7 +583,9 @@ postgres://<user>:<password>@<host>:<port>/<database>
 - You are testing services that run inside K8s and need to call AWS APIs
 - You want Spark jobs to submit to K8s (the JaisCloud server needs to reach the K8s API)
 
-**What you need:** Docker Desktop with Kubernetes enabled, or kind / k3d / minikube.
+**What you need:** Docker Desktop with Kubernetes enabled, or kind / k3d / minikube,
+running **Kubernetes >= 1.30** (the namespace boundary between the two substrates
+is a `ValidatingAdmissionPolicy`, which is GA in 1.30).
 On kind/k3d, `deploy/deploy.sh` loads the image it builds into the cluster
 (`kind load` / `k3d image import`) because a node has its own containerd; on
 other clusters push the image to a registry you can reach.
@@ -618,9 +620,20 @@ Rules that follow and must not be relaxed:
 - The substrate ServiceAccounts hold cluster-scoped namespace lifecycle
   (`jaiscloud-namespace-admin`: create/delete namespaces + the per-namespace
   executor RoleBinding), because Dataproc clusters and Managed Kafka brokers own
-  a namespace each. That is a trust boundary by *code* (the emulator only
-  deletes namespaces carrying its ownership label), not by RBAC: a substrate SA
-  *could* delete the other's namespace. Do not run untrusted code under it.
+  a namespace each. RBAC cannot scope a delete by label, so the boundary is
+  enforced by admission: `deploy/k8s/rbac-admission-policy.yaml` installs the
+  `jaiscloud-namespace-isolation` ValidatingAdmissionPolicy (matched only to the
+  two emulator ServiceAccounts, `failurePolicy: Fail`, `Deny`), which requires a
+  namespace create/update/delete to carry `jaiscloud.io/managed-by=jaiscloud`
+  and the caller's own `jaiscloud.io/substrate`. The emulator stamps
+  `jaiscloud.io/substrate` + `jaiscloud.io/instance-id` on every namespace it
+  creates, filters its sweeps on them, and backfills them onto a pre-upgrade
+  namespace the next time it is ensured. `deploy.sh` applies the policy on every
+  install/reset path and refuses Kubernetes < 1.30 before creating anything;
+  `deploy.sh --check --json` reports `rbac.admissionPolicy` and
+  `rbac.serverVersion`, and `GATE_ALLOW_RBAC=1 make test-rbac-isolation-k8s`
+  proves each ServiceAccount can only touch its own labelled namespaces. The
+  policy does not match an operator's `kubectl`, so `--reset` keeps working.
 
 `make up-k8s` deploys the AWS substrate, `make up-k8s-gcp` the GCP one. Both are
 idempotent and can be run in either order on the same cluster.
