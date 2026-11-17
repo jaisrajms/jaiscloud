@@ -219,10 +219,11 @@ func buildContract(manifestPaths []string, playbookPath string) (*Contract, erro
 		}
 		return a.Name < b.Name
 	})
-	// A few objects are declared in two manifests on purpose (the GCP
-	// Namespace/ServiceAccount appear in both namespace-gcp.yaml/rbac-gcp.yaml
-	// and jaiscloud-gcp.yaml so the one-file install works). The contract lists
-	// each identity once.
+	// A few objects can be declared in more than one manifest (the shared store
+	// objects, for instance, appear in an install order the docs describe). The
+	// contract lists each identity once. Manifests are expected to be identical
+	// where they overlap; jaiscloud-gcp.yaml deliberately no longer repeats the
+	// GCP Namespace/ServiceAccount (namespace-gcp.yaml / rbac-gcp.yaml own them).
 	objects = dedupe(objects)
 
 	contract := &Contract{

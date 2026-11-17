@@ -300,11 +300,12 @@ the container image or a release binary, the binary carries the same pack:
 `jaiscloud-gcp agent-guide` (brief), `--json` (contract), `--emit DIR` (the
 deployment kit: manifests, `deploy.sh`, preflight, Istio/CI assets, docs).
 
-The single-file manifest still works on a bare cluster (it declares its own
-Namespace and the `jaiscloud-gcp` ServiceAccount). The Postgres server and the
-`jaiscloud_gcp` database have to exist for the pod to become Ready, and
-`rbac-shared.yaml` + `rbac-gcp.yaml` are needed for Dataproc / Managed Kafka /
-Cloud Run execution:
+`deploy/k8s/jaiscloud-gcp.yaml` declares the GCP workload objects only — PVCs,
+DSN Secret, Deployment and Service. It no longer carries a Namespace or a
+ServiceAccount (those are `namespace-gcp.yaml` and `rbac-gcp.yaml`), so applying
+it alone to a bare cluster fails; the install is the namespace and RBAC first,
+then the workload. Bulk-applying the default manifests installs the shipped names
+(`jaiscloud-gcp` / `jaiscloud` / `jaiscloud-data`):
 
 ```bash
 kubectl apply -f deploy/k8s/namespace-data.yaml -f deploy/k8s/postgres.yaml \
@@ -317,6 +318,22 @@ The shared store comes first (`namespace-data.yaml` + `postgres.yaml`), then the
 GCP namespace and its RBAC, then the substrate. `deploy/deploy.sh --gcp` also
 applies `deploy/k8s/rbac-admission-policy.yaml` before any of these, so the
 namespace-isolation boundary is in place from the first namespace.
+
+**Custom namespaces or ServiceAccount names.** Do not edit the manifests: set
+`NS_AWS` / `NS_GCP` / `NS_DATA` / `SA_AWS` / `SA_GCP` and let `deploy.sh` render
+the layout. It copies the same base manifests into a temporary kustomize overlay,
+patches the Namespace names, the ServiceAccount and every reference to it, the
+identity env (`JAISCLOUD_K8S_*`), the DSN hostnames and the usernames in the
+`ValidatingAdmissionPolicy`, then applies it with `kubectl apply -k`:
+
+```bash
+NS_AWS=team-aws NS_GCP=team-gcp NS_DATA=team-data \
+SA_AWS=team-sa-aws SA_GCP=team-sa-gcp deploy/deploy.sh --gcp --yes
+deploy/deploy.sh --render-only /tmp/jaiscloud-render   # inspect first, no cluster
+```
+
+The checked-in manifests stay on the default names, so a direct `kubectl apply`
+(and `make up-k8s` / `make up-k8s-gcp`) always installs those.
 
 - **Image.** The manifest defaults to the published multi-arch image
   (`jaisraj/jaiscloud-gcp:latest`), so the commands above work without a private

@@ -369,6 +369,42 @@ Build, deliver (push or `k3d image import`/`kind load`), then
 Spark image with the GCS connector in `JAISCLOUD_K8S_SPARK_IMAGE`; see
 `custom-images` in the playbook.
 
+## Scenario 8 — custom namespace/ServiceAccount names
+
+```bash
+export NS_AWS=team-aws NS_GCP=team-gcp NS_DATA=team-data
+export SA_AWS=team-sa-aws SA_GCP=team-sa-gcp
+deploy/deploy.sh --render-only /tmp/jaiscloud-render   # inspect, no cluster
+deploy/deploy.sh --plan                                 # overlay + apply -k steps
+deploy/deploy.sh --yes                                  # AWS substrate
+deploy/deploy.sh --gcp --yes                            # GCP substrate
+deploy/deploy.sh --check --json                         # should report the custom names
+```
+
+Every mutating mode uses those names (install, `--reset`, `--gcp-reset`,
+`--delete`, `--park`/`--resume`/`--switch`, the store and the admission policy),
+so `--check` reports the same namespaces the install used. `--render-only DIR`
+writes the tree (`overlays/{data,data-ns,aws,gcp,isolation}`, each self-contained
+with a `base/` copy and JSON6902 patches) and exits without running kubectl;
+`kubectl kustomize DIR/overlays/<name>` and `kubectl apply -k` work on it
+directly. `make test-custom-names-render` asserts the rendered objects offline
+and that the defaults still render to the shipped names.
+
+The mesh follows the namespaces too: place the CA copies with
+`NS_AWS=… NS_GCP=… deploy/k8s/istio/certs/gen.sh` and the route FQDNs with
+`NS_AWS=… NS_GCP=… deploy/k8s/istio/render.sh --apply`. The namespace gate takes
+the identity explicitly:
+
+```bash
+AWS_USER="system:serviceaccount:$NS_AWS:$SA_AWS" \
+GCP_USER="system:serviceaccount:$NS_GCP:$SA_GCP" \
+  GATE_ALLOW_RBAC=1 make test-rbac-isolation-k8s
+```
+
+`LEGACY_NAMESPACE` (the pre-split migration source) must be one of the configured
+namespaces unless `LEGACY_CONFIRM=1`: the migration reads a store this install is
+allowed to own.
+
 ## Verifying
 
 Use `contract.playbook.verification`. The cheapest full check is the preflight
@@ -393,20 +429,28 @@ exposing 443, or rewriting host headers). Those guards encode the invariants.
 ## Multi-tenant / parallel installs
 
 One namespace and one `JAISCLOUD_INSTANCE_ID` per instance. The shipped manifests
-pin single values because they describe one deployment; copy them and change both
-for a shared cluster, otherwise one instance's startup sweep can reap another's
-Pods (the sweep only sees its own IDs, but the namespace/DB pair is the real
-boundary). Namespaces the emulator creates are stamped with the instance ID and
-substrate, and the admission policy refuses a namespace request from a substrate
-ServiceAccount that does not carry its own identity.
+pin single values because they describe one deployment; use a custom layout (or a
+second copy with its own instance ID) for a shared cluster, otherwise one
+instance's startup sweep can reap another's Pods (the sweep only sees its own
+IDs, but the namespace/DB pair is the real boundary). Namespaces the emulator
+creates are stamped with the instance ID and substrate, and the admission policy
+refuses a namespace request from a substrate ServiceAccount that does not carry
+its own identity.
 
-The namespace *names* are literal in the manifests (Namespace `name`,
-`namespace:` fields, DSN hostnames, and the ValidatingAdmissionPolicy's
-`system:serviceaccount:<namespace>:<sa>` usernames). `NS_AWS` / `NS_GCP` /
-`NS_DATA` exist for the gate scripts, and `deploy.sh` verifies the manifests
-against them on every mutating mode: a partial override is refused with the list
-of mismatches instead of acting on a half-renamed install. To run under custom
-names, edit those fields together and re-run `deploy/deploy.sh --check`.
+The manifests are the **default base**: the Namespace names, the `namespace:`
+fields, the DSN hostnames and the ValidatingAdmissionPolicy's
+`system:serviceaccount:<namespace>:<sa>` usernames are literal, so
+`kubectl apply -f deploy/k8s/...` installs `jaiscloud` / `jaiscloud-gcp` /
+`jaiscloud-data` with the ServiceAccounts `jaiscloud` / `jaiscloud-gcp`. For any
+other layout set `NS_AWS`, `NS_GCP`, `NS_DATA`, `SA_AWS` and `SA_GCP`:
+`deploy/deploy.sh` renders a kustomize overlay from that base (patching the
+Namespace names, the ServiceAccount and every reference to it, the identity env,
+the DSN hostnames and the admission policy's usernames) and applies it with
+`kubectl apply -k`. Do not edit the base for one install — see
+[Scenario 8](#scenario-8--custom-namespaceserviceaccount-names).
+
+`JAISCLOUD_INSTANCE_ID` is *not* derived from the namespace: two instances in
+different namespaces still need distinct IDs if they share a store.
 
 ## Tooling summary
 
@@ -418,6 +462,9 @@ names, edit those fields together and re-run `deploy/deploy.sh --check`.
 | store mode | preflight `store.mode` (`bundled\|external`); install record key `store` |
 | the pack, from the binary | `jaiscloud-gcp agent-guide` / `--json` / `--emit DIR` (`--force` to overwrite) |
 | preview | `deploy/deploy.sh <mode> --plan` |
+| custom namespaces / ServiceAccounts | `NS_AWS=… NS_GCP=… NS_DATA=… SA_AWS=… SA_GCP=… deploy/deploy.sh [--yes]` (renders a kustomize overlay; `--render-only DIR` writes it without a cluster) |
+| inspect the rendered layout | `deploy/deploy.sh --render-only DIR` then `kubectl kustomize DIR/overlays/<data\|data-ns\|aws\|gcp\|isolation>`; `make test-custom-names-render` |
+| mesh for custom names | `NS_AWS=… NS_GCP=… deploy/k8s/istio/certs/gen.sh`, `NS_AWS=… NS_GCP=… deploy/k8s/istio/render.sh --apply` |
 | install AWS / GCP | `deploy/deploy.sh [--yes]` / `deploy/deploy.sh --gcp --yes` |
 | bring your own store | `deploy/deploy.sh --yes --store-dsn postgres://…` (`JAISCLOUD_STORE_DSN`, `JAISCLOUD_AWS_DSN`, `JAISCLOUD_GCP_DSN`) |
 | park / resume / switch (compute only) | `deploy/deploy.sh --park <aws\|gcp>` / `--resume <aws\|gcp>` (pins the parked digest; `--allow-upgrade` opts into a new image) / `--switch <aws\|gcp> --yes` |

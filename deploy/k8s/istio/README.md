@@ -154,7 +154,11 @@ Everything below is idempotent; run from the repo root.
 
    - Secret `istio-system/jaiscloud-wildcard` (`tls.crt`, `tls.key`, `ca.crt`);
    - ConfigMap `jaiscloud-ca-cert` (key `ca.crt`) in **`jaiscloud`** and
-     **`jaiscloud-gcp`**.
+     **`jaiscloud-gcp`** — or in whatever names the install uses: `gen.sh` reads
+     `NS_AWS`/`NS_GCP` (the same variables `deploy/deploy.sh` reads) and places
+     the copies there. With a custom layout:
+     `NS_AWS=team-aws NS_GCP=team-gcp deploy/k8s/istio/certs/gen.sh`, or pass
+     `CM_NAMESPACES="$NS_AWS $NS_GCP"` explicitly.
 
    The ConfigMap shape is exactly what the platform TLS code already consumes —
    `internal/platform/config.go` defaults `JAISCLOUD_PLATFORM_TLS_CA_SOURCES` to
@@ -177,6 +181,16 @@ Everything below is idempotent; run from the repo root.
    kubectl apply -f deploy/k8s/istio/gateway.yaml
    kubectl apply -f deploy/k8s/istio/virtualservices.yaml
    kubectl apply -f deploy/k8s/istio/destinationrule.yaml
+   ```
+
+   The two route files address each substrate by a fully-qualified Service name,
+   so a custom namespace layout needs those FQDNs rewritten. `render.sh` does
+   exactly that from `NS_AWS`/`NS_GCP`, and renders the shipped names when they
+   are unset (so it is a safe replacement for the two `kubectl apply -f` lines):
+
+   ```bash
+   deploy/k8s/istio/render.sh --plan     # print the rendered manifests
+   NS_AWS=team-aws NS_GCP=team-gcp deploy/k8s/istio/render.sh --apply
    ```
 
    Then verify the mesh picks the configuration up cleanly:
@@ -202,6 +216,26 @@ Everything below is idempotent; run from the repo root.
    ```bash
    scripts/istio-smoke.sh
    ```
+
+### Custom namespace layout
+
+`deploy/deploy.sh` installs a custom namespace/ServiceAccount layout without
+hand edits (`NS_AWS`, `NS_GCP`, `NS_DATA`, `SA_AWS`, `SA_GCP`; see
+`deploy/deploy.sh --help`). The mesh follows the namespaces with two steps, both
+keyed on the same variables:
+
+```bash
+# 1. CA ConfigMap copies into the substrate namespaces
+NS_AWS=team-aws NS_GCP=team-gcp deploy/k8s/istio/certs/gen.sh
+
+# 2. Route FQDNs: jaiscloud.<NS_AWS>.svc… / jaiscloud-gcp.<NS_GCP>.svc…
+NS_AWS=team-aws NS_GCP=team-gcp deploy/k8s/istio/render.sh --apply
+```
+
+Nothing else in this directory is namespace-dependent: the gateway lives in
+`istio-system`, routes by host, and never rewrites `:authority`. The checked-in
+`virtualservices.yaml` / `destinationrule.yaml` keep the default FQDNs, and
+`render.sh` reproduces them byte-for-byte when the variables are unset.
 
 ### Existing Istio install
 

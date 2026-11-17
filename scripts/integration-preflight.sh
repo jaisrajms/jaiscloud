@@ -63,9 +63,9 @@
 #   matchConditions[].expression with the running identities: a present substrate
 #   whose system:serviceaccount:<ns>:<sa> the expression does not name is a
 #   warning ("namespace isolation is not enforced for the running identity") and
-#   a non-optional install-rbac-policy recommendation (until the policy is
-#   rendered from the configured namespaces/ServiceAccounts, edit and re-apply
-#   it).
+#   a non-optional install-rbac-policy recommendation. deploy/deploy.sh renders
+#   the policy from NS_AWS/SA_AWS/NS_GCP/SA_GCP (the isolation overlay), so the
+#   fix is to re-apply that rendered object, never to hand-edit the default.
 #
 # The store:
 #   store.mode is bundled (PostgreSQL Deployment in NS_DATA) or external (a
@@ -116,8 +116,12 @@
 #
 # Env:
 #   KUBE_CONTEXT   kubectl context (default: the current context)
-#   NS_AWS/NS_GCP/NS_DATA   override the namespace names (default from the manifests;
-#                 deploy.sh refuses a mutating mode unless the manifests agree)
+#   NS_AWS/NS_GCP/NS_DATA   namespace names (defaults: the shipped layout —
+#                 jaiscloud / jaiscloud-gcp / jaiscloud-data). deploy/deploy.sh
+#                 exports the names it installs, so `deploy.sh --check` inspects
+#                 the same layout a (custom-names) install used.
+#   SA_AWS/SA_GCP  unused here (the ServiceAccount is read from each Deployment);
+#                 accepted so a caller can pass deploy.sh's environment through.
 #
 # Exit codes:
 #   0  probe completed (read `recommended` / `warnings`)
@@ -955,14 +959,14 @@ if [[ "$SUBSTRATE_PRESENT" == "1" && "$VAP_PRESENT" == "0" ]]; then
       "namespace isolation is not enforced; upgrade to Kubernetes >= 1.30 (server is 1.$SERVER_MINOR) and apply the policy" "false"
   else
     warn_add "namespace isolation is not enforced: ValidatingAdmissionPolicy jaiscloud-namespace-isolation is missing; one substrate can delete the other's namespaces"
-    rec_add "install-rbac-policy" "kubectl apply -f deploy/k8s/rbac-admission-policy.yaml" \
-      "namespace isolation is not enforced (K8s >= 1.30 required); apply the policy" "false"
+    rec_add "install-rbac-policy" "deploy/deploy.sh --render-only /tmp/jaiscloud-render && kubectl apply -k /tmp/jaiscloud-render/overlays/isolation" \
+      "namespace isolation is not enforced (K8s >= 1.30 required); apply the rendered isolation policy" "false"
   fi
 fi
 
-# The policy exists but does not name the identity that is running (a renamed
-# namespace or ServiceAccount, or a hand-edited policy): the boundary matches
-# nobody. Until the policy is rendered from NS_*/SA_* the operator must edit it.
+# The policy exists but does not name the identity that is running (a custom
+# namespace/ServiceAccount, or a hand-edited policy): the boundary matches
+# nobody. Re-apply the policy deploy.sh renders for these names.
 if [[ "$POLICY_MATCHES_SA" == "false" ]]; then
   for cloud in aws gcp; do
     case "$cloud" in
@@ -970,9 +974,9 @@ if [[ "$POLICY_MATCHES_SA" == "false" ]]; then
       gcp) present=$GCP_PRESENT ns=$NS_GCP sa=$GCP_SA mentions=$POLICY_GCP ;;
     esac
     [[ "$present" == "1" && "$mentions" == "false" ]] || continue
-    warn_add "namespace isolation is not enforced for the running identity $ns:$sa: ValidatingAdmissionPolicy jaiscloud-namespace-isolation matches system:serviceaccount:<namespace>:<serviceaccount> usernames that do not include this one; edit its matchConditions (or re-apply a policy generated for these namespaces) and re-run the preflight"
+    warn_add "namespace isolation is not enforced for the running identity $ns:$sa: ValidatingAdmissionPolicy jaiscloud-namespace-isolation matches system:serviceaccount:<namespace>:<serviceaccount> usernames that do not include this one; re-apply the policy deploy.sh renders for these namespaces/ServiceAccounts and re-run the preflight"
     rec_add "install-rbac-policy" \
-      "kubectl edit validatingadmissionpolicy jaiscloud-namespace-isolation   # matchConditions must name system:serviceaccount:$ns:$sa" \
+      "NS_AWS=$NS_AWS SA_AWS=$AWS_SA NS_GCP=$NS_GCP SA_GCP=$GCP_SA deploy/deploy.sh --render-only /tmp/jaiscloud-render && kubectl apply -k /tmp/jaiscloud-render/overlays/isolation" \
       "the isolation policy does not match the $cloud substrate's running ServiceAccount ($ns:$sa), so it enforces nothing for it" "false"
   done
 fi
@@ -1231,7 +1235,7 @@ else
   if [[ "$VAP_PRESENT" == "1" ]]; then
     case "$POLICY_MATCHES_SA" in
       true)  ok_ "ValidatingAdmissionPolicy jaiscloud-namespace-isolation enforces the namespace boundary and matches the running identity" ;;
-      false) warn_ "ValidatingAdmissionPolicy jaiscloud-namespace-isolation does not match the running identity — it enforces nothing for it (edit its matchConditions)" ;;
+      false) warn_ "ValidatingAdmissionPolicy jaiscloud-namespace-isolation does not match the running identity — it enforces nothing for it (re-apply the policy deploy.sh renders for these names)" ;;
       *)     warn_ "ValidatingAdmissionPolicy jaiscloud-namespace-isolation exists but its matchConditions could not be read" ;;
     esac
   elif [[ "$SERVER_OLD" == "1" ]]; then

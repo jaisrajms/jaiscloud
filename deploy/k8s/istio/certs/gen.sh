@@ -70,8 +70,10 @@
 #   SECRET_NS           namespace of the TLS secret (default istio-system)
 #   SECRET_NAME         TLS secret name (default jaiscloud-wildcard)
 #   CM_NAME             CA ConfigMap name (default jaiscloud-ca-cert)
-#   CM_NAMESPACES       spaces-separated namespaces for CM_NAME
-#                       (default "jaiscloud jaiscloud-gcp")
+#   CM_NAMESPACES       spaces-separated namespaces for CM_NAME (default
+#                       "$NS_AWS $NS_GCP", i.e. "jaiscloud jaiscloud-gcp" for the
+#                       shipped layout; a custom install only has to set NS_AWS /
+#                       NS_GCP, or CM_NAMESPACES="$NS_AWS $NS_GCP")
 #   DAYS                certificate lifetime in days (default 825)
 #   RUN_APP_LOCATIONS   locations for the deep *.run.app SANs (default us-central1)
 #   EXECUTE_API_REGIONS regions for the deep execute-api SANs (default us-east-1)
@@ -113,7 +115,10 @@ OUT_DIR="${OUT_DIR:-${XDG_CACHE_HOME:-$HOME/.cache}/jaiscloud/istio-ca}"
 SECRET_NS="${SECRET_NS:-istio-system}"
 SECRET_NAME="${SECRET_NAME:-jaiscloud-wildcard}"
 CM_NAME="${CM_NAME:-jaiscloud-ca-cert}"
-CM_NAMESPACES="${CM_NAMESPACES:-jaiscloud jaiscloud-gcp}"
+# The CA ConfigMap belongs in each substrate namespace. Follow a custom layout
+# when NS_AWS/NS_GCP are set (the same variables deploy/deploy.sh reads), and
+# keep the shipped names otherwise.
+CM_NAMESPACES="${CM_NAMESPACES:-${NS_AWS:-jaiscloud} ${NS_GCP:-jaiscloud-gcp}}"
 DAYS="${DAYS:-825}"
 RUN_APP_LOCATIONS="${RUN_APP_LOCATIONS:-us-central1}"
 EXECUTE_API_REGIONS="${EXECUTE_API_REGIONS:-us-east-1}"

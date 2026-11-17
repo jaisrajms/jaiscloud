@@ -158,6 +158,7 @@ func TestAgentGuideFiles(t *testing.T) {
 		"deploy/k8s/istio/virtualservices.yaml",
 		"deploy/k8s/istio/destinationrule.yaml",
 		"deploy/k8s/istio/certs/gen.sh",
+		"deploy/k8s/istio/render.sh",
 		"deploy/ci/docker-compose.ci.yml",
 		"deploy/ci/ci-tls/gen.sh",
 		"scripts/integration-preflight.sh",

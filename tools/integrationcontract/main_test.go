@@ -8,8 +8,8 @@ import (
 )
 
 // fixtureManifests is a miniature three-namespace layout: a Namespace declared
-// twice (the one-file-install pattern), a workload that pulls env from a
-// ConfigMap and a Secret, a Service, a PVC and RBAC.
+// twice (manifests may overlap; the contract dedupes identities), a workload that
+// pulls env from a ConfigMap and a Secret, a Service, a PVC and RBAC.
 const fixtureManifests = `
 apiVersion: v1
 kind: Namespace

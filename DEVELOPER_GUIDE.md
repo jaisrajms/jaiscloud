@@ -684,12 +684,37 @@ make up-k8s-gcp      # optional: GCP substrate (+ the jaiscloud_gcp database)
 `make up-k8s-gcp` applies `namespace-data.yaml`, `postgres.yaml`,
 `namespace-gcp.yaml`, `rbac-shared.yaml` and `rbac-gcp.yaml`, creates the
 `jaiscloud_gcp` database if it is missing (`postgres-gcp-db`), then applies
-`deploy/k8s/jaiscloud-gcp.yaml` (the GCP Deployment, PVCs, Secret, Service and
-its own Namespace) and waits for `deployment/jaiscloud-gcp` in
+`deploy/k8s/jaiscloud-gcp.yaml` (the GCP Deployment, PVCs, DSN Secret and
+Service — the Namespace and ServiceAccount come from `namespace-gcp.yaml` /
+`rbac-gcp.yaml`) and waits for `deployment/jaiscloud-gcp` in
 `jaiscloud-gcp`. An AWS-only install creates no GCP object, and a GCP-only
 install creates no AWS object: the store (`namespace-data.yaml` + `postgres.yaml`)
 and the namespace admission policy are the only shared objects
 (`deploy.sh` applies the policy on every install path).
+
+**Custom namespace/ServiceAccount names.** The manifests in `deploy/k8s` are the
+default base and are what `make up-k8s*` applies, so they always install
+`jaiscloud` / `jaiscloud-gcp` / `jaiscloud-data` with the ServiceAccounts
+`jaiscloud` / `jaiscloud-gcp`. For any other layout use `deploy/deploy.sh` with
+`NS_AWS`, `NS_GCP`, `NS_DATA`, `SA_AWS` and `SA_GCP`:
+
+```bash
+NS_AWS=team-aws NS_GCP=team-gcp NS_DATA=team-data \
+SA_AWS=team-sa-aws SA_GCP=team-sa-gcp ./deploy/deploy.sh --yes          # AWS
+NS_AWS=team-aws NS_GCP=team-gcp NS_DATA=team-data \
+SA_AWS=team-sa-aws SA_GCP=team-sa-gcp ./deploy/deploy.sh --gcp --yes    # GCP
+
+./deploy/deploy.sh --render-only /tmp/jaiscloud-render   # inspect the overlays
+```
+
+`deploy.sh` copies the base manifests into a temporary kustomize overlay tree and
+patches the Namespace names, the ServiceAccount and every reference to it
+(`serviceAccountName`, the binding subjects, the `JAISCLOUD_K8S_*` identity env),
+the DSN hostnames and the admission policy's ServiceAccount usernames, then
+applies it with `kubectl apply -k`. Nothing in `deploy/k8s` is edited, and
+`make test-custom-names-render` proves both the custom render and the unchanged
+defaults offline. The mesh follows the namespaces via `NS_AWS=… NS_GCP=…` on
+`deploy/k8s/istio/certs/gen.sh` and `deploy/k8s/istio/render.sh --apply`.
 
 For an agent or script driving this setup, start with
 [`docs/gcp/integration/AGENTS.md`](docs/gcp/integration/AGENTS.md) and

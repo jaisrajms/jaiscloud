@@ -38,9 +38,15 @@ so no credentials and no source edits are required.
 make docker-gcp-samples
 
 # 2. Deploy the emulator (if not already) and run the suite
-#    (the one-file install creates the jaiscloud-gcp namespace + ServiceAccount,
-#    but the shared Postgres and its jaiscloud_gcp database must exist first:
-#    apply deploy/k8s/postgres.yaml, or use `make up-k8s-gcp`)
+#    (the manifests install the default names: rbac-admission-policy.yaml,
+#    namespace-data.yaml + postgres.yaml, then namespace-gcp.yaml,
+#    rbac-shared.yaml, rbac-gcp.yaml and jaiscloud-gcp.yaml; jaiscloud-gcp.yaml
+#    itself has no Namespace/ServiceAccount. For custom names:
+#    NS_AWS=… NS_GCP=… NS_DATA=… SA_AWS=… SA_GCP=… deploy/deploy.sh --gcp)
+kubectl apply -f deploy/k8s/rbac-admission-policy.yaml
+kubectl apply -f deploy/k8s/namespace-data.yaml -f deploy/k8s/postgres.yaml
+kubectl apply -f deploy/k8s/namespace-gcp.yaml
+kubectl apply -f deploy/k8s/rbac-shared.yaml -f deploy/k8s/rbac-gcp.yaml
 kubectl apply -f deploy/k8s/jaiscloud-gcp.yaml
 make test-e2e-gcp-samples-k3d
 

@@ -1,23 +1,17 @@
 ---
-# Namespace — the GCP substrate owns its own namespace so that deleting it never
-# touches the AWS substrate or the shared store. Declared here (as well as in
-# namespace-gcp.yaml, with identical labels) together with the ServiceAccount the
-# Deployment runs as, so the documented one-file install
-#   kubectl apply -f deploy/k8s/jaiscloud-gcp.yaml
-# still starts its pod on a bare cluster; applying both files in either order is
-# a no-op. The shared Postgres and its `jaiscloud_gcp` database must exist
-# (namespace-data.yaml + postgres.yaml), and rbac-shared.yaml + rbac-gcp.yaml are
-# still needed for Dataproc / Managed Kafka / Cloud Run execution (executor
-# RoleBinding + the GCP namespace-admin binding).
-apiVersion: v1
-kind: Namespace
-metadata:
-  name: jaiscloud-gcp
-  labels:
-    app.kubernetes.io/part-of: jaiscloud
-    jaiscloud.io/role: substrate
-    jaiscloud.io/substrate: gcp
----
+# The GCP substrate's workload objects: PVCs, DSN Secret, Deployment and Service.
+# This file declares NO Namespace and NO ServiceAccount — those are
+# namespace-gcp.yaml and rbac-gcp.yaml, so the objects have exactly one owner and
+# a rendered overlay can rename them cleanly. The full install is
+#   kubectl apply -f deploy/k8s/rbac-admission-policy.yaml \
+#                 -f deploy/k8s/namespace-data.yaml -f deploy/k8s/postgres.yaml \
+#                 -f deploy/k8s/namespace-gcp.yaml \
+#                 -f deploy/k8s/rbac-shared.yaml -f deploy/k8s/rbac-gcp.yaml \
+#                 -f deploy/k8s/jaiscloud-gcp.yaml
+# (deploy/deploy.sh --gcp does exactly this, including creating the
+# `jaiscloud_gcp` database first). For custom namespace/ServiceAccount names use
+# `deploy/deploy.sh --gcp`, which renders an overlay instead of editing this file.
+#
 # PersistentVolumeClaim — object bytes survive pod restarts. Metadata lives in
 # Postgres, so an ephemeral blob dir lets a rolled pod leave behind objects
 # whose metadata outlives their bytes (a media read then 404s). The k3d test's
@@ -49,18 +43,6 @@ spec:
   resources:
     requests:
       storage: 64Mi
----
-# ServiceAccount — mirrors the one in rbac-gcp.yaml so the documented one-file
-# install (`kubectl apply -f deploy/k8s/jaiscloud-gcp.yaml`) can start the pod on
-# a bare cluster. The executor RoleBinding and the GCP cluster-scoped namespace
-# RBAC stay in rbac-shared.yaml + rbac-gcp.yaml; apply them too for
-# Dataproc/Kafka/Cloud Run execution.
-apiVersion: v1
-kind: ServiceAccount
-metadata:
-  name: jaiscloud-gcp
-  namespace: jaiscloud-gcp
-automountServiceAccountToken: true
 ---
 # Secret — the GCP substrate's DSN. Secrets cannot be referenced across
 # namespaces (`env.valueFrom.secretKeyRef`), so every substrate namespace owns

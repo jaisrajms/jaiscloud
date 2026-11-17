@@ -76,6 +76,9 @@ func AgentGuideText(cloud, version, commit, date string) string {
 	install += "  ./deploy/deploy.sh --skip-build --yes     # AWS substrate (kit is deployment-only: use a preloaded image)\n"
 	install += "  ./deploy/deploy.sh --check --json         # READ-ONLY state + next safe step\n"
 	install += "  ./deploy/deploy.sh --plan <mode>          # preview any mode; --skip-build for a preloaded image\n"
+	install += "  custom names: NS_AWS=… NS_GCP=… NS_DATA=… SA_AWS=… SA_GCP=… ./deploy/deploy.sh --yes\n"
+	install += "  ./deploy/deploy.sh --render-only DIR      # inspect the kustomize overlays, no cluster\n"
+	install += "  (deploy/k8s/*.yaml is the default base: a direct kubectl apply installs jaiscloud / jaiscloud-gcp / jaiscloud-data)\n"
 	install += "  ./deploy/deploy.sh --migrate-store --yes  # pre-split upgrade (destructive: confirm first)\n"
 	install += "  mesh (optional): deploy/k8s/istio/README.md + deploy/k8s/istio/certs/gen.sh\n"
 	install += "  (istiod already on the cluster? add only the gateway: istioctl install -f deploy/k8s/istio/istiooperator-gateway-only.yaml — never profile=minimal)\n"
@@ -108,7 +111,7 @@ B. Existing Kubernetes cluster
   %s agent-guide --emit ./kit && cd kit
 %s
 
-Topology (exact objects/ports/env/images in --json)
+Topology (the default names; exact objects/ports/env/images in --json)
   jaiscloud       AWS substrate   :4566 (LoadBalancer), instance aws-substrate-1
   jaiscloud-gcp   GCP substrate   REST :8080, gRPC :8081 (h2c), HMS :9083-9093, instance gcp-substrate-1
   jaiscloud-data  PostgreSQL      databases jaiscloud (AWS) + jaiscloud_gcp (GCP)

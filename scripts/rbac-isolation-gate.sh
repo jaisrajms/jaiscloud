@@ -38,6 +38,16 @@
 # Env:
 #   KUBE_CONTEXT   kubectl context (default: the current one)
 #   GATE_ALLOW_RBAC  must be 1
+#   AWS_USER       AWS substrate identity to impersonate
+#                  (default system:serviceaccount:jaiscloud:jaiscloud)
+#   GCP_USER       GCP substrate identity to impersonate
+#                  (default system:serviceaccount:jaiscloud-gcp:jaiscloud-gcp)
+#
+# A custom install (NS_AWS/NS_GCP + SA_AWS/SA_GCP in deploy/deploy.sh) has a
+# different identity in the policy, so pass it explicitly:
+#   AWS_USER=system:serviceaccount:$NS_AWS:$SA_AWS \
+#   GCP_USER=system:serviceaccount:$NS_GCP:$SA_GCP \
+#     GATE_ALLOW_RBAC=1 scripts/rbac-isolation-gate.sh
 #
 # Exit: 0 when every assertion holds, 1 when one fails, 2 when refused/misused.
 set -euo pipefail
@@ -46,8 +56,8 @@ PROG="$(basename "$0")"
 KUBE_CONTEXT="${KUBE_CONTEXT:-}"
 GATE_ALLOW_RBAC="${GATE_ALLOW_RBAC:-0}"
 POLICY="jaiscloud-namespace-isolation"
-AWS_USER="system:serviceaccount:jaiscloud:jaiscloud"
-GCP_USER="system:serviceaccount:jaiscloud-gcp:jaiscloud-gcp"
+AWS_USER="${AWS_USER:-system:serviceaccount:jaiscloud:jaiscloud}"
+GCP_USER="${GCP_USER:-system:serviceaccount:jaiscloud-gcp:jaiscloud-gcp}"
 SUFFIX="$$"
 AWS_FIX="rbac-gate-aws-$SUFFIX"
 GCP_FIX="rbac-gate-gcp-$SUFFIX"

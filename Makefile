@@ -171,7 +171,7 @@ JAISCLOUD_IMAGE   ?= jaisraj/jaiscloud-aws:latest
         server-ui server-ui-gcp stop-server up-docker down-docker up-k8s up-k8s-gcp down-k8s \
         postgres-up postgres-reset postgres-down postgres-gcp-db \
         test-dual-substrate-k8s test-rbac-isolation-k8s test-lifecycle-k8s test-istio-smoke _use-gcp-image check-deploy-images \
-        gen-integration-contract check-integration-contract integration-preflight test-integration-preflight \
+        gen-integration-contract check-integration-contract integration-preflight test-integration-preflight test-custom-names-render \
         test-integration test-integration-gcp test-lro-async-gcp test-throttle-gcp test-gcp-load test-gcp-mutation test-gcp-mutation-ratchet test-gcp-mutation-update \
         test-e2e-emr-docker test-e2e-emrcontainers-k8s test-e2e-eventbridge \
         test-e2e-dpc-docker test-e2e-dpc-k8s \
@@ -573,7 +573,11 @@ up-docker: _check-docker-prereq ## Start JaisCloud + Postgres via docker-compose
 down-docker: ## Stop and remove docker-compose services
 	docker-compose down --remove-orphans
 
-up-k8s: _check-k8s-prereq ## Deploy the AWS substrate (JaisCloud + Postgres) to K8s  (docker-desktop)
+# The up-k8s* targets apply the default manifests directly: they install the
+# shipped names (jaiscloud / jaiscloud-gcp / jaiscloud-data). For a custom
+# namespace/ServiceAccount layout use deploy/deploy.sh with NS_AWS/NS_GCP/NS_DATA/
+# SA_AWS/SA_GCP — it renders a kustomize overlay from the same base.
+up-k8s: _check-k8s-prereq ## Deploy the AWS substrate (JaisCloud + Postgres) to K8s  (docker-desktop; defaults only — custom names via deploy.sh)
 	kubectl apply -f deploy/k8s/namespace-data.yaml
 	kubectl apply -f deploy/k8s/postgres.yaml
 	kubectl apply -f deploy/k8s/namespace-aws.yaml
@@ -585,7 +589,7 @@ up-k8s: _check-k8s-prereq ## Deploy the AWS substrate (JaisCloud + Postgres) to 
 	@kubectl rollout status deployment/jaiscloud -n $(K8S_NAMESPACE_AWS) --timeout=120s
 	$(MAKE) _wait-docker
 
-up-k8s-gcp: _check-k8s-prereq ## Deploy the GCP substrate (jaiscloud-gcp) to K8s; creates jaiscloud_gcp on an existing Postgres volume
+up-k8s-gcp: _check-k8s-prereq ## Deploy the GCP substrate (jaiscloud-gcp) to K8s; creates jaiscloud_gcp on an existing Postgres volume (defaults only — custom names via deploy.sh)
 	kubectl apply -f deploy/k8s/namespace-data.yaml
 	kubectl apply -f deploy/k8s/postgres.yaml
 	kubectl apply -f deploy/k8s/namespace-gcp.yaml
@@ -2358,7 +2362,7 @@ test-gcp-lifecycle: ## FC5 lifecycle + ownership harness (both transports, in-pr
 	go test -race -count=1 ./tests/gcplifecycle/...
 
 gcp-ci-preflight: ## Mirror CI's offline GCP gates before pushing (unit+race, lint, coverage, ledger, fidelity)
-	$(MAKE) --no-print-directory check-deploy-images check-integration-contract test-integration-preflight
+	$(MAKE) --no-print-directory check-deploy-images check-integration-contract test-integration-preflight test-custom-names-render
 	go test -race -count=1 ./internal/gcp/... ./internal/sparkhelpers/... ./internal/k8shelpers/... ./internal/platform/... ./internal/executor/...
 	$(MAKE) --no-print-directory test-gcp-lifecycle test-gcp-provider-capture
 	$(MAKE) --no-print-directory test-gcp-coverage
@@ -2702,6 +2706,9 @@ integration-preflight: ## READ-ONLY cluster inspection for agents (PREFLIGHT_FLA
 
 test-integration-preflight: ## Offline preflight harness (fake kubectl: leaks, legacy, env/envFrom, tri-state DB, effective RBAC, VAP match, DNS/CA; no cluster)
 	scripts/integration-preflight-test.sh
+
+test-custom-names-render: ## Offline proof that NS_*/SA_* install a custom layout via rendered overlays, and defaults still render to the shipped names
+	scripts/custom-names-render-test.sh
 
 check-deploy-images: ## Fail if a substrate image or the Spark image points at a private/local registry
 	@if grep -nE '^[[:space:]]+image:[[:space:]]+(10\.|192\.168\.|172\.(1[6-9]|2[0-9]|3[01])\.|localhost)' \

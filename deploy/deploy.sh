@@ -4,9 +4,9 @@
 # Topology (see deploy/k8s/namespace-*.yaml; docs in README-GCP.md and
 # DEVELOPER_GUIDE.md, Setup 3):
 #   jaiscloud        AWS substrate — Deployment jaiscloud, PVC jaiscloud-blobs-pvc
-#                    (deploy/k8s/namespace-aws.yaml)
+#                    (deploy/k8s/namespace-aws.yaml), ServiceAccount jaiscloud
 #   jaiscloud-gcp    GCP substrate — Deployment jaiscloud-gcp, PVC jaiscloud-gcp-blobs-pvc
-#                    (deploy/k8s/namespace-gcp.yaml)
+#                    (deploy/k8s/namespace-gcp.yaml), ServiceAccount jaiscloud-gcp
 #   jaiscloud-data   PostgreSQL — Deployment postgres, PVC postgres-pvc
 #                    databases: jaiscloud (AWS), jaiscloud_gcp (GCP)
 #                    (deploy/k8s/namespace-data.yaml)
@@ -15,6 +15,19 @@
 # install never creates a GCP namespace, ServiceAccount or binding, and vice
 # versa. The store (namespace-data.yaml + postgres.yaml) and the namespace
 # admission policy are the only shared objects.
+#
+# Custom names: the manifests above are the DEFAULT base. NS_AWS, NS_GCP, NS_DATA,
+# SA_AWS and SA_GCP select another layout; deploy.sh copies the base into a
+# throwaway kustomize overlay tree and patches the Namespace names, the
+# ServiceAccount name and every reference to it, the DSN hostnames, the
+# JAISCLOUD_K8S_* env values and the admission policy's identity expression, then
+# applies it with `kubectl apply -k` (see render_tree). Nothing under deploy/k8s
+# is edited, so the shipped manifests stay directly appliable for the defaults:
+#
+#   NS_AWS=team-aws NS_GCP=team-gcp NS_DATA=team-data \
+#   SA_AWS=team-sa-aws SA_GCP=team-sa-gcp deploy/deploy.sh --yes
+#
+# --render-only DIR writes that tree and exits without touching the cluster.
 #
 # Requirements:
 #   - Docker Desktop with Kubernetes enabled (or any cluster `kubectl` points at)
@@ -102,13 +115,17 @@ IMAGE="jaiscloud:latest"
 AWS_MANIFEST_IMAGE="jaisraj/jaiscloud-aws:latest"
 
 # One namespace per concern, so deleting a substrate never destroys the store.
-# NS_AWS/NS_GCP/NS_DATA exist for the gate scripts (which run against scratch
-# namespaces), but the manifests name their namespaces literally. deploy.sh
-# therefore verifies the manifests agree with the configured names and refuses to
-# run on a mismatch (check_namespace_overrides) instead of operating on a mix.
+# The manifests name the default layout literally; NS_AWS/NS_GCP/NS_DATA and
+# SA_AWS/SA_GCP let an install (or a gate script using a scratch namespace) pick
+# another. They are not read by the manifests themselves: every mutating path
+# renders a kustomize overlay that applies the names to a copy of the base (see
+# render_tree), which is also what keeps deploy/k8s/*.yaml directly appliable
+# for the defaults.
 NAMESPACE_AWS="${NS_AWS:-jaiscloud}"
 NAMESPACE_GCP="${NS_GCP:-jaiscloud-gcp}"
 NAMESPACE_DATA="${NS_DATA:-jaiscloud-data}"
+SA_AWS="${SA_AWS:-jaiscloud}"
+SA_GCP="${SA_GCP:-jaiscloud-gcp}"
 
 # ── the store: bundled Postgres in NAMESPACE_DATA, or an external DSN ────────
 # --store-dsn / JAISCLOUD_STORE_DSN switches the install to "bring your own
@@ -128,8 +145,8 @@ DELETE_LEGACY="${DELETE_LEGACY:-0}"
 LEGACY_POSTGRES_WORKLOAD="${LEGACY_POSTGRES_WORKLOAD:-auto}"
 # LEGACY_NAMESPACE: where the pre-split store lives. Defaulting to the AWS
 # namespace is the shipped layout; any other namespace must be confirmed with
-# LEGACY_CONFIRM=1 (check_namespace_overrides), so a stray override can never
-# aim the migration at a namespace this install does not own.
+# LEGACY_CONFIRM=1 (check_legacy_namespace), so a stray override can never aim the
+# migration at a namespace this install does not own.
 LEGACY_NAMESPACE="${LEGACY_NAMESPACE:-$NAMESPACE_AWS}"
 LEGACY_PG_USER="${LEGACY_PG_USER:-jaiscloud}"
 LEGACY_DSN="${LEGACY_DSN:-}"
@@ -178,25 +195,35 @@ usage() {
   cat <<'EOF'
 deploy.sh — build and deploy the JaisCloud substrates (AWS + GCP) to local Kubernetes
 
-Topology (three namespaces, one Postgres server):
-  jaiscloud       AWS substrate   Deployment jaiscloud, PVC jaiscloud-blobs-pvc
-  jaiscloud-gcp   GCP substrate   Deployment jaiscloud-gcp, PVC jaiscloud-gcp-blobs-pvc
+Topology (three namespaces, one Postgres server) — the defaults:
+  jaiscloud       AWS substrate   Deployment jaiscloud, ServiceAccount jaiscloud,
+                                  PVC jaiscloud-blobs-pvc
+  jaiscloud-gcp   GCP substrate   Deployment jaiscloud-gcp, ServiceAccount jaiscloud-gcp,
+                                  PVC jaiscloud-gcp-blobs-pvc
   jaiscloud-data  PostgreSQL      Deployment postgres, PVC postgres-pvc
                                   databases: jaiscloud (AWS), jaiscloud_gcp (GCP)
+
+NS_AWS / NS_GCP / NS_DATA / SA_AWS / SA_GCP select another layout. deploy.sh
+renders a throwaway kustomize overlay from deploy/k8s (the default base) and
+applies it with `kubectl apply -k`, so no file is edited:
+  NS_AWS=team-aws NS_GCP=team-gcp NS_DATA=team-data \
+  SA_AWS=team-sa-aws SA_GCP=team-sa-gcp deploy/deploy.sh --yes
+`--render-only DIR` writes that overlay tree and exits without touching the
+cluster. Applying deploy/k8s/*.yaml directly always installs the defaults.
 
 Requires Kubernetes >= 1.30: both substrate ServiceAccounts hold cluster-wide
 namespace delete, so the namespace boundary between them is enforced by the
 ValidatingAdmissionPolicy in deploy/k8s/rbac-admission-policy.yaml. deploy.sh
-applies that policy (with the namespace-*/rbac-* manifests) on every install and
-reset path.
+applies that policy (in every install and reset overlay) before any substrate
+object.
 
 Usage:
   ./deploy/deploy.sh              Build the image and apply the AWS substrate
-                                  (namespace-data.yaml, postgres.yaml,
-                                  namespace-aws.yaml, rbac-shared.yaml, rbac-aws.yaml,
-                                  jaiscloud.yaml)
-  ./deploy/deploy.sh --gcp        Apply the GCP substrate (namespace-data.yaml,
-                                  postgres.yaml, namespace-gcp.yaml, rbac-shared.yaml,
+                                  (overlays/data: namespace-data.yaml + postgres.yaml;
+                                  overlays/aws: namespace-aws.yaml, rbac-shared.yaml,
+                                  rbac-aws.yaml, jaiscloud.yaml)
+  ./deploy/deploy.sh --gcp        Apply the GCP substrate (overlays/data, then
+                                  overlays/gcp: namespace-gcp.yaml, rbac-shared.yaml,
                                   rbac-gcp.yaml, jaiscloud-gcp.yaml), creating the
                                   `jaiscloud_gcp` database BEFORE the pod starts,
                                   and wait for its rollout
@@ -271,16 +298,18 @@ Usage:
                                   Park the other substrate (when installed), then resume
                                   this one. There is no `--switch both`.
   ./deploy/deploy.sh --reset      AWS-only, database-scoped reset: drop/recreate the
-                                  `jaiscloud` database, delete the jaiscloud namespace (its
-                                  blobs and state PVCs), then re-apply the AWS manifests
-                                  (namespace-aws.yaml, rbac-shared.yaml, rbac-aws.yaml,
-                                  jaiscloud.yaml). jaiscloud-data, postgres-pvc,
-                                  jaiscloud-gcp and `jaiscloud_gcp` survive.
-  ./deploy/deploy.sh --gcp-reset  GCP-only, database-scoped reset: scale jaiscloud-gcp to 0,
-                                  delete jaiscloud-gcp-blobs-pvc, drop/recreate
-                                  `jaiscloud_gcp`, then re-apply namespace-gcp.yaml,
-                                  rbac-shared.yaml, rbac-gcp.yaml and jaiscloud-gcp.yaml.
-                                  The AWS substrate and jaiscloud-data are never touched.
+                                  `jaiscloud` database, delete the AWS namespace (its
+                                  blobs and state PVCs), then re-apply the rendered AWS
+                                  overlay (namespace-aws.yaml, rbac-shared.yaml,
+                                  rbac-aws.yaml, jaiscloud.yaml). jaiscloud-data,
+                                  postgres-pvc, the GCP namespace and `jaiscloud_gcp`
+                                  survive.
+  ./deploy/deploy.sh --gcp-reset  GCP-only, database-scoped reset: scale the GCP Deployment
+                                  to 0, delete its blobs PVC, drop/recreate
+                                  `jaiscloud_gcp`, then re-apply the rendered GCP overlay
+                                  (namespace-gcp.yaml, rbac-shared.yaml, rbac-gcp.yaml,
+                                  jaiscloud-gcp.yaml). The AWS substrate and the store
+                                  are never touched.
   --check                         READ-ONLY: inspect the cluster (namespaces, legacy
                                   layout, store, substrates, mesh, install intent) and
                                   print the next safe step. Alias for
@@ -295,6 +324,13 @@ Usage:
                                   (running|parked|absent).
   --plan                          Print the kubectl/docker/psql commands this mode would
                                   run, then exit 0 without executing them.
+  --render-only DIR               Render the kustomize overlay tree for the configured
+                                  NS_*/SA_* names into DIR (every overlay of the
+                                  install layout), print the resolved
+                                  namespaces/ServiceAccounts and the overlay paths, and
+                                  exit 0 without running kubectl. Nothing is written
+                                  into the repository; DIR is left in place.
+  --render-to DIR                 Alias for --render-only.
   --store-dsn <dsn>               Bring your own store (see above; also
                                   JAISCLOUD_STORE_DSN).
   --delete-legacy                 With --migrate-store: remove the legacy Postgres
@@ -360,12 +396,18 @@ Environment:
   BLOB_MIGRATE_IMAGE              Helper image for the blob copy (default
                                   busybox:1.36)
   NS_AWS / NS_GCP / NS_DATA       Namespace names (defaults: jaiscloud,
-                                  jaiscloud-gcp, jaiscloud-data). The manifests
-                                  name their namespaces literally, so a custom
-                                  value requires editing them too: deploy.sh
-                                  verifies Namespace names, namespace: fields,
-                                  the DSN hostnames and the VAP ServiceAccount
-                                  usernames and refuses on any mismatch.
+                                  jaiscloud-gcp, jaiscloud-data)
+  SA_AWS / SA_GCP                 ServiceAccount names (defaults: jaiscloud,
+                                  jaiscloud-gcp). deploy.sh renders a kustomize
+                                  overlay from the default base and patches the
+                                  Namespace names, the ServiceAccount and every
+                                  reference to it (Deployment serviceAccountName,
+                                  RoleBinding/ClusterRoleBinding subjects, the
+                                  JAISCLOUD_K8S_* env values), the DSN
+                                  hostnames and the admission policy's
+                                  ServiceAccount usernames. The manifests under
+                                  deploy/k8s are never edited, so applying them
+                                  directly always installs the defaults.
 
 Reset semantics (both are database-scoped, never store-wide):
   --reset      drops only the AWS database `jaiscloud` (and the AWS blobs PVC)
@@ -547,7 +589,9 @@ port_forward() {
   local ns=$1 svc=$2 remote=$3 local_port log i
   local_port=$(free_local_port) || die "no free local port in 18080-18089 — stop the process using one"
   log=$(mktemp "${TMPDIR:-/tmp}/jaiscloud-portforward.XXXXXX.log")
-  trap 'stop_port_forwards' EXIT
+  # One EXIT trap per invocation: keep the rendered-overlay cleanup in the chain
+  # so a mode that forwards a port still removes its temp tree.
+  trap 'stop_port_forwards; render_cleanup' EXIT
   info "Port-forwarding $ns/svc/$svc -> 127.0.0.1:$local_port ..."
   kubectl -n "$ns" port-forward "svc/$svc" "$local_port:$remote" --address 127.0.0.1 >"$log" 2>&1 &
   PORT_FORWARD_PIDS+=("$!")
@@ -944,11 +988,12 @@ store_dsn_for_db() {
   esac
 }
 
-# ensure_data_namespace — an external store still needs NAMESPACE_DATA: it holds
-# the install record and the psql helper pod runs there. The module is applied in
-# every install path anyway; this makes the reset paths explicit.
+# ensure_data_namespace — an external store still needs the store namespace: it
+# holds the install record and the psql helper pod runs there. The module is
+# applied in every install path anyway; this makes the reset paths explicit. The
+# data-ns overlay is namespace-data.yaml alone, renamed for NS_DATA.
 ensure_data_namespace() {
-  kubectl apply -f "$K8S_DIR/namespace-data.yaml"
+  apply_overlay data-ns
 }
 
 # external_dsn <aws|gcp> — the DSN that substrate's Secret must carry. A
@@ -1000,16 +1045,16 @@ apply_external_dsn_secret() {
   fi
 }
 
-# ensure_store — bring up the store the install needs. Bundled: namespace-data +
-# postgres.yaml and wait for the rollout. External: only namespace-data (the
-# external server is the operator's).
+# ensure_store — bring up the store the install needs. Bundled: the data overlay
+# (namespace-data + postgres.yaml) and wait for the rollout. External: only the
+# store namespace (the external server is the operator's).
 ensure_store() {
-  ensure_data_namespace
   if [[ "$STORE_MODE" == "external" ]]; then
+    ensure_data_namespace
     info "External store configured — not applying postgres.yaml."
     return 0
   fi
-  kubectl apply -f "$K8S_DIR/postgres.yaml"
+  apply_overlay data
   wait_for_rollout "$POSTGRES_DEPLOYMENT" "$NAMESPACE_DATA"
 }
 
@@ -1106,74 +1151,441 @@ server_minor() {
   printf '%s' "${minor//[!0-9]/}"
 }
 
-# manifest_namespace_name <file> — metadata.name of the Namespace document.
-manifest_namespace_name() {
-  sed -n '/^kind: Namespace$/,/^---$/p' "$1" \
-    | sed -n 's/^  name:[[:space:]]*\(.*\)$/\1/p' | head -1
+# ── rendered overlays: the default base plus the configured names ────────────
+#
+# deploy/k8s/*.yaml is the base and stays directly appliable: it installs
+# jaiscloud / jaiscloud-gcp / jaiscloud-data with the ServiceAccounts jaiscloud /
+# jaiscloud-gcp. NS_AWS, NS_GCP, NS_DATA, SA_AWS and SA_GCP select a custom
+# layout. Instead of editing those files (which would break the defaults),
+# deploy.sh copies the base it needs into a throwaway kustomize tree and patches
+# what is name-dependent, then applies the result with `kubectl apply -k`:
+#
+#   <render>/overlays/data       namespace-data.yaml + postgres.yaml  (bundled store)
+#   <render>/overlays/data-ns    namespace-data.yaml only            (external store,
+#                                                                     install record)
+#   <render>/overlays/aws        the AWS substrate + its RBAC
+#   <render>/overlays/gcp        the GCP substrate + its RBAC
+#   <render>/overlays/isolation  the cluster-scoped ValidatingAdmissionPolicy
+#
+# Each overlay carries its own copy of the base files it uses under base/:
+# kustomize's load restrictor refuses a `../../base` escape from the overlay
+# root, so the copies are per overlay and every overlay builds on its own
+# (`kubectl kustomize <render>/overlays/aws`). The admission policy gets an
+# overlay of its own because it is cluster-scoped — kustomize's namespace
+# transformer would otherwise stamp a bogus metadata.namespace onto the
+# ValidatingAdmissionPolicy and its binding.
+#
+# What each substrate overlay patches:
+#   - the Namespace object's metadata.name (cluster-scoped: the namespace
+#     transformer only renames the field on the resources inside it);
+#   - the ServiceAccount's metadata.name and the Deployment's
+#     spec.template.spec.serviceAccountName;
+#   - the RoleBinding/ClusterRoleBinding subjects (kustomize does not rewrite
+#     subjects, and a binding must name the real identity);
+#   - the ConfigMap/env values the emulator uses to find its own namespace and
+#     ServiceAccount (AWS: jaiscloud-config; GCP: the Deployment env), plus the
+#     GCP Service FQDN in the endpoint env values;
+#   - the DSN Secret's host, which embeds the store namespace;
+#   - the admission policy's ServiceAccount usernames.
+# Nothing under deploy/k8s is modified; --render-only DIR writes the tree for
+# inspection (the render test and reviewers use it) without running kubectl.
+RENDER_DIR=""
+
+validate_dns1123_label() { # validate_dns1123_label <description> <value>
+  local what=$1 value=$2
+  if ! [[ "$value" =~ ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$ ]] || ((${#value} > 63)); then
+    die "$what must be a lowercase DNS-1123 label (a-z, 0-9, '-'; at most 63 chars); got '$value'"
+  fi
 }
 
-# manifest_namespace_fields <file> — every `namespace: <value>` in the file,
-# one per line, de-duplicated.
-manifest_namespace_fields() {
-  sed -n 's/^[[:space:]]*namespace:[[:space:]]*\([^[:space:]]*\).*$/\1/p' "$1" \
-    | sort -u
+validate_names() {
+  validate_dns1123_label "NS_AWS" "$NAMESPACE_AWS"
+  validate_dns1123_label "NS_GCP" "$NAMESPACE_GCP"
+  validate_dns1123_label "NS_DATA" "$NAMESPACE_DATA"
+  validate_dns1123_label "SA_AWS" "$SA_AWS"
+  validate_dns1123_label "SA_GCP" "$SA_GCP"
 }
 
-# check_namespace_overrides — NS_AWS/NS_GCP/NS_DATA must agree with the
-# manifests. The Namespace names, every `namespace:` field and the DSN hostnames
-# are literals, and the ValidatingAdmissionPolicy matches the ServiceAccount
-# usernames `system:serviceaccount:<NS_AWS>:jaiscloud` and
-# `system:serviceaccount:<NS_GCP>:jaiscloud-gcp`. A partial NS_* override would
-# silently mix the requested name with the shipped one, so refuse with the exact
-# edits instead of operating on a half-renamed install.
-check_namespace_overrides() {
-  local problems=() spec file expected got dep
-  # The migration may read a pre-split store from a fourth namespace, but only
-  # deliberately: an unconfirmed LEGACY_NAMESPACE must not point at a namespace
-  # this install does not own (a typo would dump and then scale down a foreign
-  # Postgres).
+render_copy() { # render_copy <root> <overlay> <manifest>...
+  local root=$1 overlay=$2 manifest
+  shift 2
+  for manifest in "$@"; do
+    cp -f "$K8S_DIR/$manifest" "$root/overlays/$overlay/base/$manifest"
+  done
+}
+
+render_tree() { # render_tree <directory>
+  local root=$1 overlay
+  [[ -n "$root" && "$root" != "/" ]] || die "refusing to render the overlay tree into '${root:-<empty>}'"
+  mkdir -p "$root"
+  rm -rf "$root/overlays"
+  for overlay in data data-ns aws gcp isolation; do
+    mkdir -p "$root/overlays/$overlay/base" "$root/overlays/$overlay/patches"
+  done
+
+  # ── overlays/data: the bundled PostgreSQL store ──────────────────────────
+  render_copy "$root" data namespace-data.yaml postgres.yaml
+  cat > "$root/overlays/data/patches/namespace-name.yaml" <<EOF
+- op: replace
+  path: /metadata/name
+  value: $NAMESPACE_DATA
+EOF
+  cat > "$root/overlays/data/patches/postgres-dsn-host.yaml" <<EOF
+- op: replace
+  path: /stringData/dsn
+  value: "postgresql://jaiscloud:jaiscloud@postgres.$NAMESPACE_DATA.svc.cluster.local:5432/jaiscloud"
+EOF
+  cat > "$root/overlays/data/kustomization.yaml" <<EOF
+# Rendered by deploy/deploy.sh (NS_DATA=$NAMESPACE_DATA). Do not edit: rerun
+# deploy.sh, or --render-only DIR for an inspectable copy.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: $NAMESPACE_DATA
+resources:
+  - base/namespace-data.yaml
+  - base/postgres.yaml
+patches:
+  # The Namespace object is cluster-scoped, so the namespace transformer does not
+  # rename it; patch metadata.name instead.
+  - path: patches/namespace-name.yaml
+    target:
+      kind: Namespace
+      name: jaiscloud-data
+  # The store's own DSN is a convenience value, but it must name the real
+  # Service host: postgres.<NS_DATA>.svc.cluster.local.
+  - path: patches/postgres-dsn-host.yaml
+    target:
+      kind: Secret
+      name: postgres-secret
+EOF
+
+  # ── overlays/data-ns: the store namespace alone (external store) ─────────
+  render_copy "$root" data-ns namespace-data.yaml
+  cp -f "$root/overlays/data/patches/namespace-name.yaml" \
+        "$root/overlays/data-ns/patches/namespace-name.yaml"
+  cat > "$root/overlays/data-ns/kustomization.yaml" <<EOF
+# Rendered by deploy/deploy.sh (NS_DATA=$NAMESPACE_DATA): the store namespace
+# alone. Used for --store-dsn (nothing of postgres.yaml is applied) and anywhere
+# only the install-record namespace must exist.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: $NAMESPACE_DATA
+resources:
+  - base/namespace-data.yaml
+patches:
+  - path: patches/namespace-name.yaml
+    target:
+      kind: Namespace
+      name: jaiscloud-data
+EOF
+
+  # ── overlays/aws: the AWS substrate ──────────────────────────────────────
+  render_copy "$root" aws namespace-aws.yaml rbac-shared.yaml rbac-aws.yaml jaiscloud.yaml
+  cat > "$root/overlays/aws/patches/namespace-name.yaml" <<EOF
+- op: replace
+  path: /metadata/name
+  value: $NAMESPACE_AWS
+EOF
+  cat > "$root/overlays/aws/patches/serviceaccount-name.yaml" <<EOF
+- op: replace
+  path: /metadata/name
+  value: $SA_AWS
+EOF
+  cat > "$root/overlays/aws/patches/deployment-serviceaccount.yaml" <<EOF
+- op: replace
+  path: /spec/template/spec/serviceAccountName
+  value: $SA_AWS
+EOF
+  cat > "$root/overlays/aws/patches/rolebinding-subject.yaml" <<EOF
+- op: replace
+  path: /subjects/0/name
+  value: $SA_AWS
+- op: replace
+  path: /subjects/0/namespace
+  value: $NAMESPACE_AWS
+EOF
+  cat > "$root/overlays/aws/patches/clusterrolebinding-subject.yaml" <<EOF
+- op: replace
+  path: /subjects/0/name
+  value: $SA_AWS
+- op: replace
+  path: /subjects/0/namespace
+  value: $NAMESPACE_AWS
+EOF
+  cat > "$root/overlays/aws/patches/configmap-identity.yaml" <<EOF
+- op: replace
+  path: /data/JAISCLOUD_K8S_NAMESPACE
+  value: $NAMESPACE_AWS
+- op: replace
+  path: /data/JAISCLOUD_K8S_SA
+  value: $SA_AWS
+EOF
+  cat > "$root/overlays/aws/patches/dsn-host.yaml" <<EOF
+- op: replace
+  path: /stringData/dsn
+  value: "postgres://jaiscloud:jaiscloud@postgres.$NAMESPACE_DATA.svc.cluster.local:5432/jaiscloud"
+EOF
+  cat > "$root/overlays/aws/kustomization.yaml" <<EOF
+# Rendered by deploy/deploy.sh (NS_AWS=$NAMESPACE_AWS SA_AWS=$SA_AWS
+# NS_DATA=$NAMESPACE_DATA). Do not edit: rerun deploy.sh with the NS_*/SA_*
+# values, or --render-only DIR for an inspectable copy.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: $NAMESPACE_AWS
+resources:
+  - base/namespace-aws.yaml
+  - base/rbac-shared.yaml
+  - base/rbac-aws.yaml
+  - base/jaiscloud.yaml
+patches:
+  - path: patches/namespace-name.yaml
+    target:
+      kind: Namespace
+      name: jaiscloud
+  - path: patches/serviceaccount-name.yaml
+    target:
+      kind: ServiceAccount
+      name: jaiscloud
+  - path: patches/deployment-serviceaccount.yaml
+    target:
+      kind: Deployment
+      name: jaiscloud
+  - path: patches/rolebinding-subject.yaml
+    target:
+      kind: RoleBinding
+      name: jaiscloud-executor
+  - path: patches/clusterrolebinding-subject.yaml
+    target:
+      kind: ClusterRoleBinding
+      name: jaiscloud-namespace-admin-aws
+  # The emulator resolves its own namespace/ServiceAccount from here (the
+  # executor RoleBindings it creates must bind the real identity).
+  - path: patches/configmap-identity.yaml
+    target:
+      kind: ConfigMap
+      name: jaiscloud-config
+  # Secrets cannot cross namespaces; this one names the store Service host.
+  - path: patches/dsn-host.yaml
+    target:
+      kind: Secret
+      name: jaiscloud-dsn
+EOF
+
+  # ── overlays/gcp: the GCP substrate ──────────────────────────────────────
+  render_copy "$root" gcp namespace-gcp.yaml rbac-shared.yaml rbac-gcp.yaml jaiscloud-gcp.yaml
+  cat > "$root/overlays/gcp/patches/namespace-name.yaml" <<EOF
+- op: replace
+  path: /metadata/name
+  value: $NAMESPACE_GCP
+EOF
+  cat > "$root/overlays/gcp/patches/serviceaccount-name.yaml" <<EOF
+- op: replace
+  path: /metadata/name
+  value: $SA_GCP
+EOF
+  cat > "$root/overlays/gcp/patches/deployment-serviceaccount.yaml" <<EOF
+- op: replace
+  path: /spec/template/spec/serviceAccountName
+  value: $SA_GCP
+EOF
+  # Strategic merge: EnvVar lists merge by name, so this replaces exactly these
+  # entries and leaves every other env value to the base manifest.
+  cat > "$root/overlays/gcp/patches/deployment-identity.yaml" <<EOF
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: jaiscloud-gcp
+spec:
+  template:
+    spec:
+      containers:
+        - name: jaiscloud-gcp
+          env:
+            # The emulator places its own workloads in this namespace and binds
+            # this identity in the namespaces it creates.
+            - name: JAISCLOUD_K8S_NAMESPACE
+              value: $NAMESPACE_GCP
+            - name: JAISCLOUD_K8S_SA
+              value: $SA_GCP
+            - name: JAISCLOUD_K8S_SA_NAMESPACE
+              value: $NAMESPACE_GCP
+            # Pod-reachable Service addresses: the namespace is part of the FQDN.
+            - name: JAISCLOUD_GCS_EMULATOR_ENDPOINT
+              value: http://jaiscloud-gcp.$NAMESPACE_GCP.svc.cluster.local:8080
+            - name: JAISCLOUD_DATAPROC_HMS_ENDPOINT
+              value: jaiscloud-gcp.$NAMESPACE_GCP.svc.cluster.local:9083
+EOF
+  cat > "$root/overlays/gcp/patches/rolebinding-subject.yaml" <<EOF
+- op: replace
+  path: /subjects/0/name
+  value: $SA_GCP
+- op: replace
+  path: /subjects/0/namespace
+  value: $NAMESPACE_GCP
+EOF
+  cat > "$root/overlays/gcp/patches/clusterrolebinding-subject.yaml" <<EOF
+- op: replace
+  path: /subjects/0/name
+  value: $SA_GCP
+- op: replace
+  path: /subjects/0/namespace
+  value: $NAMESPACE_GCP
+EOF
+  cat > "$root/overlays/gcp/patches/dsn-host.yaml" <<EOF
+- op: replace
+  path: /stringData/dsn
+  value: "postgres://jaiscloud:jaiscloud@postgres.$NAMESPACE_DATA.svc.cluster.local:5432/jaiscloud_gcp"
+EOF
+  cat > "$root/overlays/gcp/kustomization.yaml" <<EOF
+# Rendered by deploy/deploy.sh (NS_GCP=$NAMESPACE_GCP SA_GCP=$SA_GCP
+# NS_DATA=$NAMESPACE_DATA). Do not edit: rerun deploy.sh with the NS_*/SA_*
+# values, or --render-only DIR for an inspectable copy.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: $NAMESPACE_GCP
+resources:
+  - base/namespace-gcp.yaml
+  - base/rbac-shared.yaml
+  - base/rbac-gcp.yaml
+  - base/jaiscloud-gcp.yaml
+patches:
+  - path: patches/namespace-name.yaml
+    target:
+      kind: Namespace
+      name: jaiscloud-gcp
+  - path: patches/serviceaccount-name.yaml
+    target:
+      kind: ServiceAccount
+      name: jaiscloud-gcp
+  - path: patches/deployment-serviceaccount.yaml
+    target:
+      kind: Deployment
+      name: jaiscloud-gcp
+  - path: patches/deployment-identity.yaml
+    target:
+      kind: Deployment
+      name: jaiscloud-gcp
+  - path: patches/rolebinding-subject.yaml
+    target:
+      kind: RoleBinding
+      name: jaiscloud-executor
+  - path: patches/clusterrolebinding-subject.yaml
+    target:
+      kind: ClusterRoleBinding
+      name: jaiscloud-namespace-admin-gcp
+  # Secrets cannot cross namespaces; this one names the store Service host.
+  - path: patches/dsn-host.yaml
+    target:
+      kind: Secret
+      name: jaiscloud-gcp-dsn
+EOF
+
+  # ── overlays/isolation: the cluster-scoped admission policy ──────────────
+  render_copy "$root" isolation rbac-admission-policy.yaml
+  cat > "$root/overlays/isolation/patches/match-usernames.yaml" <<EOF
+- op: replace
+  path: /spec/matchConditions/0/expression
+  value: >-
+    request.userInfo.username == 'system:serviceaccount:$NAMESPACE_AWS:$SA_AWS' ||
+    request.userInfo.username == 'system:serviceaccount:$NAMESPACE_GCP:$SA_GCP'
+# The policy derives the caller's substrate from the AWS username; the ternary
+# must name the configured identity, not the shipped one, or an AWS request
+# would be treated as the GCP substrate and denied its own namespaces.
+- op: replace
+  path: /spec/variables/0/expression
+  value: >-
+    request.userInfo.username == 'system:serviceaccount:$NAMESPACE_AWS:$SA_AWS'
+    ? 'aws' : 'gcp'
+EOF
+  cat > "$root/overlays/isolation/kustomization.yaml" <<EOF
+# Rendered by deploy/deploy.sh (AWS=$NAMESPACE_AWS/$SA_AWS GCP=$NAMESPACE_GCP/$SA_GCP).
+# The ValidatingAdmissionPolicy and its binding are cluster-scoped, so this
+# overlay sets no namespace: the namespace transformer would stamp one onto them.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - base/rbac-admission-policy.yaml
+patches:
+  # The policy matches ServiceAccount usernames, which embed both namespaces:
+  # matchConditions selects the identities and variables derives the substrate.
+  - path: patches/match-usernames.yaml
+    target:
+      group: admissionregistration.k8s.io
+      version: v1
+      kind: ValidatingAdmissionPolicy
+      name: jaiscloud-namespace-isolation
+EOF
+
+  cat > "$root/README.md" <<EOF
+# Rendered overlay tree (generated by deploy/deploy.sh)
+
+Resolved layout:
+
+| cloud | namespace | ServiceAccount |
+|---|---|---|
+| AWS | \`$NAMESPACE_AWS\` | \`$SA_AWS\` |
+| GCP | \`$NAMESPACE_GCP\` | \`$SA_GCP\` |
+| store | \`$NAMESPACE_DATA\` | — |
+
+Overlays (each is self-contained; \`base/\` holds a copy of the manifests it
+patches, because kustomize refuses resources outside an overlay's root):
+
+- \`overlays/data\` — the bundled store (\`namespace-data.yaml\` + \`postgres.yaml\`)
+- \`overlays/data-ns\` — the store namespace only (external store / install record)
+- \`overlays/aws\` — the AWS substrate and its RBAC
+- \`overlays/gcp\` — the GCP substrate and its RBAC
+- \`overlays/isolation\` — the cluster-scoped namespace-isolation policy
+
+Inspect with \`kubectl kustomize <overlay>\`; apply with
+\`kubectl apply -k <overlay>\`. Re-running deploy.sh regenerates this tree.
+EOF
+}
+
+render_cleanup() {
+  if [[ -n "$RENDER_DIR" ]]; then
+    rm -rf "$RENDER_DIR"
+    RENDER_DIR=""
+  fi
+}
+
+# render_ensure — build the tree once per invocation in a private temp dir and
+# schedule its removal. Mutating paths call it before their first apply; the
+# tree is rebuilt from the current NS_*/SA_* values, never cached.
+render_ensure() {
+  [[ -n "$RENDER_DIR" ]] && return 0
+  validate_names
+  RENDER_DIR="$(mktemp -d "${TMPDIR:-/tmp}/jaiscloud-render.XXXXXX")"
+  trap 'render_cleanup' EXIT
+  render_tree "$RENDER_DIR"
+  info "Rendered kustomize overlays in $RENDER_DIR"
+  info "  AWS: namespace $NAMESPACE_AWS, ServiceAccount $SA_AWS"
+  info "  GCP: namespace $NAMESPACE_GCP, ServiceAccount $SA_GCP"
+  info "  store: namespace $NAMESPACE_DATA"
+}
+
+# apply_overlay <data|data-ns|aws|gcp|isolation> — kubectl apply -k the rendered
+# overlay. Every object of that group lands in one apply, so a namespace and its
+# RBAC exist before the Deployment that uses them.
+apply_overlay() {
+  local overlay=$1
+  render_ensure
+  [[ -f "$RENDER_DIR/overlays/$overlay/kustomization.yaml" ]] \
+    || die "no rendered overlay '$overlay' in $RENDER_DIR"
+  info "Applying overlay '$overlay' (kubectl apply -k $RENDER_DIR/overlays/$overlay)..."
+  kubectl apply -k "$RENDER_DIR/overlays/$overlay"
+}
+
+# check_legacy_namespace — the migration may read a pre-split store from a fourth
+# namespace, but only deliberately: an unconfirmed LEGACY_NAMESPACE must not point
+# at a namespace this install does not own (a typo would dump and then scale down
+# a foreign Postgres).
+check_legacy_namespace() {
   if [[ -n "$LEGACY_NAMESPACE" \
         && "$LEGACY_NAMESPACE" != "$NAMESPACE_AWS" \
         && "$LEGACY_NAMESPACE" != "$NAMESPACE_GCP" \
         && "$LEGACY_NAMESPACE" != "$NAMESPACE_DATA" \
         && "$LEGACY_CONFIRM" != "1" ]]; then
     die "LEGACY_NAMESPACE='$LEGACY_NAMESPACE' is not one of the JaisCloud namespaces ($NAMESPACE_AWS, $NAMESPACE_GCP, $NAMESPACE_DATA). The migration only reads a store this install owns; set LEGACY_CONFIRM=1 (--legacy-confirm) to confirm '$LEGACY_NAMESPACE' holds the pre-split JaisCloud store."
-  fi
-  for spec in "namespace-aws.yaml:$NAMESPACE_AWS" \
-              "namespace-gcp.yaml:$NAMESPACE_GCP" \
-              "namespace-data.yaml:$NAMESPACE_DATA"; do
-    file=${spec%%:*}; expected=${spec#*:}
-    got=$(manifest_namespace_name "$K8S_DIR/$file")
-    [[ "$got" == "$expected" ]] || \
-      problems+=("$file declares Namespace '${got:-<none>}', not '$expected'")
-  done
-  for spec in "rbac-aws.yaml:$NAMESPACE_AWS" "jaiscloud.yaml:$NAMESPACE_AWS" \
-              "rbac-gcp.yaml:$NAMESPACE_GCP" "jaiscloud-gcp.yaml:$NAMESPACE_GCP" \
-              "postgres.yaml:$NAMESPACE_DATA"; do
-    file=${spec%%:*}; expected=${spec#*:}
-    got=$(manifest_namespace_fields "$K8S_DIR/$file")
-    if [[ -z "$got" ]]; then
-      problems+=("$file declares no 'namespace:' field (expected '$expected')")
-    elif [[ "$got" != "$expected" ]]; then
-      problems+=("$file uses namespace: $(printf '%s\n' "$got" | tr '\n' ' ')— expected only '$expected'")
-    fi
-  done
-  # The policy is cluster-scoped but matches the substrate ServiceAccount
-  # usernames, which embed both substrate namespaces.
-  for dep in "system:serviceaccount:$NAMESPACE_AWS:jaiscloud" \
-             "system:serviceaccount:$NAMESPACE_GCP:jaiscloud-gcp"; do
-    grep -qF "$dep" "$K8S_DIR/rbac-admission-policy.yaml" || \
-      problems+=("rbac-admission-policy.yaml does not match '$dep' (edited NS_* needs the VAP usernames updated)")
-  done
-  # The DSN hostnames embed the store namespace.
-  for file in jaiscloud.yaml jaiscloud-gcp.yaml postgres.yaml; do
-    grep -qF "$NAMESPACE_DATA" "$K8S_DIR/$file" || \
-      problems+=("$file has no reference to the store namespace '$NAMESPACE_DATA' (DSN hostnames)")
-  done
-  if ((${#problems[@]})); then
-    warn "namespace override mismatch (NS_AWS=$NAMESPACE_AWS NS_GCP=$NAMESPACE_GCP NS_DATA=$NAMESPACE_DATA):"
-    for spec in "${problems[@]}"; do warn "  - $spec"; done
-    die "custom namespaces require editing the manifests: the Namespace 'name' fields, the 'namespace:' fields, the DSN hostnames and the ValidatingAdmissionPolicy ServiceAccount usernames. Refusing to operate on a mix of defaults and overrides."
   fi
 }
 
@@ -1200,10 +1612,12 @@ require_isolation_prereqs() {
 }
 
 # apply_isolation_policy — idempotent apply of the ValidatingAdmissionPolicy and
-# its binding. Applies before any namespace/executor object so every namespace a
-# substrate creates from now on is admitted under the boundary.
+# its binding, from the rendered isolation overlay (the policy is cluster-scoped
+# and matches the substrate ServiceAccount usernames, so it is patched with the
+# configured names too). Applied before any namespace/executor object so every
+# namespace a substrate creates from now on is admitted under the boundary.
 apply_isolation_policy() {
-  kubectl apply -f "$K8S_DIR/rbac-admission-policy.yaml"
+  apply_overlay isolation
 }
 
 # retire_legacy_namespace_binding <cloud> — a pre-split install bound one
@@ -1225,33 +1639,27 @@ retire_legacy_namespace_binding() {
   fi
 }
 
-# apply_aws — the store first (namespace-data.yaml + postgres.yaml for a bundled
-# store), then the AWS namespace and its RBAC (rbac-shared.yaml declares the
-# ClusterRole the bindings reference; rbac-aws.yaml declares the ServiceAccount
-# and both bindings), and only then the deployment that runs as that identity. No
-# GCP object is created by an AWS-only install.
+# apply_aws — the store first (the data overlay: namespace-data.yaml +
+# postgres.yaml for a bundled store), then the AWS overlay (rbac-shared.yaml
+# declares the ClusterRole the bindings reference; rbac-aws.yaml declares the
+# ServiceAccount and both bindings; jaiscloud.yaml runs as that identity). No GCP
+# object is created by an AWS-only install.
 apply_aws() {
   require_isolation_prereqs
   apply_isolation_policy
   ensure_store
   ensure_database "$AWS_DB"
-  kubectl apply -f "$K8S_DIR/namespace-aws.yaml"
-  kubectl apply -f "$K8S_DIR/rbac-shared.yaml"
-  kubectl apply -f "$K8S_DIR/rbac-aws.yaml"
+  apply_overlay aws
   retire_legacy_namespace_binding aws
-  kubectl apply -f "$K8S_DIR/jaiscloud.yaml"
   [[ "$STORE_MODE" == "external" ]] && apply_external_dsn_secret aws
   record_store "$STORE_MODE"
 }
 
 # AWS reset re-applies only the AWS-side objects: postgres.yaml lives entirely
-# in jaiscloud-data, which a --reset must never touch.
+# in the store namespace, which a --reset must never touch.
 apply_aws_workloads() {
-  kubectl apply -f "$K8S_DIR/namespace-aws.yaml"
-  kubectl apply -f "$K8S_DIR/rbac-shared.yaml"
-  kubectl apply -f "$K8S_DIR/rbac-aws.yaml"
+  apply_overlay aws
   retire_legacy_namespace_binding aws
-  kubectl apply -f "$K8S_DIR/jaiscloud.yaml"
   restore_aws_ca_configmap
 }
 
@@ -1469,6 +1877,13 @@ while (($#)); do
                      PREFLIGHT_DESIRED="$2"; shift ;;
     --desired=*)     PREFLIGHT_DESIRED="${1#*=}" ;;
     --plan)          PLAN=1 ;;
+    --render-only|--render-to)
+                     [[ -n "${2:-}" ]] || die "--render-only needs a directory"
+                     MODE="render-only"; RENDER_TO="$2"; shift ;;
+    --render-only=*) MODE="render-only"; RENDER_TO="${1#*=}"
+                     [[ -n "$RENDER_TO" ]] || die "--render-only= needs a directory" ;;
+    --render-to=*)   MODE="render-only"; RENDER_TO="${1#*=}"
+                     [[ -n "$RENDER_TO" ]] || die "--render-to= needs a directory" ;;
     -y|--yes)        ASSUME_YES=1 ;;
     --skip-build)    SKIP_IMAGE_BUILD=1 ;;
     -h|--help)       usage; exit 0 ;;
@@ -1516,6 +1931,10 @@ if [[ "$MODE" == "check" ]]; then
   [[ "$PREFLIGHT_STRICT" == "1" ]] && args+=(--strict)
   [[ -n "$PREFLIGHT_SUBSTRATE" ]] && args+=(--substrate "$PREFLIGHT_SUBSTRATE")
   [[ -n "$PREFLIGHT_DESIRED" ]] && args+=(--desired "$PREFLIGHT_DESIRED")
+  # The preflight reads NS_AWS/NS_GCP/NS_DATA from its environment; hand it the
+  # resolved names so a check always inspects the layout deploy.sh would install.
+  export NS_AWS="$NAMESPACE_AWS" NS_GCP="$NAMESPACE_GCP" NS_DATA="$NAMESPACE_DATA"
+  export SA_AWS SA_GCP
   exec "$REPO_ROOT/scripts/integration-preflight.sh" ${args+"${args[@]}"}
 fi
 
@@ -1531,19 +1950,41 @@ plan_install_record() {
   plan "kubectl -n $NAMESPACE_DATA create configmap $INSTALL_CONFIGMAP --from-literal=schema=1 --from-literal=installed=<merged> --from-literal=desired=<merged, $2> --from-literal=store=$STORE_MODE --dry-run=client -o yaml | kubectl apply -f -"
 }
 
-# plan_store <cloud> — the store half of an install: bundled applies postgres.yaml
-# and creates the database inside it; external skips the Deployment and runs the
-# CREATE/DROP through a psql pod against the DSN.
+# plan_overlay <data|data-ns|aws|gcp|isolation> — one rendered overlay and the
+# names it resolves to. --plan never renders: the tree is built at run time in a
+# temp dir, so the plan shows the shape instead of a path that does not exist yet.
+plan_overlay() {
+  local overlay=$1 detail="" ns="" sa=""
+  case "$overlay" in
+    data)      ns=$NAMESPACE_DATA
+               detail="namespace-data.yaml + postgres.yaml; DSN host postgres.$NAMESPACE_DATA.svc.cluster.local" ;;
+    data-ns)   ns=$NAMESPACE_DATA
+               detail="namespace-data.yaml only (no postgres.yaml: external store)" ;;
+    aws)       ns=$NAMESPACE_AWS; sa=$SA_AWS
+               detail="namespace-aws.yaml + rbac-shared.yaml + rbac-aws.yaml + jaiscloud.yaml; namespace $ns, ServiceAccount $sa, DSN host postgres.$NAMESPACE_DATA.svc.cluster.local" ;;
+    gcp)       ns=$NAMESPACE_GCP; sa=$SA_GCP
+               detail="namespace-gcp.yaml + rbac-shared.yaml + rbac-gcp.yaml + jaiscloud-gcp.yaml; namespace $ns, ServiceAccount $sa, service FQDN jaiscloud-gcp.$ns.svc.cluster.local, DSN host postgres.$NAMESPACE_DATA.svc.cluster.local" ;;
+    isolation) ns="(cluster-scoped)"
+               detail="rbac-admission-policy.yaml; matchConditions usernames system:serviceaccount:$NAMESPACE_AWS:$SA_AWS and system:serviceaccount:$NAMESPACE_GCP:$SA_GCP" ;;
+  esac
+  plan "# render overlay '$overlay' (<temp>/overlays/$overlay; namespace $ns${sa:+, ServiceAccount $sa})"
+  plan "#   base: $detail"
+  plan "kubectl apply -k <render>/overlays/$overlay"
+}
+
+# plan_store <cloud> — the store half of an install: bundled applies the data
+# overlay and creates the database inside it; external applies the namespace only
+# and runs the CREATE/DROP through a psql pod against the DSN.
 plan_store() {
   local cloud=$1 ns secret
   if [[ "$cloud" == "aws" ]]; then ns=$NAMESPACE_AWS; secret="jaiscloud-dsn"
   else ns=$NAMESPACE_GCP; secret="jaiscloud-gcp-dsn"; fi
   if [[ "$STORE_MODE" == "external" ]]; then
-    plan "# external store ($cloud): do NOT apply postgres.yaml (namespace-data.yaml is still applied for the install record)"
+    plan_overlay data-ns
     plan "kubectl -n $NAMESPACE_DATA run jaiscloud-store-init-<pid> --rm -i --restart=Never --image=$STORE_INIT_IMAGE -- psql <external DSN> -v ON_ERROR_STOP=1 -d postgres -c 'SELECT 1 FROM pg_database ...' || CREATE DATABASE"
-    plan "# after the substrate manifests: kubectl -n $ns create secret generic $secret --from-literal=dsn=<external DSN> --dry-run=client -o yaml | kubectl apply -f - ; rollout restart"
+    plan "# after the substrate overlay: kubectl -n $ns create secret generic $secret --from-literal=dsn=<external DSN> --dry-run=client -o yaml | kubectl apply -f - ; rollout restart"
   else
-    plan "kubectl apply -f $K8S_DIR/postgres.yaml"
+    plan_overlay data
     plan "kubectl -n $NAMESPACE_DATA rollout status deployment/postgres --timeout=120s"
     plan "kubectl -n $NAMESPACE_DATA exec deploy/postgres -- psql ... 'SELECT 1 ... database' || CREATE DATABASE"
   fi
@@ -1596,7 +2037,12 @@ plan_lifecycle_resume() {
 print_plan() {
   local mode=$1
   info "Plan for mode '$mode' (nothing is executed)"
-  plan "check namespaces $NAMESPACE_AWS / $NAMESPACE_GCP / $NAMESPACE_DATA against the manifests (Namespace names, namespace: fields, DSN hostnames, VAP usernames)"
+  info "Resolved names: AWS=$NAMESPACE_AWS/$SA_AWS GCP=$NAMESPACE_GCP/$SA_GCP store=$NAMESPACE_DATA"
+  plan "# render the overlay tree from deploy/k8s (the default base) into a temp dir, patching:"
+  plan "#   Namespace names, ServiceAccount name + Deployment serviceAccountName,"
+  plan "#   RoleBinding/ClusterRoleBinding subjects, jaiscloud-config / GCP env identity,"
+  plan "#   DSN hostnames, and the admission policy's ServiceAccount usernames"
+  plan "# inspect it without touching the cluster: $0 --render-only <dir>"
   case "$mode" in
     deploy)
       if [[ "$SKIP_IMAGE_BUILD" == "1" ]]; then
@@ -1606,13 +2052,9 @@ print_plan() {
         plan "docker tag $IMAGE $AWS_MANIFEST_IMAGE"
         plan "# kind load / k3d image import when the context is kind-*/k3d-*"
       fi
-      plan "kubectl apply -f $K8S_DIR/rbac-admission-policy.yaml   # namespace isolation (K8s >= 1.30)"
-      plan "kubectl apply -f $K8S_DIR/namespace-data.yaml"
+      plan_overlay isolation
       plan_store "aws"
-      plan "kubectl apply -f $K8S_DIR/namespace-aws.yaml"
-      plan "kubectl apply -f $K8S_DIR/rbac-shared.yaml"
-      plan "kubectl apply -f $K8S_DIR/rbac-aws.yaml"
-      plan "kubectl apply -f $K8S_DIR/jaiscloud.yaml"
+      plan_overlay aws
       if [[ "$STORE_MODE" == "external" ]]; then
         plan "kubectl -n $NAMESPACE_AWS create secret generic jaiscloud-dsn --from-literal=dsn=<external DSN> --dry-run=client -o yaml | kubectl apply -f -; kubectl -n $NAMESPACE_AWS rollout restart deployment/jaiscloud"
       fi
@@ -1620,13 +2062,10 @@ print_plan() {
       plan_install_record "aws" "aws=running"
       ;;
     gcp)
-      plan "kubectl apply -f $K8S_DIR/rbac-admission-policy.yaml   # namespace isolation (K8s >= 1.30)"
-      plan "kubectl apply -f $K8S_DIR/namespace-data.yaml"
+      plan_overlay isolation
       plan_store "gcp"
-      plan "kubectl apply -f $K8S_DIR/namespace-gcp.yaml"
-      plan "kubectl apply -f $K8S_DIR/rbac-shared.yaml"
-      plan "kubectl apply -f $K8S_DIR/rbac-gcp.yaml"
-      plan "kubectl apply -f $K8S_DIR/jaiscloud-gcp.yaml"
+      plan "kubectl -n $NAMESPACE_DATA exec deploy/postgres -- psql ... CREATE DATABASE jaiscloud_gcp   # before the GCP pod starts"
+      plan_overlay gcp
       if [[ "$STORE_MODE" == "external" ]]; then
         plan "kubectl -n $NAMESPACE_GCP create secret generic jaiscloud-gcp-dsn --from-literal=dsn=<external DSN> --dry-run=client -o yaml | kubectl apply -f -; kubectl -n $NAMESPACE_GCP rollout restart deployment/jaiscloud-gcp"
       fi
@@ -1651,13 +2090,12 @@ print_plan() {
       plan "kubectl -n $OLD_NS get <kind>/<name> -o jsonpath=\"{.metadata.labels['jaiscloud.io/managed-by']}\"   # must be jaiscloud, else die (LEGACY_CONFIRM=1 overrides)"
       plan "# blob claims: legacy aws=$LEGACY_AWS_BLOBS_PVC gcp=$LEGACY_GCP_BLOBS_PVC -> new aws=$NEW_AWS_BLOBS_PVC gcp=$NEW_GCP_BLOBS_PVC"
       if [[ -n "$LEGACY_DSN" ]]; then
-        plan "kubectl apply -f $K8S_DIR/namespace-data.yaml; kubectl apply -f $K8S_DIR/postgres.yaml; rollout status"
+        plan_overlay data
         plan "kubectl -n $NAMESPACE_DATA exec deploy/postgres -- pg_dump -Fc '<LEGACY_DSN>' > <tmp>   # from the NEW store pod; no legacy workload touched"
       else
         plan "kubectl -n $OLD_NS exec $legacy_workload -- pg_dump -U $LEGACY_PG_USER -Fc -d jaiscloud > <tmp>"
         plan "kubectl -n $OLD_NS scale $legacy_workload --replicas=0   # kept, not deleted"
-        plan "kubectl apply -f $K8S_DIR/namespace-data.yaml"
-        plan "kubectl apply -f $K8S_DIR/postgres.yaml"
+        plan_overlay data
       fi
       plan "kubectl -n $NAMESPACE_DATA exec -i deploy/postgres -- pg_restore ... -d jaiscloud < <tmp>"
       plan "kubectl -n $NAMESPACE_DATA exec -i deploy/postgres -- pg_restore ... -d jaiscloud_gcp < <tmp>"
@@ -1667,36 +2105,30 @@ print_plan() {
       else
         plan "# legacy workload kept: scaled to 0; Deployment/StatefulSet, Services and PVCs stay (pass --delete-legacy to remove the workload)"
       fi
-      plan "# legacy GCP: apply namespace-gcp.yaml, rbac-shared.yaml, rbac-gcp.yaml and jaiscloud-gcp.yaml, scale to 0, tar-copy the blob PVC, scale to 1"
+      plan "# legacy GCP: apply the GCP overlay, scale to 0, tar-copy the blob PVC, scale to 1"
       [[ "$OLD_NS" != "$NAMESPACE_AWS" ]] && plan "# AWS blobs move namespaces: tar-copy pvc/$LEGACY_AWS_BLOBS_PVC -> pvc/$NEW_AWS_BLOBS_PVC (migrate_blobs)"
-      plan "kubectl apply -f $K8S_DIR/jaiscloud.yaml"
+      plan_overlay gcp
+      plan_overlay aws
       plan_install_record "aws" "aws=running (and gcp when the legacy GCP workload exists)"
       ;;
     reset)
       plan "kubectl -n $NAMESPACE_AWS scale deployment jaiscloud --replicas=0   # when present"
-      [[ "$STORE_MODE" == "external" ]] && plan "kubectl apply -f $K8S_DIR/namespace-data.yaml   # the psql helper pod runs there"
-      plan "kubectl -n $NAMESPACE_DATA apply namespace-data.yaml; psql -c 'DROP DATABASE IF EXISTS jaiscloud WITH (FORCE)' -c 'CREATE DATABASE jaiscloud'   # bundled: inside deploy/postgres; external: -d postgres from a psql pod"
+      [[ "$STORE_MODE" == "external" ]] && plan_overlay data-ns
+      plan "kubectl -n $NAMESPACE_DATA psql -c 'DROP DATABASE IF EXISTS jaiscloud WITH (FORCE)' -c 'CREATE DATABASE jaiscloud'   # bundled: inside deploy/postgres; external: -d postgres from a psql pod"
       plan "kubectl delete namespace $NAMESPACE_AWS"
-      plan "kubectl apply -f $K8S_DIR/rbac-admission-policy.yaml   # namespace isolation (K8s >= 1.30)"
-      plan "kubectl apply -f $K8S_DIR/namespace-data.yaml"
-      [[ "$STORE_MODE" == "bundled" ]] && plan "kubectl apply -f $K8S_DIR/postgres.yaml         # only when the store is missing"
-      plan "kubectl apply -f $K8S_DIR/namespace-aws.yaml"
-      plan "kubectl apply -f $K8S_DIR/rbac-shared.yaml"
-      plan "kubectl apply -f $K8S_DIR/rbac-aws.yaml"
-      plan "kubectl apply -f $K8S_DIR/jaiscloud.yaml"
+      plan_overlay isolation
+      [[ "$STORE_MODE" == "bundled" ]] && plan_overlay data   # only when the store is missing
+      plan_overlay aws
       [[ "$STORE_MODE" == "external" ]] && plan "kubectl -n $NAMESPACE_AWS create secret generic jaiscloud-dsn --from-literal=dsn=<external DSN> --dry-run=client -o yaml | kubectl apply -f -; rollout restart"
       plan_install_record "aws" "aws=running"
       ;;
     gcp-reset)
       plan "kubectl -n $NAMESPACE_GCP scale deployment jaiscloud-gcp --replicas=0   # when present"
       plan "kubectl -n $NAMESPACE_GCP delete pvc $GCP_PVC"
-      [[ "$STORE_MODE" == "external" ]] && plan "kubectl apply -f $K8S_DIR/namespace-data.yaml   # the psql helper pod runs there"
+      [[ "$STORE_MODE" == "external" ]] && plan_overlay data-ns
       plan "kubectl -n $NAMESPACE_DATA psql -c 'DROP DATABASE IF EXISTS jaiscloud_gcp WITH (FORCE)' -c 'CREATE DATABASE jaiscloud_gcp'   # bundled: deploy/postgres; external: -d postgres from a psql pod"
-      plan "kubectl apply -f $K8S_DIR/rbac-admission-policy.yaml   # namespace isolation (K8s >= 1.30)"
-      plan "kubectl apply -f $K8S_DIR/namespace-gcp.yaml"
-      plan "kubectl apply -f $K8S_DIR/rbac-shared.yaml"
-      plan "kubectl apply -f $K8S_DIR/rbac-gcp.yaml"
-      plan "kubectl apply -f $K8S_DIR/jaiscloud-gcp.yaml"
+      plan_overlay isolation
+      plan_overlay gcp
       [[ "$STORE_MODE" == "external" ]] && plan "kubectl -n $NAMESPACE_GCP create secret generic jaiscloud-gcp-dsn --from-literal=dsn=<external DSN> --dry-run=client -o yaml | kubectl apply -f -; rollout restart"
       plan_install_record "gcp" "gcp=running"
       ;;
@@ -1745,14 +2177,32 @@ if [[ "$PLAN" == "1" ]]; then
   exit 0
 fi
 
-# Every mutating mode must agree with the manifests about the three namespaces;
-# a partial NS_* override would otherwise act on a namespace the manifests never
-# created (see check_namespace_overrides). --check reads the overrides and never
-# mutates, so it is exempt.
-case "$MODE" in
-  deploy|gcp|reset|gcp-reset|migrate-store|delete|park|resume|switch)
-    check_namespace_overrides ;;
-esac
+# ── --render-only DIR: write the overlay tree and stop (no kubectl) ──────────
+# Reviewing a custom layout (or the render test) needs the tree without a cluster.
+# Names are validated, the tree is written to DIR and left in place, and nothing
+# under the repository is touched.
+if [[ "$MODE" == "render-only" ]]; then
+  validate_names
+  render_tree "$RENDER_TO"
+  ok "Rendered the overlay tree for AWS=$NAMESPACE_AWS/$SA_AWS GCP=$NAMESPACE_GCP/$SA_GCP store=$NAMESPACE_DATA"
+  echo ""
+  echo "  AWS   namespace $NAMESPACE_AWS   ServiceAccount $SA_AWS"
+  echo "  GCP   namespace $NAMESPACE_GCP   ServiceAccount $SA_GCP"
+  echo "  store namespace $NAMESPACE_DATA"
+  echo ""
+  echo "  overlays:"
+  for overlay in data data-ns aws gcp isolation; do
+    echo "    $RENDER_TO/overlays/$overlay"
+  done
+  echo ""
+  echo "  inspect: kubectl kustomize $RENDER_TO/overlays/<name>"
+  echo "  apply:   kubectl apply -k $RENDER_TO/overlays/<name>   (deploy.sh does this for you)"
+  exit 0
+fi
+
+# --check reads the overrides and never mutates; --delete/--park/--resume/--switch
+# only address the configured names. The migration is the one mode that reads a
+# namespace this install may not own, so it keeps the LEGACY_NAMESPACE guard.
 
 # ── --delete [aws|gcp|both]: remove workloads, keep every PVC ───────────────
 
@@ -1829,8 +2279,7 @@ if [[ "$MODE" == "reset" ]]; then
   if [[ "$STORE_MODE" == "external" ]]; then
     ensure_data_namespace
   elif ! postgres_deployed; then
-    kubectl apply -f "$K8S_DIR/namespace-data.yaml"
-    kubectl apply -f "$K8S_DIR/postgres.yaml"
+    apply_overlay data
     wait_for_rollout "$POSTGRES_DEPLOYMENT" "$NAMESPACE_DATA"
   fi
   apply_aws_workloads
@@ -1872,11 +2321,8 @@ if [[ "$MODE" == "gcp-reset" ]]; then
   reset_database "$GCP_DB"
 
   info "Re-applying the GCP substrate..."
-  kubectl apply -f "$K8S_DIR/namespace-gcp.yaml"
-  kubectl apply -f "$K8S_DIR/rbac-shared.yaml"
-  kubectl apply -f "$K8S_DIR/rbac-gcp.yaml"
+  apply_overlay gcp
   retire_legacy_namespace_binding gcp
-  kubectl apply -f "$K8S_DIR/jaiscloud-gcp.yaml"
   [[ "$STORE_MODE" == "external" ]] && apply_external_dsn_secret gcp
   wait_for_rollout deployment/jaiscloud-gcp "$NAMESPACE_GCP" 180s
   record_intent gcp running
@@ -1895,15 +2341,13 @@ if [[ "$MODE" == "gcp" ]]; then
   apply_isolation_policy
   info "Applying the shared store and the GCP substrate objects..."
   ensure_store
-  kubectl apply -f "$K8S_DIR/namespace-gcp.yaml"
-  kubectl apply -f "$K8S_DIR/rbac-shared.yaml"
-  kubectl apply -f "$K8S_DIR/rbac-gcp.yaml"
-  retire_legacy_namespace_binding gcp
   # Create the database BEFORE starting the GCP pod: a missing DSN target is
-  # fatal at startup, so applying the Deployment first would crash-loop it.
+  # fatal at startup, so applying the Deployment first would crash-loop it. The
+  # store is up by now (ensure_store), so this needs no substrate namespace.
   ensure_database "$GCP_DB"
-  info "Applying the GCP substrate manifest..."
-  kubectl apply -f "$K8S_DIR/jaiscloud-gcp.yaml"
+  info "Applying the GCP substrate overlay..."
+  apply_overlay gcp
+  retire_legacy_namespace_binding gcp
   [[ "$STORE_MODE" == "external" ]] && apply_external_dsn_secret gcp
   apply_gcp_image_override
   wait_for_rollout deployment/jaiscloud-gcp "$NAMESPACE_GCP" 180s
@@ -1994,6 +2438,9 @@ migrate_source_workload() {
 
 if [[ "$MODE" == "migrate-store" ]]; then
   check_context
+  # The migration reads a namespace this install may not own; the guard must run
+  # before anything is scaled, dumped or applied.
+  check_legacy_namespace
   require_isolation_prereqs
   apply_isolation_policy
   # Before the namespace split, Postgres ran as deployment/postgres in the AWS
@@ -2053,14 +2500,15 @@ if [[ "$MODE" == "migrate-store" ]]; then
   fi
 
   DUMP_FILE="$(mktemp "${TMPDIR:-/tmp}/jaiscloud-store.XXXXXX.dump")"
-  trap 'rm -f "$DUMP_FILE"' EXIT
+  # Keep render_cleanup (the overlay tree) alongside the dump cleanup: only one
+  # EXIT trap runs, so this one calls both.
+  trap 'rm -f "$DUMP_FILE"; render_cleanup' EXIT
 
   if [[ -n "$LEGACY_DSN" ]]; then
     # The new store must be up: its pod (which ships pg_dump) is the dump client,
     # so the external server is reached without a legacy workload in the cluster.
     info "Starting the new store in $NAMESPACE_DATA (the dump client)..."
-    kubectl apply -f "$K8S_DIR/namespace-data.yaml"
-    kubectl apply -f "$K8S_DIR/postgres.yaml"
+    apply_overlay data
     wait_for_rollout "$POSTGRES_DEPLOYMENT" "$NAMESPACE_DATA"
     ensure_database "$GCP_DB"
     info "Dumping the LEGACY_DSN server from the new store pod..."
@@ -2080,8 +2528,7 @@ if [[ "$MODE" == "migrate-store" ]]; then
       || warn "legacy Postgres pods in $OLD_NS did not terminate within 120s"
 
     info "Starting the new store in $NAMESPACE_DATA..."
-    kubectl apply -f "$K8S_DIR/namespace-data.yaml"
-    kubectl apply -f "$K8S_DIR/postgres.yaml"
+    apply_overlay data
     wait_for_rollout "$POSTGRES_DEPLOYMENT" "$NAMESPACE_DATA"
     ensure_database "$GCP_DB"
   fi
@@ -2106,11 +2553,8 @@ if [[ "$MODE" == "migrate-store" ]]; then
 
   if [[ "$legacy_gcp" -eq 1 ]]; then
     info "Bringing up the GCP substrate in $NAMESPACE_GCP (paused for the byte copy)..."
-    kubectl apply -f "$K8S_DIR/namespace-gcp.yaml"
-    kubectl apply -f "$K8S_DIR/rbac-shared.yaml"
-    kubectl apply -f "$K8S_DIR/rbac-gcp.yaml"
+    apply_overlay gcp
     retire_legacy_namespace_binding gcp
-    kubectl apply -f "$K8S_DIR/jaiscloud-gcp.yaml"
     apply_gcp_image_override
     scale_to_zero "$NAMESPACE_GCP" jaiscloud-gcp app=jaiscloud-gcp
     if [[ "$OLD_NS" == "$NAMESPACE_GCP" ]]; then
@@ -2120,7 +2564,7 @@ if [[ "$MODE" == "migrate-store" ]]; then
     else
       warn "no pvc/$LEGACY_GCP_BLOBS_PVC in $OLD_NS — no GCP object bytes to copy"
     fi
-    kubectl apply -f "$K8S_DIR/jaiscloud-gcp.yaml"
+    apply_overlay gcp
     apply_gcp_image_override
     wait_for_rollout deployment/jaiscloud-gcp "$NAMESPACE_GCP" 180s
     if [[ "$DELETE_LEGACY" == "1" ]]; then
@@ -2197,14 +2641,14 @@ else
   ok "Image built and tagged as $AWS_MANIFEST_IMAGE."
 fi
 
-info "Applying the AWS substrate manifests..."
+info "Applying the AWS substrate (rendered overlay; NS_AWS=$NAMESPACE_AWS SA_AWS=$SA_AWS)..."
 if [[ "$STORE_MODE" == "external" ]]; then
-  info "  $K8S_DIR/namespace-data.yaml (install record)  $K8S_DIR/namespace-aws.yaml"
-  info "  $K8S_DIR/rbac-shared.yaml  $K8S_DIR/rbac-aws.yaml  $K8S_DIR/jaiscloud.yaml"
+  info "  overlays/data-ns: namespace-data.yaml (install record)"
+  info "  overlays/aws: namespace-aws.yaml rbac-shared.yaml rbac-aws.yaml jaiscloud.yaml"
   info "  external store: postgres.yaml is NOT applied; the DSN Secret points at your server"
 else
-  info "  $K8S_DIR/namespace-data.yaml  $K8S_DIR/postgres.yaml  $K8S_DIR/namespace-aws.yaml"
-  info "  $K8S_DIR/rbac-shared.yaml  $K8S_DIR/rbac-aws.yaml  $K8S_DIR/jaiscloud.yaml"
+  info "  overlays/data: namespace-data.yaml postgres.yaml"
+  info "  overlays/aws: namespace-aws.yaml rbac-shared.yaml rbac-aws.yaml jaiscloud.yaml"
 fi
 apply_aws
 

@@ -546,7 +546,8 @@ playbook:
       fix: rebuild the image and redeploy (or k3d image import / kind load + --skip-build), then retry; do not delete data to work around it
       symptom: deploy.sh --park/--resume reports POST /_jaiscloud/park returned 404
   ground_truth:
-    - deploy/k8s/*.yaml — the manifests are authoritative for objects, ports, env and images.
+    - 'deploy/k8s/*.yaml — the manifests are authoritative for objects, ports, env and images. They are the DEFAULT base: names are literal, so a direct apply installs jaiscloud / jaiscloud-gcp / jaiscloud-data.'
+    - deploy/deploy.sh — renders that base into a kustomize overlay for NS_AWS/NS_GCP/NS_DATA/SA_AWS/SA_GCP (--render-only DIR writes it without a cluster) and applies it; use it for any custom layout instead of editing the manifests.
     - docs/gcp/integration/contract.yaml — generated facts (topology, objects, images, env) + this playbook.
     - docs/gcp/integration/topology.md — the invariants the layout must keep.
     - scripts/integration-preflight.sh (deploy/deploy.sh --check) — read-only cluster inspection.
@@ -624,7 +625,7 @@ playbook:
       admission_policy:
         apply: 'kubectl apply -f deploy/k8s/rbac-admission-policy.yaml   # idempotent; deploy.sh applies it on every install path'
         gate: 'GATE_ALLOW_RBAC=1 KUBE_CONTEXT=<ctx> make test-rbac-isolation-k8s   # server-side dry runs: allow own, deny the other''s, both directions'
-        identity_match: 'rbac.policyMatchesSA compares spec.matchConditions[].expression with system:serviceaccount:<ns>:<sa> of every present substrate (rbac.policyMentions.<cloud> per cloud). false means the policy names nobody that is running: warn + non-optional install-rbac-policy; edit matchConditions (the policy matches literal usernames) until it is generated from the configured namespaces/ServiceAccounts.'
+        identity_match: 'rbac.policyMatchesSA compares spec.matchConditions[].expression with system:serviceaccount:<ns>:<sa> of every present substrate (rbac.policyMentions.<cloud> per cloud). false means the policy names nobody that is running: warn + non-optional install-rbac-policy. A default install''s policy is correct as-is; a custom layout gets a patched copy from deploy.sh''s rendered isolation overlay (matchConditions and the substrate variable) — re-run deploy.sh rather than editing the policy by hand.'
         limitation: Admission cannot read the target Namespace's labels, so the RoleBinding rule is a write-shape guard, not the namespace boundary.
         mode: 'failurePolicy: Fail, validationActions: [Deny], matched only to the two substrate ServiceAccounts'
         namespace_rules:
@@ -642,7 +643,7 @@ playbook:
         object: ClusterRole jaiscloud-namespace-admin + per-substrate ClusterRoleBindings jaiscloud-namespace-admin-aws / jaiscloud-namespace-admin-gcp
         subjects:
           - system:serviceaccount:jaiscloud:jaiscloud (aws)
-          - system:serviceaccount:jaiscloud-gcp:jaiscloud-gcp (gcp)
+          - system:serviceaccount:jaiscloud-gcp:jaiscloud-gcp (gcp) — the defaults; deploy/deploy.sh renders these from NS_AWS/SA_AWS and NS_GCP/SA_GCP
         why: Dataproc creates one namespace per cluster and Managed Kafka one per broker; each substrate binds the ClusterRole to its own identity only, so a single-substrate install grants it to no other cloud.
   prerequisites:
     - check: kubectl version --client
@@ -673,6 +674,37 @@ playbook:
           note: The manifest default is the public apache/spark image, which pulls anywhere but has no GCS connector, so a gs:// job fails at runtime. Dataproc jobs cannot run without a connector image; plain apache/spark cannot read gs://.
           run: kubectl -n jaiscloud-gcp set env deploy/jaiscloud-gcp JAISCLOUD_K8S_SPARK_IMAGE=<spark image with the GCS connector>
       summary: Run your own emulator build instead of the published image.
+    custom-names:
+      preconditions:
+        - kubectl >= 1.30 with kustomize support (deploy.sh applies rendered overlays with kubectl apply -k)
+        - the five names are valid DNS-1123 labels and are not used by another workload
+      steps:
+        - expect: exit 0; /tmp/jaiscloud-render/overlays/{data,data-ns,aws,gcp,isolation} with base/ copies and patches; no cluster access, nothing written into the repo
+          id: inspect-render
+          note: deploy/k8s/*.yaml stays the default base. kubectl kustomize <overlay> shows the resolved objects; make test-custom-names-render asserts them offline.
+          run: NS_AWS=team-aws NS_GCP=team-gcp NS_DATA=team-data SA_AWS=team-sa-aws SA_GCP=team-sa-gcp deploy/deploy.sh --render-only /tmp/jaiscloud-render
+        - expect: the overlay list and the kubectl apply -k steps, with the resolved namespaces/ServiceAccounts
+          id: plan
+          run: NS_AWS=team-aws NS_GCP=team-gcp NS_DATA=team-data SA_AWS=team-sa-aws SA_GCP=team-sa-gcp deploy/deploy.sh --plan
+        - expect: deployment/jaiscloud rolled out in team-aws, running as team-sa-aws
+          id: aws
+          run: NS_AWS=team-aws NS_GCP=team-gcp NS_DATA=team-data SA_AWS=team-sa-aws SA_GCP=team-sa-gcp deploy/deploy.sh --yes
+        - expect: deployment/jaiscloud-gcp rolled out in team-gcp, running as team-sa-gcp
+          id: gcp
+          run: NS_AWS=team-aws NS_GCP=team-gcp NS_DATA=team-data SA_AWS=team-sa-aws SA_GCP=team-sa-gcp deploy/deploy.sh --gcp --yes
+        - expect: namespaces team-aws/team-gcp/team-data, rbac.policyMatchesSA=true (the policy names the custom identities), substrates ready
+          id: verify
+          note: Every mutating mode (--reset, --gcp-reset, --delete, --park/--resume/--switch) reads the same variables. LEGACY_NAMESPACE outside the configured namespaces needs LEGACY_CONFIRM=1.
+          run: NS_AWS=team-aws NS_GCP=team-gcp NS_DATA=team-data deploy/deploy.sh --check --json
+        - id: mesh
+          note: The CA ConfigMap copies and the route FQDNs follow the namespace names.
+          optional: true
+          run: NS_AWS=team-aws NS_GCP=team-gcp deploy/k8s/istio/certs/gen.sh; NS_AWS=team-aws NS_GCP=team-gcp deploy/k8s/istio/render.sh --apply
+        - id: rbac-gate
+          note: The gate impersonates the default identities unless AWS_USER/GCP_USER name the installed ones.
+          optional: true
+          run: AWS_USER=system:serviceaccount:team-aws:team-sa-aws GCP_USER=system:serviceaccount:team-gcp:team-sa-gcp GATE_ALLOW_RBAC=1 make test-rbac-isolation-k8s
+      summary: Install with custom namespace and ServiceAccount names (no hand-edited manifests).
     executors:
       steps:
         - id: rbac

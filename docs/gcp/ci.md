@@ -194,6 +194,14 @@ kubectl -n jaiscloud-gcp patch deployment/jaiscloud-gcp --type=json \
 kubectl -n jaiscloud-gcp rollout status deployment/jaiscloud-gcp --timeout=180s
 ```
 
+`jaiscloud-gcp.yaml` carries the GCP workload objects only (PVCs, DSN Secret,
+Deployment, Service); the Namespace comes from `namespace-gcp.yaml` and the
+ServiceAccount from `rbac-gcp.yaml`, so apply those first (the order above).
+Those manifests install the default names — for a custom namespace/ServiceAccount
+layout use `NS_AWS=… NS_GCP=… NS_DATA=… SA_AWS=… SA_GCP=… deploy/deploy.sh --gcp`,
+which renders a kustomize overlay from the same base (inspect it with
+`deploy/deploy.sh --render-only DIR`) instead of editing the files.
+
 Then point tests at the in-cluster Service
 (`jaiscloud-gcp.jaiscloud-gcp.svc.cluster.local:8080` / `:8081`) and pass
 `K8S_NAMESPACE=jaiscloud-gcp` to the repo's e2e helpers.

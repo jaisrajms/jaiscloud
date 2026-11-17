@@ -46,6 +46,34 @@ shared objects are the store and `rbac-admission-policy.yaml`. The
 `jaiscloud-namespace-admin` ClusterRole is bound per substrate
 (`jaiscloud-namespace-admin-aws` / `jaiscloud-namespace-admin-gcp`), so a
 single-substrate install grants namespace admin to its own identity only.
+`jaiscloud-gcp.yaml` declares no Namespace and no ServiceAccount: those belong to
+`namespace-gcp.yaml` / `rbac-gcp.yaml`, so every object has exactly one owner.
+
+## Install rendering (default base vs custom names)
+
+The manifests in `deploy/k8s` are the **default base**: they name `jaiscloud`,
+`jaiscloud-gcp`, `jaiscloud-data` and the ServiceAccounts `jaiscloud` /
+`jaiscloud-gcp` literally, so `kubectl apply -f` of them installs exactly that.
+A custom layout is selected with `NS_AWS` / `NS_GCP` / `NS_DATA` / `SA_AWS` /
+`SA_GCP`; `deploy/deploy.sh` then copies the base into a throwaway kustomize tree
+and patches what is name-dependent, instead of editing the base:
+
+| overlay | base manifests | patches |
+|---|---|---|
+| `data` | `namespace-data.yaml`, `postgres.yaml` | Namespace `name`; `postgres-secret` DSN host `postgres.<NS_DATA>…` |
+| `data-ns` | `namespace-data.yaml` | Namespace `name` (external store / install record) |
+| `aws` | `namespace-aws.yaml`, `rbac-shared.yaml`, `rbac-aws.yaml`, `jaiscloud.yaml` | Namespace `name`; ServiceAccount `name`; Deployment `serviceAccountName`; RoleBinding/ClusterRoleBinding subjects; `jaiscloud-config` `JAISCLOUD_K8S_NAMESPACE`/`JAISCLOUD_K8S_SA`; DSN host |
+| `gcp` | `namespace-gcp.yaml`, `rbac-shared.yaml`, `rbac-gcp.yaml`, `jaiscloud-gcp.yaml` | Namespace `name`; ServiceAccount `name`; Deployment `serviceAccountName`; Deployment env `JAISCLOUD_K8S_NAMESPACE`/`JAISCLOUD_K8S_SA`/`JAISCLOUD_K8S_SA_NAMESPACE` and the `jaiscloud-gcp.<NS_GCP>…` Service FQDNs; binding subjects; DSN host |
+| `isolation` | `rbac-admission-policy.yaml` | `matchConditions` usernames and the `substrate` variable, both `system:serviceaccount:<ns>:<sa>` |
+
+Each overlay carries its own `base/` copy because kustomize's load restrictor
+refuses a path outside the overlay root. The policy is its own overlay because it
+is cluster-scoped (the namespace transformer would add a bogus
+`metadata.namespace` to a `ValidatingAdmissionPolicy`). `deploy.sh --plan` prints
+the overlay list and the `kubectl apply -k` steps; `--render-only DIR` writes the
+tree and exits without touching a cluster. `scripts/custom-names-render-test.sh`
+(`make test-custom-names-render`) asserts the rendered objects for a custom
+layout **and** that the defaults still render to the shipped names.
 
 ## Install intent and state
 
@@ -290,11 +318,13 @@ documented in
     working.
     The policy matches the literal usernames
     `system:serviceaccount:jaiscloud:jaiscloud` and
-    `system:serviceaccount:jaiscloud-gcp:jaiscloud-gcp`, so renaming a namespace
-    means editing the policy too — the preflight compares the policy expression
-    with the identity each Deployment actually runs (`rbac.policyMatchesSA`) and
-    warns when the boundary matches nobody. The grant itself is verified the same
-    way (`rbac.effective.<cloud>` via `kubectl auth can-i --as=…`), so a missing
+    `system:serviceaccount:jaiscloud-gcp:jaiscloud-gcp`, so a custom layout needs
+    the same substitution there — `deploy.sh` patches the `matchConditions` and
+    the `substrate` variable in its rendered `isolation` overlay, and the
+    preflight compares the policy expression with the identity each Deployment
+    actually runs (`rbac.policyMatchesSA`) and warns when the boundary matches
+    nobody. The grant itself is verified the same way
+    (`rbac.effective.<cloud>` via `kubectl auth can-i --as=…`), so a missing
     binding is reported as `no`, and a kubeconfig that may not impersonate as
     `unknown` rather than as an unenforced policy.
 11. **Upgrade is a data move, not a teardown.** The pre-split layout ran Postgres
@@ -311,8 +341,8 @@ documented in
     `jaiscloud.io/substrate` on the legacy GCP workload. `app=postgres` alone is
     not evidence. A pre-split object predates the marker, so it needs a one-time
     `LEGACY_CONFIRM=1`; an unmarked object without it is refused, and a
-    `LEGACY_NAMESPACE` outside `jaiscloud`/`jaiscloud-gcp`/`jaiscloud-data`
-    likewise requires `LEGACY_CONFIRM=1`. `--delete-legacy` requires the marker
+    `LEGACY_NAMESPACE` outside the configured
+    `NS_AWS`/`NS_GCP`/`NS_DATA` likewise requires `LEGACY_CONFIRM=1`. `--delete-legacy` requires the marker
     and additionally `LEGACY_DELETE_FORCE=1` when the object only carries
     `app=postgres`; a PVC is never deleted by the migration. The preflight
     reports a marked, scaled-to-0 legacy object as `legacy.*Retained` (a rollback
@@ -320,14 +350,19 @@ documented in
     same-named workload as `legacy.candidate` plus a warning — never a migration
     recommendation. Running the new manifests without the migration silently
     starts against an empty store.
-12. **Namespace names are literal in the manifests.** Each Namespace `name`, every
-    `namespace:` field, the DSN hostnames and the VAP usernames spell out
-    `jaiscloud`, `jaiscloud-gcp` and `jaiscloud-data`. `NS_AWS` / `NS_GCP` /
-    `NS_DATA` let the gate scripts run against scratch names; every mutating
-    `deploy.sh` mode verifies the manifests agree with the configured names
-    (`check_namespace_overrides`) and refuses a partial override rather than
-    operating on a half-renamed install. A custom layout requires editing those
-    fields together.
+12. **The manifests are the default base; the install renders the names.**
+    Every Namespace `name`, every `namespace:` field, the DSN hostnames and the
+    VAP usernames spell out `jaiscloud`, `jaiscloud-gcp` and `jaiscloud-data` in
+    `deploy/k8s`, which is what keeps the manifests directly appliable for the
+    shipped layout. `NS_AWS` / `NS_GCP` / `NS_DATA` / `SA_AWS` / `SA_GCP` select
+    another one: every mutating `deploy.sh` mode renders a kustomize overlay from
+    that base (patching the Namespace names, the ServiceAccount and every
+    reference to it, the DSN hostnames and the VAP usernames) and applies it with
+    `kubectl apply -k`. A custom layout is never installed by editing the base —
+    that would change the default for everyone. The one namespace the install may
+    *read* but not own is the migration source: `LEGACY_NAMESPACE` outside the
+    configured `NS_AWS`/`NS_GCP`/`NS_DATA` requires `LEGACY_CONFIRM=1`
+    (`check_legacy_namespace`).
 13. **The store may be bundled or external.** `--store-dsn` /
     `JAISCLOUD_STORE_DSN` (or the per-substrate `JAISCLOUD_AWS_DSN` /
     `JAISCLOUD_GCP_DSN`) installs against a server the operator runs:
