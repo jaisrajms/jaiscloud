@@ -28,7 +28,7 @@
 # Requires a k3d emulator (deploy/k8s/jaiscloud-gcp.yaml) and nip.io DNS.
 set -euo pipefail
 
-NS="${K8S_NAMESPACE:-jaiscloud}"
+NS="${K8S_NAMESPACE:-jaiscloud-gcp}"
 PORT="${DEMO_LAN_PORT:-8080}"
 IP="${DEMO_LAN_IP:-}"
 SERVICE_ID=""

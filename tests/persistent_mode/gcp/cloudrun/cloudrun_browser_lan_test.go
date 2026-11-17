@@ -36,7 +36,7 @@
 // Optional env:
 //
 //	CLOUDRUN_BROWSER_LAN_PORT — LAN-forwarded authority port (default 8080)
-//	K8S_NAMESPACE             — default jaiscloud
+//	K8S_NAMESPACE             — default jaiscloud-gcp
 package cloudrun_test
 
 import (

@@ -22,8 +22,8 @@ func TestLambdaCodeURL(t *testing.T) {
 		t.Errorf("unset endpoint: got %q, want empty (code mount disabled)", got)
 	}
 
-	t.Setenv("JAISCLOUD_GCS_EMULATOR_ENDPOINT", "jaiscloud-gcp.jaiscloud.svc.cluster.local:8080")
-	want := "http://jaiscloud-gcp.jaiscloud.svc.cluster.local:8080/_jaiscloud"
+	t.Setenv("JAISCLOUD_GCS_EMULATOR_ENDPOINT", "jaiscloud-gcp.jaiscloud-gcp.svc.cluster.local:8080")
+	want := "http://jaiscloud-gcp.jaiscloud-gcp.svc.cluster.local:8080/_jaiscloud"
 	if got := lambdaCodeURL(); got != want {
 		t.Errorf("scheme-less endpoint: got %q, want %q", got, want)
 	}

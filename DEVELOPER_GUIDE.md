@@ -576,7 +576,7 @@ postgres://<user>:<password>@<host>:<port>/<database>
 
 ## Setup 3 — JaisCloud on Kubernetes
 
-**What this is:** running the JaisCloud server itself inside a Kubernetes cluster. This is separate from running Spark jobs on K8s (covered in [EMR Spark — Kubernetes Executor](#emr-spark--kubernetes-executor-real-spark-jobs)).
+**What this is:** running the JaisCloud servers themselves inside a Kubernetes cluster. This is separate from running Spark jobs on K8s (covered in [EMR Spark — Kubernetes Executor](#emr-spark--kubernetes-executor-real-spark-jobs)).
 
 **When to use this:**
 - You want a shared JaisCloud instance accessible to multiple pods in the same cluster
@@ -584,6 +584,43 @@ postgres://<user>:<password>@<host>:<port>/<database>
 - You want Spark jobs to submit to K8s (the JaisCloud server needs to reach the K8s API)
 
 **What you need:** Docker Desktop with Kubernetes enabled, or kind / minikube.
+
+### Namespace topology
+
+Both cloud substrates can run side by side in one cluster. Each lives in a
+namespace of its own, and the PostgreSQL server in a third, so that deleting or
+resetting one substrate never destroys the other's state
+(`deploy/k8s/namespace.yaml` is the source of truth — the namespaces carry the
+`jaiscloud.io/role` label):
+
+| namespace | role | contents |
+|---|---|---|
+| `jaiscloud` | AWS substrate | Deployment `jaiscloud` (`:4566`), PVCs `jaiscloud-blobs-pvc` + `jaiscloud-state-pvc`, Secret `jaiscloud-dsn`, Service `jaiscloud` |
+| `jaiscloud-gcp` | GCP substrate | Deployment `jaiscloud-gcp` (REST `:8080`, gRPC `:8081`, HMS `:9083` + `:9084–9093`), PVCs `jaiscloud-gcp-blobs-pvc` + `jaiscloud-gcp-state-pvc`, Secret `jaiscloud-gcp-dsn`, Service `jaiscloud-gcp` |
+| `jaiscloud-data` | data | Deployment `postgres`, PVC `postgres-pvc`, Secret `postgres-secret`, Services `postgres:5432` / `postgres-external:30543`, databases `jaiscloud` (AWS) and `jaiscloud_gcp` (GCP) |
+
+Rules that follow and must not be relaxed:
+
+- A substrate namespace may be deleted at any time; `jaiscloud-data` survives it.
+- `env.valueFrom.secretKeyRef` cannot cross namespaces, so each substrate
+  namespace owns its own DSN secret (`jaiscloud-dsn`, `jaiscloud-gcp-dsn`).
+- Each substrate writes its own database (`jaiscloud`, `jaiscloud_gcp`) and its
+  own blobs PVC; schema isolation (`search_path=<cloud>`) means one database
+  serves exactly one instance per cloud.
+- State (`/data/state`: instance-ID file + platform TLS cert/key) lives on a
+  **separate small PVC**, not on the blob PVC: the blob store snapshots its base
+  dir recursively, so a state file under `/data/blobs` would be captured as an
+  S3 object. The blob PVC root stays the S3 base dir, which keeps the on-disk
+  layout of an existing install intact.
+- The substrate ServiceAccounts hold cluster-scoped namespace lifecycle
+  (`jaiscloud-namespace-admin`: create/delete namespaces + the per-namespace
+  executor RoleBinding), because Dataproc clusters and Managed Kafka brokers own
+  a namespace each. That is a trust boundary by *code* (the emulator only
+  deletes namespaces carrying its ownership label), not by RBAC: a substrate SA
+  *could* delete the other's namespace. Do not run untrusted code under it.
+
+`make up-k8s` deploys the AWS substrate, `make up-k8s-gcp` the GCP one. Both are
+idempotent and can be run in either order on the same cluster.
 
 ### Step 1 — Enable Kubernetes
 
@@ -610,27 +647,66 @@ minikube start
 ### Step 2 — Deploy with Make
 
 ```bash
-make up-k8s
+make up-k8s          # AWS substrate
+make up-k8s-gcp      # optional: GCP substrate (+ the jaiscloud_gcp database)
 ```
 
-This runs in order:
-1. Pulls `jaisraj/jaiscloud-aws:latest` from the GitHub Container Registry
-2. Applies `deploy/k8s/namespace.yaml` — creates the `jaiscloud` namespace
-3. Applies `deploy/k8s/rbac.yaml` — grants JaisCloud permission to create Spark Jobs and Lambda Pods
-4. Applies `deploy/k8s/postgres.yaml` — starts a PostgreSQL pod
-5. Applies `deploy/k8s/jaiscloud.yaml` — starts JaisCloud with the PostgreSQL backend, wired to the postgres pod
+`make up-k8s` runs in order:
+1. Applies `deploy/k8s/namespace.yaml` — creates `jaiscloud`, `jaiscloud-gcp` and `jaiscloud-data`
+2. Applies `deploy/k8s/postgres.yaml` — starts PostgreSQL in `jaiscloud-data` (`postgres-pvc`, Services `:5432` / NodePort `:30543`)
+3. Applies `deploy/k8s/rbac.yaml` — ServiceAccounts, the executor Role/ClusterRole and the namespace-admin binding for both substrates (RBAC before the deployments, because they reference those identities)
+4. Applies `deploy/k8s/jaiscloud.yaml` — starts the AWS server with the PostgreSQL backend, DSN from the local `jaiscloud-dsn` Secret
+5. Waits for `deployment/postgres` in `jaiscloud-data` and `deployment/jaiscloud` in `jaiscloud`
 
-Wait for both pods to be running:
+`make up-k8s-gcp` applies `namespace.yaml`, `postgres.yaml` and `rbac.yaml`,
+creates the `jaiscloud_gcp` database if it is missing (`postgres-gcp-db`), then
+applies `deploy/k8s/jaiscloud-gcp.yaml` (the GCP Deployment, PVCs, Secret,
+Service and its own Namespace) and waits for `deployment/jaiscloud-gcp` in
+`jaiscloud-gcp`.
+
+**Existing Postgres volume.** `deploy/k8s/postgres.yaml` bootstraps
+`jaiscloud_gcp` with a ConfigMap mounted at `/docker-entrypoint-initdb.d`, which
+runs **only when the entrypoint initialises an empty data directory** — i.e. on a
+fresh `postgres-pvc`. If `postgres-pvc` already exists (for example you added the
+GCP substrate to an existing AWS install), create the database once:
+
 ```bash
-kubectl get pods -n jaiscloud
-# NAME                         READY   STATUS    RESTARTS
-# jaiscloud-xxxx               1/1     Running   0
-# postgres-xxxx                1/1     Running   0
+make postgres-gcp-db   # idempotent: CREATE DATABASE jaiscloud_gcp OWNER jaiscloud if missing
 ```
 
-### Step 3 — Reach the server
+(`make up-k8s-gcp` and `./deploy/deploy.sh --gcp` run it for you.)
 
-Docker Desktop exposes the LoadBalancer service on localhost automatically. Check the port:
+**Upgrading an install from the single-namespace layout.** Before the
+dual-substrate split, Postgres ran as `deployment/postgres` in namespace
+`jaiscloud`. A PVC is namespace-scoped, so applying the new manifests does **not**
+reuse that volume: you would get a fresh empty `jaiscloud-data/postgres-pvc`,
+and the old volume would sit orphaned in `jaiscloud` until the first `--reset`
+deletes that namespace — every object/DynamoDB/SQS record appearing to vanish.
+Migrate once, before (or instead of) a fresh deploy:
+
+```bash
+./deploy/deploy.sh --migrate-store --yes
+# dumps database `jaiscloud` from jaiscloud/deployment/postgres, starts the new
+# store in jaiscloud-data and restores the dump into BOTH databases (so the
+# pre-split GCP schema travels too), then brings the AWS substrate back.
+# It stops the legacy Postgres and keeps its PVC as a rollback copy; the new
+# store's PVC must not exist yet (it refuses to overwrite).
+```
+
+The GCP substrate then starts against `jaiscloud_gcp` (its database), which is
+created by the same run. Delete the rollback copy only after verifying both
+substrates: `kubectl -n jaiscloud delete pvc postgres-pvc`.
+
+Wait for the pods:
+```bash
+kubectl get pods -n jaiscloud-data     # postgres-xxxx   1/1 Running
+kubectl get pods -n jaiscloud          # jaiscloud-xxxx  1/1 Running
+kubectl get pods -n jaiscloud-gcp      # jaiscloud-gcp-xxxx 1/1 Running
+```
+
+### Step 3 — Reach the servers
+
+Docker Desktop exposes the AWS LoadBalancer service on localhost automatically:
 
 ```bash
 kubectl get svc -n jaiscloud jaiscloud
@@ -638,9 +714,16 @@ kubectl get svc -n jaiscloud jaiscloud
 # jaiscloud   LoadBalancer   localhost     4566:xxxxx/TCP
 ```
 
-The server is now at `http://localhost:4566`.
+The AWS server is now at `http://localhost:4566`.
 
-For kind or minikube (external IP stays `<pending>`), use port-forward instead:
+The GCP substrate's Service is a ClusterIP, so port-forward it:
+
+```bash
+kubectl port-forward -n jaiscloud-gcp svc/jaiscloud-gcp 8080:8080 8081:8081
+# REST http://localhost:8080, gRPC localhost:8081
+```
+
+For kind or minikube (external IP stays `<pending>`), port-forward the AWS one too:
 ```bash
 kubectl port-forward -n jaiscloud svc/jaiscloud 4566:4566
 ```
@@ -653,21 +736,89 @@ kubectl port-forward -n jaiscloud svc/jaiscloud 4566:4566
 
 curl http://localhost:4566/_jaiscloud/health
 # {"status":"ok"}
+
+curl http://localhost:8080/_jaiscloud/health   # GCP substrate
+# {"status":"ok"}
 ```
 
-### Teardown
+### Instance identity and the substrate namespaces
+
+`JAISCLOUD_INSTANCE_ID` is the `jaiscloud.io/instance-id` every K8s resource the
+emulator creates is stamped with, and startup `cleanupOrphans` only touches its
+own. The manifests pin one identity per substrate and put its state directory on
+the substrate's blob PVC, so the ID is stable across pod rolls:
+
+| Deployment | `JAISCLOUD_INSTANCE_ID` | `JAISCLOUD_STATE_DIR` | `JAISCLOUD_K8S_NAMESPACE` |
+|---|---|---|---|
+| `jaiscloud` (AWS) | `aws-substrate-1` | `/data/state` | `jaiscloud` |
+| `jaiscloud-gcp` | `gcp-substrate-1` | `/data/state` | `jaiscloud-gcp` |
+
+Because the two substrates have distinct IDs **and** distinct namespaces,
+neither startup sweep can see, or delete, the other's Spark/executor pods. See
+[`JAISCLOUD_INSTANCE_ID`](#jaiscloud_instance_id) for how the ID is resolved
+outside the cluster.
+
+### Teardown and reset
 
 ```bash
-make down-k8s       # removes the deployment; keeps persistent volumes
-make down-k8s WIPE=true   # removes deployment AND wipes all data
+make down-k8s                   # removes the AWS workloads; every PVC is kept
+./deploy/deploy.sh --delete     # same, from the deploy script (data survives)
+./deploy/deploy.sh --reset      # AWS-only reset: drop the `jaiscloud` database +
+                                # the jaiscloud namespace (its blobs PVC)
+./deploy/deploy.sh --gcp-reset  # GCP-only reset: drop `jaiscloud_gcp` + the GCP blobs PVC
 ```
+
+Both resets are **database-scoped**, not store-scoped:
+
+- `--reset` runs `DROP DATABASE IF EXISTS jaiscloud WITH (FORCE)` +
+  `CREATE DATABASE jaiscloud OWNER jaiscloud` against `deploy/postgres` in
+  `jaiscloud-data`, then deletes the `jaiscloud` namespace (its blobs **and**
+  state PVCs) and re-applies `namespace.yaml` + `rbac.yaml` + `jaiscloud.yaml`.
+  The GCP substrate (namespace, PVCs, `jaiscloud_gcp`), `jaiscloud-data` and
+  `postgres-pvc` are never touched. When the Istio front door is installed, the
+  `jaiscloud-ca-cert` ConfigMap (which lives in the deleted namespace) is
+  restored from the `istio-system/jaiscloud-wildcard` secret, so managed
+  workloads keep their CA source.
+- `--gcp-reset` scales `jaiscloud-gcp` to 0, deletes
+  `jaiscloud-gcp-blobs-pvc`, drops/recreates `jaiscloud_gcp` and re-applies
+  `jaiscloud-gcp.yaml`. The AWS substrate and `jaiscloud-data` are never touched;
+  the small GCP state PVC (identity + TLS cert) is kept, both are regenerable.
+
+Add `--yes` (or `ASSUME_YES=1`) to run either non-interactively, and
+`--skip-build` (or `SKIP_IMAGE_BUILD=1`) to skip the `docker build` when the
+image was already imported into the cluster (`k3d image import`, CI).
+
+The isolation guarantee is exercised by a gate, not just asserted in prose:
+
+```bash
+make test-dual-substrate-k8s   # scripts/dual-substrate-gate.sh
+```
+
+It writes a real GCS object to the GCP substrate, records that `jaiscloud_gcp`
+and the GCP PVCs exist, runs `deploy.sh --reset`, then re-reads the object and
+re-checks the database, PVCs and both substrate rollouts.
 
 ### Viewing logs
 
 ```bash
 kubectl logs -n jaiscloud deployment/jaiscloud -f
-kubectl logs -n jaiscloud deployment/postgres -f
+kubectl logs -n jaiscloud-gcp deployment/jaiscloud-gcp -f
+kubectl logs -n jaiscloud-data deployment/postgres -f
 ```
+
+### Mesh (optional)
+
+An Istio front door can route the real cloud hostnames into both substrates. It
+is **client-facing only** — nothing in a substrate's execution path goes through
+it — and it never rewrites `:authority`. Install order, CA generation, DNS and
+the host routes are in [`deploy/k8s/istio/README.md`](deploy/k8s/istio/README.md);
+`scripts/istio-smoke.sh` asserts it.
+
+**Standalone binary unchanged.** None of the above is required to run the
+emulator: with no cluster, no mesh and no Postgres it uses file/memory storage
+and every executor defaults to `mock` (`JAISCLOUD_EXECUTOR_MODE` is only
+`k8s`/`docker` when you ask for it). The Kubernetes path documented here is the
+only one that touches a cluster.
 
 ---
 
@@ -1138,6 +1289,13 @@ JAISCLOUD_INSTANCE_ID=ci-run-${CI_JOB_ID} ./jaiscloud-aws start
 # Staging — fix the ID so that rolling restarts re-adopt the same set of jobs
 JAISCLOUD_INSTANCE_ID=staging-primary ./jaiscloud-aws start
 ```
+
+The dual-substrate manifests pin one identity per substrate —
+`aws-substrate-1` for `deploy/k8s/jaiscloud.yaml` and `gcp-substrate-1` for
+`deploy/k8s/jaiscloud-gcp.yaml` — with `JAISCLOUD_STATE_DIR=/data/state` on that
+substrate's blobs PVC, so each identity is stable across pod rolls and neither
+substrate's startup sweep can see the other's resources (see
+[Setup 3](#setup-3--jaiscloud-on-kubernetes)).
 
 **Do not** set this to the same value for two concurrently running instances — they will fight over each other's K8s resources.
 

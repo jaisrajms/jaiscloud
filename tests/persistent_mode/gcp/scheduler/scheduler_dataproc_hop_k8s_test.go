@@ -34,7 +34,7 @@
 //
 // Optional env:
 //
-//	K8S_NAMESPACE — default jaiscloud
+//	K8S_NAMESPACE — default jaiscloud-gcp
 package scheduler_test
 
 import (
@@ -145,7 +145,7 @@ func namespace() string {
 	if v := os.Getenv("K8S_NAMESPACE"); v != "" {
 		return v
 	}
-	return "jaiscloud"
+	return "jaiscloud-gcp"
 }
 
 // kubectl runs kubectl in the test namespace, optionally feeding stdin.

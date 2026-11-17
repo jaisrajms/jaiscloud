@@ -33,7 +33,7 @@
 //
 //	CLOUDRUN_BROWSER_SUFFIX — expected authority suffix (default run.localhost)
 //	CLOUDRUN_BROWSER_PORT   — host-forwarded authority port (default 18080)
-//	K8S_NAMESPACE           — default jaiscloud
+//	K8S_NAMESPACE           — default jaiscloud-gcp
 package cloudrun_test
 
 import (

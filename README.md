@@ -237,6 +237,37 @@ make up-docker    # starts Postgres + JaisCloud
 make down-docker
 ```
 
+### Kubernetes (AWS and GCP substrates)
+
+Both emulators can run as separate substrates in one cluster, each in its own
+namespace so deleting or resetting one never destroys the other's state:
+
+| namespace | contents |
+|---|---|
+| `jaiscloud` | AWS emulator (`:4566`), its blob + state PVCs and DSN secret |
+| `jaiscloud-gcp` | GCP emulator (REST `:8080`, gRPC `:8081`, Hive Metastore `:9083`…), its blob + state PVCs and DSN secret |
+| `jaiscloud-data` | one PostgreSQL server, `postgres-pvc`, databases `jaiscloud` (AWS) and `jaiscloud_gcp` (GCP) |
+
+```bash
+make up-k8s          # AWS: namespace.yaml + postgres.yaml + rbac.yaml + jaiscloud.yaml
+make up-k8s-gcp       # GCP: jaiscloud-gcp.yaml (+ creates the jaiscloud_gcp database)
+
+./deploy/deploy.sh --reset      # AWS only: drops the `jaiscloud` database + AWS namespace/PVC
+./deploy/deploy.sh --gcp-reset  # GCP only: drops `jaiscloud_gcp` + the GCP blobs PVC
+```
+
+Both resets are **database-scoped**: `jaiscloud-data`, `postgres-pvc` and the
+other substrate always survive. Upgrading a single-namespace install in place
+needs a one-time `./deploy/deploy.sh --migrate-store` (the Postgres PVC is
+namespace-scoped, so it is not reused implicitly). Full namespace/identity
+details are in the
+[Developer Guide](DEVELOPER_GUIDE.md#setup-3--jaiscloud-on-kubernetes); the
+optional Istio front door that routes the real cloud hostnames into the two
+substrates is documented in [README-GCP.md](README-GCP.md#kubernetes-and-the-istio-front-door).
+
+The standalone-binary and Docker paths above are unchanged: no cluster, no mesh
+and no Postgres are required, and every executor defaults to `mock`.
+
 ### Build from source (requires Go 1.26+)
 
 ```bash

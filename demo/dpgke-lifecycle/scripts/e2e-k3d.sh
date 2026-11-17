@@ -48,7 +48,7 @@
 #   demo/dpgke-lifecycle/scripts/e2e-k3d.sh
 #
 # Env (all optional):
-#   K8S_NAMESPACE              namespace the emulator runs in (default jaiscloud)
+#   K8S_NAMESPACE              namespace the emulator runs in (default jaiscloud-gcp)
 #   DPGKE_NAMESPACE            Dataproc workload + Helm release namespace (dpgke-demo)
 #   PROJECT                    runner project, cluster + job (dpgke-demo)
 #   STORAGE_PROJECT            project that owns the buckets (dpgke-demo-storage)
@@ -87,7 +87,7 @@ HELM="${HELM:-helm}"
 KUBECTL="${KUBECTL:-kubectl}"
 DOCKER="${DOCKER:-docker}"
 
-K8S_NAMESPACE="${K8S_NAMESPACE:-jaiscloud}"
+K8S_NAMESPACE="${K8S_NAMESPACE:-jaiscloud-gcp}"
 DPGKE_NAMESPACE="${DPGKE_NAMESPACE:-dpgke-demo}"
 RELEASE="${DPGKE_RELEASE:-dpgke-demo}"
 PROJECT="${PROJECT:-dpgke-demo}"

@@ -43,7 +43,7 @@ func namespace() string {
 	if v := os.Getenv("K8S_NAMESPACE"); v != "" {
 		return v
 	}
-	return "jaiscloud"
+	return "jaiscloud-gcp"
 }
 
 // repoRoot resolves the checkout root from this source file so the suite can

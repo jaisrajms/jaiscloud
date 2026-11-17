@@ -63,7 +63,7 @@ func namespace() string {
 	if v := os.Getenv("K8S_NAMESPACE"); v != "" {
 		return v
 	}
-	return "jaiscloud"
+	return "jaiscloud-gcp"
 }
 
 // hmsAddress is the pod-reachable Hive Metastore thrift address, matching the

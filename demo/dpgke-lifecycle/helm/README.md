@@ -187,8 +187,8 @@ creates:
 
 ```yaml
 endpoints:
-  rest: http://jaiscloud-gcp.jaiscloud.svc.cluster.local:8080
-  grpc: jaiscloud-gcp.jaiscloud.svc.cluster.local
+  rest: http://jaiscloud-gcp.jaiscloud-gcp.svc.cluster.local:8080
+  grpc: jaiscloud-gcp.jaiscloud-gcp.svc.cluster.local
   grpcPort: 8081
 ```
 
