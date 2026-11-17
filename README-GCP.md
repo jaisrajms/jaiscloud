@@ -279,9 +279,24 @@ kubectl apply -f deploy/k8s/namespace.yaml -f deploy/k8s/postgres.yaml \
               -f deploy/k8s/rbac.yaml -f deploy/k8s/jaiscloud-gcp.yaml
 ```
 
+- **Image.** The manifest defaults to the published multi-arch image
+  (`jaisraj/jaiscloud-gcp:latest`), so the commands above work without a private
+  registry. To run your own build, tag/import it and point the Deployment at it:
+  `JAISCLOUD_GCP_IMAGE=<image> ./deploy/deploy.sh --gcp`, or
+  `kubectl -n jaiscloud-gcp set image deploy/jaiscloud-gcp jaiscloud-gcp=<image>`.
+- **Dataproc jobs need a Spark image with the GCS connector** (plain
+  `apache/spark` cannot read `gs://`). The manifest's `JAISCLOUD_K8S_SPARK_IMAGE`
+  is the repo's `spark-gcs` build; if it is not reachable from your cluster,
+  build your own (`tests/persistent_mode/gcp/iceberg/spark-iceberg` +
+  `download-jars.sh`) and
+  `kubectl -n jaiscloud-gcp set env deploy/jaiscloud-gcp JAISCLOUD_K8S_SPARK_IMAGE=<image>`.
 - The Postgres bootstrap (`ConfigMap postgres-init` → `CREATE DATABASE jaiscloud_gcp`)
   runs **only on a fresh `postgres-pvc`**. On an existing volume create it once
   with `make postgres-gcp-db`; `deploy.sh --gcp` and `make up-k8s-gcp` do it for you.
+- **Reaching it.** The GCP Service is a ClusterIP (it also carries the Thrift
+  HMS ports), so port-forward `8080`/`8081` as above, or use the front door for
+  external HTTP(S). The AWS Service is a LoadBalancer for localhost convenience;
+  on clusters without one (kind) both need the port-forward.
 - The pod runs with `JAISCLOUD_K8S_NAMESPACE=jaiscloud-gcp` and
   `JAISCLOUD_STATE_DIR=/data/state` (a small state PVC, kept out of the blob PVC
   so snapshots cannot capture the TLS key), so Dataproc / Managed Kafka / Cloud
@@ -308,8 +323,10 @@ Resets are database-scoped: `./deploy/deploy.sh --gcp-reset` drops only
 `jaiscloud_gcp` and the GCP blobs PVC, while `--reset` drops only the AWS
 `jaiscloud` database and the `jaiscloud` namespace. Neither touches
 `jaiscloud-data`, so the other substrate's state always survives —
-`make test-dual-substrate-k8s` proves it by writing a GCS object, running the
-AWS reset and asserting the object, the database and the GCP PVCs are intact.
+`make test-dual-substrate-k8s ALLOW_RESET=1` proves it by writing a GCS object,
+running the AWS reset and asserting the object, the database and the GCP PVCs
+are intact. (The gate is destructive by design, so it refuses without
+`ALLOW_RESET=1`.)
 
 The standalone binary remains the default path — no cluster, no mesh, no
 Postgres; see [Quick Start](#quick-start).
@@ -780,6 +797,10 @@ deployment exists for **in-cluster** workloads, and the Istio front door routes
 HTTP(S) hostnames only — Kafka is a TCP protocol, and its clients reconnect to
 the advertised listener, so the mesh neither carries it nor could fix it. An
 externally reachable Kafka endpoint would be a new feature, not a mesh setting.
+Note that the repo's `docker-compose.yml` runs the emulator **containerized**
+(`JAISCLOUD_DOCKER_MODE=container`), which advertises the broker by container
+name — for a Kafka client on the host, run the emulator binary with the default
+`host` mode, or `native` mode.
 
 The data plane is proven end to end by the k3d gate `make test-managedkafka-broker-k8s` (`tests/persistent_mode/gcp/managedkafka-broker`): a real franz-go client runs inside the cluster, produces and consumes records across the topic's partitions at `bootstrapAddress`, joins a consumer group, commits offsets with zero lag, and the group's committed offsets are read back through the Managed Kafka API. The docker backend is proven by the local-daemon gate `make test-managedkafka-broker-docker`, which runs the same franz-go probe from the host against the broker's advertised `127.0.0.1:<port>`.
 

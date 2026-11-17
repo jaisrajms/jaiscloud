@@ -164,7 +164,7 @@ JAISCLOUD_IMAGE   ?= jaisraj/jaiscloud-aws:latest
         server-gcp server-gcp-ephemeral server-gcp-postgres \
         server-ui server-ui-gcp stop-server up-docker down-docker up-k8s up-k8s-gcp down-k8s \
         postgres-up postgres-reset postgres-down postgres-gcp-db \
-        test-dual-substrate-k8s test-istio-smoke \
+        test-dual-substrate-k8s test-istio-smoke _use-gcp-image check-deploy-images \
         test-integration test-integration-gcp test-lro-async-gcp test-throttle-gcp test-gcp-load test-gcp-mutation test-gcp-mutation-ratchet test-gcp-mutation-update \
         test-e2e-emr-docker test-e2e-emrcontainers-k8s test-e2e-eventbridge \
         test-e2e-dpc-docker test-e2e-dpc-k8s \
@@ -2347,6 +2347,7 @@ test-gcp-lifecycle: ## FC5 lifecycle + ownership harness (both transports, in-pr
 	go test -race -count=1 ./tests/gcplifecycle/...
 
 gcp-ci-preflight: ## Mirror CI's offline GCP gates before pushing (unit+race, lint, coverage, ledger, fidelity)
+	$(MAKE) --no-print-directory check-deploy-images
 	go test -race -count=1 ./internal/gcp/... ./internal/sparkhelpers/... ./internal/k8shelpers/... ./internal/platform/... ./internal/executor/...
 	$(MAKE) --no-print-directory test-gcp-lifecycle test-gcp-provider-capture
 	$(MAKE) --no-print-directory test-gcp-coverage
@@ -2436,14 +2437,14 @@ test-e2e-lakehouse-k3d: _check-lakehouse-k3d-prereq _refresh-gcp-image ## Medall
 # (SKIP_GCP_IMAGE_REBUILD=1).
 test-e2e-iceberg-k3d: _check-iceberg-k3d-prereq _refresh-gcp-image ## Dataproc Iceberg-on-HMS batch e2e on k3d — applies deploy/k8s/jaiscloud-gcp.yaml (HMS thrift port) (tag: iceberg_k3d_e2e; SKIP_GCP_IMAGE_REBUILD=1 to reuse the deployed emulator)
 	kubectl apply -f deploy/k8s/jaiscloud-gcp.yaml
-	kubectl -n $(K8S_NAMESPACE_GCP) rollout status deployment/jaiscloud-gcp --timeout=180s
+	@$(MAKE) --no-print-directory _use-gcp-image
 	go clean -testcache
 	K8S_NAMESPACE=$(K8S_NAMESPACE_GCP) \
 	  go test -v -tags iceberg_k3d_e2e -run '^TestDataprocIcebergK3d$$' -timeout 25m ./tests/persistent_mode/gcp/iceberg-k3d/
 
 test-e2e-iceberg-streaming-k3d: _check-iceberg-k3d-prereq _refresh-gcp-image ## Dataproc Iceberg streaming-sink e2e on k3d: Kafka source -> Iceberg table via HMS catalog (SPK2; applies deploy/k8s/jaiscloud-gcp.yaml; needs JAISCLOUD_KAFKA_BROKER_MODE=k8s; tag: iceberg_k3d_e2e; SKIP_GCP_IMAGE_REBUILD=1 to reuse the deployed emulator)
 	kubectl apply -f deploy/k8s/jaiscloud-gcp.yaml
-	kubectl -n $(K8S_NAMESPACE_GCP) rollout status deployment/jaiscloud-gcp --timeout=180s
+	@$(MAKE) --no-print-directory _use-gcp-image
 	go clean -testcache
 	K8S_NAMESPACE=$(K8S_NAMESPACE_GCP) \
 	  go test -v -tags iceberg_k3d_e2e -run '^TestDataprocIcebergStreamingK3d$$' -timeout 35m ./tests/persistent_mode/gcp/iceberg-k3d/
@@ -2677,8 +2678,17 @@ test-e2e-demo-spine-k3d: _check-gcp-samples-prereq _refresh-gcp-image ## Whole-s
 test-istio-smoke: ## Istio front-door gate: GKE-not-Kafka, GCS, gRPC over h2c and STS through the gateway (needs deploy/k8s/istio installed)
 	./scripts/istio-smoke.sh
 
-test-dual-substrate-k8s: ## Dual-substrate isolation gate — writes GCP state, runs `deploy.sh --reset`, asserts the GCP object, `jaiscloud_gcp` and the GCP PVCs survived
+check-deploy-images: ## Fail if a substrate Deployment's image points at a private/local registry
+	@if grep -nE '^[[:space:]]+image:[[:space:]]+(10\.|192\.168\.|172\.(1[6-9]|2[0-9]|3[01])\.|localhost)' \
+	    deploy/k8s/jaiscloud.yaml deploy/k8s/jaiscloud-gcp.yaml; then \
+	  echo "ERROR: a substrate image points at a private/local registry — the manifests must install from a public tag"; \
+	  exit 1; \
+	fi
+	@echo "ok: substrate images use public tags"
+
+test-dual-substrate-k8s: ## Dual-substrate isolation gate — writes GCP state, runs `deploy.sh --reset`, asserts the GCP object, `jaiscloud_gcp` and the GCP PVCs survived (destructive: needs ALLOW_RESET=1)
 	NS_AWS=$(K8S_NAMESPACE_AWS) NS_GCP=$(K8S_NAMESPACE_GCP) NS_DATA=$(K8S_NAMESPACE_DATA) \
+	  GATE_ALLOW_RESET=$(ALLOW_RESET) \
 	  scripts/dual-substrate-gate.sh
 
 test-e2e-cloudrun-java: _check-gcp-samples-prereq _refresh-gcp-image ## OPTIONAL floci-gcp Java interop smoke (not a compliance gate) against the k3d emulator with Cloud Run k8s execution, through the in-cluster portmux (asserts CloudRunTest 7/7; JAVA_HOME/mvn on PATH — see AGENTS.md)
@@ -2728,9 +2738,17 @@ _refresh-gcp-image:
 	  echo "Rebuilding $(GCP_IMAGE) from $$(git rev-parse --short HEAD) ..."; \
 	  docker build --build-arg CLOUD=gcp -t $(GCP_IMAGE) -f Dockerfile . && \
 	  docker push $(GCP_PUSH_FLAGS) $(GCP_IMAGE) && \
-	  kubectl -n $(K8S_NAMESPACE_GCP) rollout restart deployment/jaiscloud-gcp && \
-	  kubectl -n $(K8S_NAMESPACE_GCP) rollout status deployment/jaiscloud-gcp --timeout=180s; \
+	  $(MAKE) --no-print-directory _use-gcp-image; \
 	fi
+
+# Point the deployed emulator at the image this checkout built. Needed because
+# the manifest defaults to the published image (so first-time users can install
+# without a private registry) while the e2e targets must run the local build.
+_use-gcp-image:
+	@kubectl -n $(K8S_NAMESPACE_GCP) set image deployment/jaiscloud-gcp jaiscloud-gcp=$(GCP_IMAGE)
+	@kubectl -n $(K8S_NAMESPACE_GCP) patch deployment/jaiscloud-gcp --type=json \
+	  -p '[{"op":"replace","path":"/spec/template/spec/containers/0/imagePullPolicy","value":"IfNotPresent"}]' >/dev/null
+	@kubectl -n $(K8S_NAMESPACE_GCP) rollout status deployment/jaiscloud-gcp --timeout=180s
 
 ##@ Aggregate test targets
 

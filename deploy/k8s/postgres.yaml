@@ -59,6 +59,11 @@ metadata:
   namespace: jaiscloud-data
 spec:
   replicas: 1
+  # Single writer to a ReadWriteOnce data dir: never run two Postgres servers on
+  # one volume during a rollout (the second fails on the postmaster lock and the
+  # rollout never completes).
+  strategy:
+    type: Recreate
   selector:
     matchLabels:
       app: postgres

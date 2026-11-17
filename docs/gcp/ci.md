@@ -75,9 +75,10 @@ jobs:
       - run: <your test command>
 ```
 
-**GitLab CI** — `services:` only reach ports the image `EXPOSE`s. The published
-GCP image exposes `8080`; the gRPC port `8081` is not exposed, so either use
-REST-only tests there or start the container yourself with both ports:
+**GitLab CI** — `services:` only reach ports the image `EXPOSE`s. Released
+images expose `8080` (newer builds also declare `8081`); if `gcp:8081` is not
+reachable on your image, either use REST-only tests there or start the container
+yourself with both ports:
 
 ```yaml
 it:
@@ -111,11 +112,24 @@ docker compose -f deploy/ci/docker-compose.ci.yml down -v
 Start **one** compose service at a time (`gcp`, `gcp-postgres`, `aws`,
 `aws-postgres`, or `gcp tls`): the variants share host ports by design.
 
-### Isolation and determinism
+### Isolation, seeding and determinism
 
-- `--ephemeral` is in-memory only and is mutually exclusive with `--dsn`.
+- `--ephemeral` is in-memory only and is mutually exclusive with `--dsn`. A
+  GitHub Actions service container cannot override the image command, so it runs
+  the default (`start`, in-memory record + periodic saves under `/tmp`); use
+  `/_jaiscloud/reset` between cases there. `docker run`/Compose can pass
+  `--ephemeral` explicitly (the compose file does).
 - Between test cases, wipe state instead of restarting:
   `curl -X POST http://127.0.0.1:8080/_jaiscloud/reset`.
+- **Seed fixtures once, import per job.** `GET /_jaiscloud/export` returns the
+  whole state (metadata and blob bytes) as one gzip tarball; cache it as a test
+  fixture, then start each job with
+  `curl -X POST 'http://…/_jaiscloud/import?reset_first=true' --data-binary @baseline.tar.gz`.
+  That is faster and more deterministic than replaying setup calls in every
+  test. Within one process, the CLI's named snapshots
+  (`jaiscloud-gcp snapshot create baseline` / `snapshot revert baseline`) give
+  the same baseline without a restart. (Details:
+  [the main README's admin API](../../README.md#admin-api).)
 - For reproducible timestamps: `--deterministic --time 2026-01-01T00:00:00Z --seed 1`,
   and move the clock at runtime with
   `POST /_jaiscloud/clock {"mode":"fixed","time":"..."}`.
@@ -186,6 +200,14 @@ create it once (`make postgres-gcp-db`, or
 `kubectl -n jaiscloud-data exec deploy/postgres -- psql -U jaiscloud -d postgres -c 'CREATE DATABASE jaiscloud_gcp'`).
 `rbac.yaml` is what lets the emulator create its per-cluster namespaces and
 driver Pods; without it the emulator falls back to `mock`/the process namespace.
+
+Dataproc jobs also need the Spark image the emulator injects: the manifest's
+`JAISCLOUD_K8S_SPARK_IMAGE` must be pullable from your cluster (the default is
+the repo's `spark-gcs` build). Build it from
+`tests/persistent_mode/gcp/iceberg/spark-iceberg` (+ `download-jars.sh`), import
+it like the emulator image, and set it:
+`kubectl -n jaiscloud-gcp set env deploy/jaiscloud-gcp JAISCLOUD_K8S_SPARK_IMAGE=<image>`.
+Redpanda (Managed Kafka) is pulled from `docker.redpanda.com` on first use.
 
 **Parallel jobs on a shared cluster**: one namespace and one
 `JAISCLOUD_INSTANCE_ID` per job. The shipped manifests pin single values

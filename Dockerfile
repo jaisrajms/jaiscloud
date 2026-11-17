@@ -68,6 +68,9 @@ COPY --from=builder /jaiscloud /jaiscloud
 # Callers pass PORT explicitly (make docker-%, docker-publish.yml).
 ARG PORT=4566
 EXPOSE ${PORT}
+# gRPC (h2c) for the GCP binary. Declared so service-container runners that only
+# expose EXPOSE'd ports (e.g. GitLab services) can reach it; unused by AWS.
+EXPOSE 8081
 
 # Prometheus metrics port (same port, /metrics path — no second port needed)
 

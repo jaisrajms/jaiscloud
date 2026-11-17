@@ -79,7 +79,11 @@ stringData:
 # Spark-on-Kubernetes executor wired to the in-cluster GCS endpoint.
 #
 # The image is the same multi-cloud binary as the AWS deployment, built with
-# CLOUD=gcp:  make docker-gcp  (or  REGISTRY=10.0.100.21:5050 make docker-gcp).
+# CLOUD=gcp. The default below is the published multi-arch image, so the
+# manifests work on your cluster without a private registry. To run your own
+# build: `make docker-gcp`, push/import it, then
+#   kubectl -n jaiscloud-gcp set image deploy/jaiscloud-gcp jaiscloud-gcp=<image>
+# (or `JAISCLOUD_GCP_IMAGE=<image> deploy/deploy.sh --gcp`).
 # Spark drivers/executors are launched as pods in the GCP substrate namespace
 # using JAISCLOUD_K8S_SPARK_IMAGE, so the pod's ServiceAccount needs the
 # jaiscloud-executor Role from rbac.yaml.
@@ -108,8 +112,8 @@ spec:
       terminationGracePeriodSeconds: 30
       containers:
         - name: jaiscloud-gcp
-          image: 10.0.100.21:5050/jaiscloud-gcp:compat
-          imagePullPolicy: Always
+          image: jaisraj/jaiscloud-gcp:latest
+          imagePullPolicy: IfNotPresent
           args:
             - start
             - --port
@@ -197,6 +201,11 @@ spec:
             # Dataproc submits Spark jobs as client-mode pods in this namespace.
             - name: JAISCLOUD_SPARK_EXECUTOR_MODE
               value: k8s
+            # Dataproc drivers/executors run this image. It must carry the GCS
+            # connector (the plain apache/spark image cannot read gs://), so the
+            # default is the repo's spark-gcs build. Point it at your own build
+            # (tests/persistent_mode/gcp/iceberg/spark-iceberg + download-jars.sh)
+            # when the default is not reachable from your cluster.
             - name: JAISCLOUD_K8S_SPARK_IMAGE
               value: 10.0.100.21:5050/spark-gcs:3.5.0
             - name: JAISCLOUD_K8S_SPARK_SUBMIT_PATH

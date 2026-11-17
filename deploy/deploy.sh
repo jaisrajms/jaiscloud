@@ -151,7 +151,51 @@ confirm() {
 wait_for_rollout() {
   local resource=$1 namespace=$2 timeout=${3:-120s}
   info "Waiting for $resource in $namespace to be ready..."
-  kubectl rollout status "$resource" -n "$namespace" --timeout="$timeout"
+  if kubectl rollout status "$resource" -n "$namespace" --timeout="$timeout"; then
+    return 0
+  fi
+  # A failed rollout is almost always an image or a store problem; the events say
+  # which, so print them instead of a bare timeout.
+  warn "rollout of $resource in $namespace did not complete; recent pod state:"
+  kubectl -n "$namespace" get pods 2>&1 | tail -n 5 >&2 || true
+  kubectl -n "$namespace" describe pods 2>&1 | sed -n '/Events:/,$p' | head -n 20 >&2 || true
+  return 1
+}
+
+# apply_gcp_image_override — when JAISCLOUD_GCP_IMAGE is set, point the GCP
+# Deployment at that tag (your own build) and use IfNotPresent so a preloaded
+# image is not pulled from a registry.
+apply_gcp_image_override() {
+  [[ -n "${JAISCLOUD_GCP_IMAGE:-}" ]] || return 0
+  info "Using GCP image $JAISCLOUD_GCP_IMAGE"
+  kubectl -n "$NAMESPACE_GCP" set image deployment/jaiscloud-gcp jaiscloud-gcp="$JAISCLOUD_GCP_IMAGE" >/dev/null
+  kubectl -n "$NAMESPACE_GCP" patch deployment jaiscloud-gcp --type=json \
+    -p '[{"op":"replace","path":"/spec/template/spec/containers/0/imagePullPolicy","value":"IfNotPresent"}]' >/dev/null
+}
+
+# import_image_into_cluster <image> — a locally built image is invisible to a
+# kind/k3d node (they have their own containerd), so the default deploy would
+# run the published image instead of the build. Load it when we recognise the
+# context; other clusters need their own registry.
+import_image_into_cluster() {
+  local image=$1 context
+  context=$(kubectl config current-context 2>/dev/null || true)
+  case "$context" in
+    kind-*)
+      if command -v kind >/dev/null 2>&1; then
+        info "Loading $image into kind cluster '${context#kind-}'..."
+        kind load docker-image "$image" --name "${context#kind-}"
+      else
+        warn "kind context '$context' but 'kind' is not on PATH — load $image yourself"
+      fi ;;
+    k3d-*)
+      if command -v k3d >/dev/null 2>&1; then
+        info "Importing $image into k3d cluster '${context#k3d-}'..."
+        k3d image import -c "${context#k3d-}" "$image"
+      else
+        warn "k3d context '$context' but 'k3d' is not on PATH — import $image yourself"
+      fi ;;
+  esac
 }
 
 postgres_deployed() {
@@ -331,10 +375,31 @@ restore_aws_ca_configmap() {
 }
 
 print_endpoints() {
+  local aws_host="" context
+  context=$(kubectl config current-context 2>/dev/null || true)
+  case "$context" in
+    # kind/k3d report the node's internal IP as the LoadBalancer address; the
+    # host cannot reach it, so the port-forward is the real endpoint.
+    kind-*|k3d-*) aws_host="" ;;
+    *)
+      aws_host=$(kubectl -n "$NAMESPACE_AWS" get svc jaiscloud \
+        -o jsonpath='{.status.loadBalancer.ingress[0].ip}' 2>/dev/null || true)
+      if [[ -z "$aws_host" ]]; then
+        aws_host=$(kubectl -n "$NAMESPACE_AWS" get svc jaiscloud \
+          -o jsonpath='{.status.loadBalancer.ingress[0].hostname}' 2>/dev/null || true)
+      fi ;;
+  esac
   echo ""
-  echo "  AWS substrate : http://localhost:4566   (namespace $NAMESPACE_AWS)"
-  echo "  GCP substrate : http://localhost:8080   (namespace $NAMESPACE_GCP, gRPC :8081)"
-  echo "                  kubectl port-forward -n $NAMESPACE_GCP svc/jaiscloud-gcp 8080:8080"
+  if [[ -n "$aws_host" ]]; then
+    echo "  AWS substrate : http://$aws_host:4566   (namespace $NAMESPACE_AWS)"
+  else
+    echo "  AWS substrate : kubectl port-forward -n $NAMESPACE_AWS svc/jaiscloud 4566:4566"
+    echo "                  (no host-reachable LoadBalancer on '$context')"
+  fi
+  # The GCP Service is a ClusterIP on purpose (it also carries the Thrift HMS
+  # ports; the front door is the external HTTP surface).
+  echo "  GCP substrate : kubectl port-forward -n $NAMESPACE_GCP svc/jaiscloud-gcp 8080:8080 8081:8081"
+  echo "                  (namespace $NAMESPACE_GCP: REST :8080, gRPC :8081)"
   echo "  Postgres      : postgres.$NAMESPACE_DATA.svc.cluster.local:5432  (nodePort 30543)"
   echo ""
   echo "  Remove the AWS workloads (keep data) : $0 --delete"
@@ -464,6 +529,7 @@ if [[ "$MODE" == "gcp" ]]; then
   ensure_database "$GCP_DB"
   info "Applying the GCP substrate manifest..."
   kubectl apply -f "$K8S_DIR/jaiscloud-gcp.yaml"
+  apply_gcp_image_override
   wait_for_rollout deployment/jaiscloud-gcp "$NAMESPACE_GCP" 180s
   ok "GCP substrate is ready in namespace $NAMESPACE_GCP."
   print_endpoints
@@ -532,6 +598,7 @@ if [[ "$MODE" == "migrate-store" ]]; then
   if [[ "$legacy_gcp" -eq 1 ]]; then
     info "Bringing up the GCP substrate in $NAMESPACE_GCP (paused for the byte copy)..."
     kubectl apply -f "$K8S_DIR/jaiscloud-gcp.yaml"
+    apply_gcp_image_override
     scale_to_zero "$NAMESPACE_GCP" jaiscloud-gcp app=jaiscloud-gcp
     if kubectl -n "$OLD_NS" get pvc "$legacy_gcp_pvc" &>/dev/null; then
       migrate_blobs "$OLD_NS" "$legacy_gcp_pvc" "$NAMESPACE_GCP" "$gcp_blobs_pvc"
@@ -539,6 +606,7 @@ if [[ "$MODE" == "migrate-store" ]]; then
       warn "no pvc/$legacy_gcp_pvc in $OLD_NS — no GCP object bytes to copy"
     fi
     kubectl apply -f "$K8S_DIR/jaiscloud-gcp.yaml"
+    apply_gcp_image_override
     wait_for_rollout deployment/jaiscloud-gcp "$NAMESPACE_GCP" 180s
     # The legacy GCP workload must not keep running in the AWS namespace.
     kubectl -n "$OLD_NS" delete deployment jaiscloud-gcp --ignore-not-found
@@ -578,6 +646,7 @@ else
   # tag the build under that name too — otherwise the cluster would keep running
   # whatever image happened to be there and the build would be dead weight.
   docker tag "$IMAGE" "$AWS_MANIFEST_IMAGE"
+  import_image_into_cluster "$AWS_MANIFEST_IMAGE"
   ok "Image built and tagged as $AWS_MANIFEST_IMAGE."
 fi
 

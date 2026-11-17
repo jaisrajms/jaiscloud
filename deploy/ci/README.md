@@ -11,5 +11,8 @@ the files it references.
 | `ci-tls/gen.sh` | dev CA + wildcard leaf for the real cloud hostnames, reusing the front door's SAN policy (`deploy/k8s/istio/certs/gen.sh`). |
 | `ci-tls/nginx.conf` | TLS termination for `*.googleapis.com`, `*.run.app`, `*.cloudfunctions.net` → REST `:8080`, preserving `Host`. REST only; gRPC-over-TLS needs the Istio front door. |
 
+Run the compose file from this directory's parent checkout (its bind mounts are
+relative to `deploy/ci/`): `docker compose -f deploy/ci/docker-compose.ci.yml up -d gcp`.
+
 Nothing here is required to run the emulator: it remains a single container with
 `mock` executors, no cluster and no mesh.

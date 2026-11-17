@@ -16,8 +16,13 @@
 # `kubectl port-forward`, so it works on docker-desktop, k3d and kind.
 #
 # Usage:
-#   scripts/dual-substrate-gate.sh
-#   scripts/dual-substrate-gate.sh --keep-state   # do not delete the probe object
+#   GATE_ALLOW_RESET=1 scripts/dual-substrate-gate.sh
+#   GATE_ALLOW_RESET=1 scripts/dual-substrate-gate.sh --keep-state
+#
+# The gate is destructive by design (it proves an AWS reset does not touch GCP),
+# so it refuses to run unless GATE_ALLOW_RESET=1: it drops the AWS database and
+# deletes the `jaiscloud` namespace (its blobs and state PVCs). GCP state is the
+# thing under test and is expected to survive.
 #
 # Env:
 #   KUBE_CONTEXT        kubectl context (default: the current one)
@@ -40,6 +45,7 @@ PROJECT="${PROJECT:-dpl-gate}"
 BUCKET="${BUCKET:-dpl-gate-$$}"
 GATE_TIMEOUT="${GATE_TIMEOUT:-240}"
 KEEP_STATE=0
+GATE_ALLOW_RESET="${GATE_ALLOW_RESET:-0}"
 
 for arg in "$@"; do
   case "$arg" in
@@ -195,6 +201,19 @@ kube -n "$NS_DATA" rollout status deployment/postgres --timeout="${GATE_TIMEOUT}
 kube -n "$NS_GCP" rollout status deployment/jaiscloud-gcp --timeout="${GATE_TIMEOUT}s" >/dev/null
 kube -n "$NS_AWS" rollout status deployment/jaiscloud --timeout="${GATE_TIMEOUT}s" >/dev/null
 say "  three namespaces, both substrates and the shared store are up"
+
+# Refuse before writing anything: the gate destroys AWS state (by design).
+if [[ "$GATE_ALLOW_RESET" != "1" ]]; then
+  say ""
+  say "  REFUSED: this gate drops the AWS database and deletes the"
+  say "  $NS_AWS namespace (its blobs and state PVCs). GCP state is the"
+  say "  thing under test and is expected to survive."
+  say ""
+  say "  Re-run with GATE_ALLOW_RESET=1 (or: make test-dual-substrate-k8s ALLOW_RESET=1)"
+  say "  when this cluster's AWS state is disposable."
+  exit 2
+fi
+
 
 GCP_PF_PORT="${GCP_PF_PORT:-18461}"
 AWS_PF_PORT="${AWS_PF_PORT:-18462}"

@@ -583,7 +583,10 @@ postgres://<user>:<password>@<host>:<port>/<database>
 - You are testing services that run inside K8s and need to call AWS APIs
 - You want Spark jobs to submit to K8s (the JaisCloud server needs to reach the K8s API)
 
-**What you need:** Docker Desktop with Kubernetes enabled, or kind / minikube.
+**What you need:** Docker Desktop with Kubernetes enabled, or kind / k3d / minikube.
+On kind/k3d, `deploy/deploy.sh` loads the image it builds into the cluster
+(`kind load` / `k3d image import`) because a node has its own containerd; on
+other clusters push the image to a registry you can reach.
 
 ### Namespace topology
 
@@ -663,6 +666,14 @@ creates the `jaiscloud_gcp` database if it is missing (`postgres-gcp-db`), then
 applies `deploy/k8s/jaiscloud-gcp.yaml` (the GCP Deployment, PVCs, Secret,
 Service and its own Namespace) and waits for `deployment/jaiscloud-gcp` in
 `jaiscloud-gcp`.
+
+The GCP manifest defaults to the published multi-arch image
+(`jaisraj/jaiscloud-gcp:latest`). To run your own build:
+`JAISCLOUD_GCP_IMAGE=<image> ./deploy/deploy.sh --gcp`, or
+`kubectl -n jaiscloud-gcp set image deploy/jaiscloud-gcp jaiscloud-gcp=<image>`.
+Dataproc jobs additionally need a Spark image with the GCS connector (the
+manifest's `JAISCLOUD_K8S_SPARK_IMAGE`); point it at a reachable build with
+`kubectl -n jaiscloud-gcp set env deploy/jaiscloud-gcp JAISCLOUD_K8S_SPARK_IMAGE=<image>`.
 
 **Existing Postgres volume.** `deploy/k8s/postgres.yaml` bootstraps
 `jaiscloud_gcp` with a ConfigMap mounted at `/docker-entrypoint-initdb.d`, which
@@ -822,12 +833,13 @@ image was already imported into the cluster (`k3d image import`, CI).
 The isolation guarantee is exercised by a gate, not just asserted in prose:
 
 ```bash
-make test-dual-substrate-k8s   # scripts/dual-substrate-gate.sh
+make test-dual-substrate-k8s ALLOW_RESET=1   # scripts/dual-substrate-gate.sh
 ```
 
 It writes a real GCS object to the GCP substrate, records that `jaiscloud_gcp`
 and the GCP PVCs exist, runs `deploy.sh --reset`, then re-reads the object and
-re-checks the database, PVCs and both substrate rollouts.
+re-checks the database, PVCs and both substrate rollouts. Because that reset
+drops the AWS database, the gate refuses to run without `ALLOW_RESET=1`.
 
 ### Viewing logs
 
