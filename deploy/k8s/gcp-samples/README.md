@@ -38,7 +38,9 @@ so no credentials and no source edits are required.
 make docker-gcp-samples
 
 # 2. Deploy the emulator (if not already) and run the suite
-#    (the one-file install also creates the jaiscloud-gcp namespace)
+#    (the one-file install creates the jaiscloud-gcp namespace + ServiceAccount,
+#    but the shared Postgres and its jaiscloud_gcp database must exist first:
+#    apply deploy/k8s/postgres.yaml, or use `make up-k8s-gcp`)
 kubectl apply -f deploy/k8s/jaiscloud-gcp.yaml
 make test-e2e-gcp-samples-k3d
 
@@ -78,7 +80,7 @@ gRPC (h2c) `jaiscloud-gcp.jaiscloud-gcp.svc.cluster.local:8081`.
 1. **Datastore namespaces are not supported.** Any non-empty namespace makes the
    gRPC Datastore service fail with
    `INVALID_ARGUMENT: namespaced keys are not supported`
-   ([`internal/gcp/grpc/datastore/service.go:927`](../../../internal/gcp/grpc/datastore/service.go)).
+   (namespace handling lives in [`internal/gcp/service/datastore`](../../../internal/gcp/service/datastore)).
    The Datastore sample hardcodes `namespace=spring-demo`, so the manifest
    overrides it to empty. Supporting namespaces (a per-namespace partition of
    the entity space) would let the sample run unmodified.

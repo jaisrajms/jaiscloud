@@ -316,7 +316,7 @@ if [[ ${#missing[@]} -gt 0 ]]; then
 fi
 
 if ! "$KUBECTL" get namespace "$K8S_NAMESPACE" >/dev/null 2>&1; then
-  echo "SKIP: namespace '$K8S_NAMESPACE' not found — start the k3d cluster and apply deploy/k8s (see deploy/k8s/README)"
+  echo "SKIP: namespace '$K8S_NAMESPACE' not found — start the k3d cluster and apply deploy/k8s/namespace.yaml + jaiscloud-gcp.yaml"
   exit 0
 fi
 if ! "$KUBECTL" -n "$K8S_NAMESPACE" get svc jaiscloud-gcp >/dev/null 2>&1; then

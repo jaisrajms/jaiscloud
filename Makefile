@@ -68,7 +68,7 @@ SPARK_E2E_ICEBERG_GCP_IMAGE ?= spark-iceberg-gcp-test
 GCP_REGISTRY   ?= 10.0.100.21:5050
 GCP_IMAGE      ?= $(GCP_REGISTRY)/jaiscloud-gcp:compat
 # k3d's registry is plain HTTP. Real Docker reaches it when the daemon lists it
-# under insecure-registries (see deploy/k8s/README or the workflow notes) and
+# under insecure-registries (see deploy/k8s/istio/README.md or the workflow notes) and
 # then needs no push flag; a podman/buildah client instead needs
 # --tls-verify=false. Override on the command line for such a client:
 #   make <target> GCP_PUSH_FLAGS=--tls-verify=false
@@ -164,7 +164,7 @@ JAISCLOUD_IMAGE   ?= jaisraj/jaiscloud-aws:latest
         server-gcp server-gcp-ephemeral server-gcp-postgres \
         server-ui server-ui-gcp stop-server up-docker down-docker up-k8s up-k8s-gcp down-k8s \
         postgres-up postgres-reset postgres-down postgres-gcp-db \
-        test-dual-substrate-k8s \
+        test-dual-substrate-k8s test-istio-smoke \
         test-integration test-integration-gcp test-lro-async-gcp test-throttle-gcp test-gcp-load test-gcp-mutation test-gcp-mutation-ratchet test-gcp-mutation-update \
         test-e2e-emr-docker test-e2e-emrcontainers-k8s test-e2e-eventbridge \
         test-e2e-dpc-docker test-e2e-dpc-k8s \
@@ -2673,6 +2673,9 @@ test-e2e-demo-spine-k3d: _check-gcp-samples-prereq _refresh-gcp-image ## Whole-s
 	  CLOUDRUN_BROWSER_SUFFIX=$(CLOUDRUN_BROWSER_SUFFIX) \
 	  CLOUDRUN_BROWSER_PORT=$(CLOUDRUN_BROWSER_PORT) \
 	  scripts/demo-spine-verify.sh
+
+test-istio-smoke: ## Istio front-door gate: GKE-not-Kafka, GCS, gRPC over h2c and STS through the gateway (needs deploy/k8s/istio installed)
+	./scripts/istio-smoke.sh
 
 test-dual-substrate-k8s: ## Dual-substrate isolation gate — writes GCP state, runs `deploy.sh --reset`, asserts the GCP object, `jaiscloud_gcp` and the GCP PVCs survived
 	NS_AWS=$(K8S_NAMESPACE_AWS) NS_GCP=$(K8S_NAMESPACE_GCP) NS_DATA=$(K8S_NAMESPACE_DATA) \

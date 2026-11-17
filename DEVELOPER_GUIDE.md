@@ -746,7 +746,8 @@ curl http://localhost:8080/_jaiscloud/health   # GCP substrate
 `JAISCLOUD_INSTANCE_ID` is the `jaiscloud.io/instance-id` every K8s resource the
 emulator creates is stamped with, and startup `cleanupOrphans` only touches its
 own. The manifests pin one identity per substrate and put its state directory on
-the substrate's blob PVC, so the ID is stable across pod rolls:
+a small PVC of its own (never the blob PVC, whose snapshot would capture the
+TLS key), so the ID is stable across pod rolls:
 
 | Deployment | `JAISCLOUD_INSTANCE_ID` | `JAISCLOUD_STATE_DIR` | `JAISCLOUD_K8S_NAMESPACE` |
 |---|---|---|---|
@@ -782,7 +783,8 @@ Both resets are **database-scoped**, not store-scoped:
 - `--gcp-reset` scales `jaiscloud-gcp` to 0, deletes
   `jaiscloud-gcp-blobs-pvc`, drops/recreates `jaiscloud_gcp` and re-applies
   `jaiscloud-gcp.yaml`. The AWS substrate and `jaiscloud-data` are never touched;
-  the small GCP state PVC (identity + TLS cert) is kept, both are regenerable.
+  the small GCP state PVC (identity pin + TLS cert) is kept because both are
+  regenerable, while the blobs PVC is deleted as part of the reset.
 
 Add `--yes` (or `ASSUME_YES=1`) to run either non-interactively, and
 `--skip-build` (or `SKIP_IMAGE_BUILD=1`) to skip the `docker build` when the
@@ -1293,7 +1295,7 @@ JAISCLOUD_INSTANCE_ID=staging-primary ./jaiscloud-aws start
 The dual-substrate manifests pin one identity per substrate —
 `aws-substrate-1` for `deploy/k8s/jaiscloud.yaml` and `gcp-substrate-1` for
 `deploy/k8s/jaiscloud-gcp.yaml` — with `JAISCLOUD_STATE_DIR=/data/state` on that
-substrate's blobs PVC, so each identity is stable across pod rolls and neither
+substrate's state PVC, so each identity is stable across pod rolls and neither
 substrate's startup sweep can see the other's resources (see
 [Setup 3](#setup-3--jaiscloud-on-kubernetes)).
 

@@ -27,7 +27,7 @@
 #   scripts/istio-smoke.sh --keep     # leave the GKE probe cluster behind
 #
 # Env:
-#   KUBE_CONTEXT        kubectl context (default k3d-jaiscloud)
+#   KUBE_CONTEXT        kubectl context (default: the current context)
 #   ISTIO_NS            namespace of the gateway Service (default istio-system)
 #   GW_SVC              gateway Service name (default istio-ingressgateway)
 #   GW_ADDR             host:port of the gateway, wins over all discovery
@@ -59,7 +59,7 @@ for arg in "$@"; do
   esac
 done
 
-KUBE_CONTEXT="${KUBE_CONTEXT:-k3d-jaiscloud}"
+KUBE_CONTEXT="${KUBE_CONTEXT:-}"
 ISTIO_NS="${ISTIO_NS:-istio-system}"
 GW_SVC="${GW_SVC:-istio-ingressgateway}"
 GW_PORT="${GW_PORT:-443}"
@@ -96,7 +96,13 @@ fail() { FAILED=$((FAILED + 1)); printf '  FAIL  %s\n' "$*" >&2; }
 bad()  { printf '  FAIL  %s\n' "$*" >&2; }
 skip() { printf '  SKIP  %s\n' "$*"; }
 
-kc() { kubectl --context "$KUBE_CONTEXT" "$@"; }
+kc() {
+  if [[ -n "$KUBE_CONTEXT" ]]; then
+    kubectl --context "$KUBE_CONTEXT" "$@"
+  else
+    kubectl "$@"
+  fi
+}
 
 # ── prerequisites ───────────────────────────────────────────────────────────
 command -v kubectl >/dev/null 2>&1 || { echo "$PROG: kubectl is required" >&2; exit 2; }

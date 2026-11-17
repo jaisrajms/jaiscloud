@@ -232,7 +232,7 @@ assertion that fails is a failure.
 
 | command | what it asserts | when it skips |
 |---|---|---|
-| `make test-e2e-dpgke-demo-k3d` | the whole lifecycle: Terraform apply → submitter image → Helm → in-cluster Java → assertions → `helm uninstall` → `terraform destroy` → "nothing is left" | a missing terraform/helm/kubectl/java/mvn/curl/Docker daemon, no `jaiscloud` namespace or `svc/jaiscloud-gcp`, or a kubectl context with no `k3d-*` node |
+| `make test-e2e-dpgke-demo-k3d` | the whole lifecycle: Terraform apply → submitter image → Helm → in-cluster Java → assertions → `helm uninstall` → `terraform destroy` → "nothing is left" | a missing terraform/helm/kubectl/java/mvn/curl/Docker daemon, no `jaiscloud-gcp` namespace or `svc/jaiscloud-gcp`, or a kubectl context with no `k3d-*` node |
 | `make test-dpgke-demo-terraform` | the module alone: apply, a re-plan with no changes, the provider-submitted job, the destroy order, an empty state | no `terraform` on PATH |
 | `./demo/dpgke-lifecycle/terraform/run.sh [endpoint]` | the same gate with a chosen emulator endpoint (it builds and starts one if none is healthy) | no `terraform` on PATH |
 | `./demo/dpgke-lifecycle/terraform/run-cross-project.sh` | the same gate in the two-project shape, in its own Terraform workspace | no `terraform` (delegates to `run.sh`) |
@@ -327,7 +327,7 @@ knowing:
 
 | variable | default | meaning |
 |---|---|---|
-| `K8S_NAMESPACE` | `jaiscloud` | namespace the emulator runs in |
+| `K8S_NAMESPACE` | `jaiscloud-gcp` | namespace the emulator runs in |
 | `DPGKE_NAMESPACE` | `dpgke-demo` | Dataproc workload **and** Helm release namespace |
 | `PROJECT` / `STORAGE_PROJECT` | `dpgke-demo` / `dpgke-demo-storage` | runner / bucket owner |
 | `REGION` / `GKE_LOCATION` | `us-central1` / `us-central1-a` | regional Dataproc, zonal GKE |

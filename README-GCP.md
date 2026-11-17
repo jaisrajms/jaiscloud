@@ -907,7 +907,8 @@ raw-media fallback. `locations/{location}/operations` is **not** claimed — it 
 the LRO path the emulator shares with Workflows.
 
 Scheduled as GKP9 in
-[`plan_docs/gcp-gke-dataproc-conformance-wave-plan.md`](plan_docs/gcp-gke-dataproc-conformance-wave-plan.md).
+the local `plan_docs/gcp-gke-dataproc-conformance-wave-plan.md` (gitignored
+planning scratch, not shipped with the repo).
 
 ### Dataproc WorkflowTemplates: only the latest version is retained
 

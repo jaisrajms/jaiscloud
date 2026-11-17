@@ -24,7 +24,7 @@ import urllib.error
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-EMULATOR = os.environ.get("EMULATOR", "http://jaiscloud-gcp.jaiscloud.svc.cluster.local:8080")
+EMULATOR = os.environ.get("EMULATOR", "http://jaiscloud-gcp.jaiscloud-gcp.svc.cluster.local:8080")
 PROJECT = os.environ.get("PROJECT", "crypto-medallion")
 REGION = os.environ.get("REGION", "us-central1")
 CLUSTER = os.environ["CLUSTER"]

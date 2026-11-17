@@ -332,6 +332,12 @@ if [[ "$MODE" == "reset" ]]; then
   kubectl delete namespace "$NAMESPACE_AWS" --ignore-not-found --timeout=180s
 
   info "Recreating the AWS substrate..."
+  # The store may not exist yet (e.g. --reset on a cluster that never ran the
+  # full deploy); bring it up so the recreated AWS pod has a database.
+  if ! postgres_deployed; then
+    kubectl apply -f "$K8S_DIR/postgres.yaml"
+    wait_for_rollout "$POSTGRES_DEPLOYMENT" "$NAMESPACE_DATA"
+  fi
   apply_aws_workloads
   wait_for_rollout deployment/jaiscloud "$NAMESPACE_AWS"
   ok "AWS substrate reset. The GCP substrate and Postgres were left untouched."
@@ -437,7 +443,7 @@ if [[ "$MODE" == "migrate-store" ]]; then
   echo ""
   echo "  The legacy pvc/postgres-pvc was kept in $OLD_NS as a rollback copy."
   echo "  Verify both substrates, then delete it:"
-  echo "    kubectl -n $OLD_NS delete pvc $POSTGRES_PVC postgres-pvc --ignore-not-found"
+  echo "    kubectl -n $OLD_NS delete pvc $POSTGRES_PVC --ignore-not-found"
   echo "  (NOTE: $0 --reset deletes the $OLD_NS namespace, and with it that copy.)"
   exit 0
 fi
