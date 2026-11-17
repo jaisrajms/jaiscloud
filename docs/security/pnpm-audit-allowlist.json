@@ -1,0 +1,14 @@
+{
+  "schema": 1,
+  "notes": "Cited pnpm advisories that cannot be fixed yet. make security-scan-ui runs pnpm audit --json, then scripts/pnpm_audit_allowlist.py: an unlisted finding fails and a stale entry fails, so remove an entry as soon as the advisory is fixed. Do not add an entry without the advisory URL and a reason.",
+  "advisories": [
+    {
+      "id": "GHSA-fc5q-39xc-vjpf",
+      "cve": "CVE-2026-112366",
+      "package": "picomatch",
+      "url": "https://github.com/advisories/GHSA-fc5q-39xc-vjpf",
+      "reason": "ReDoS in single-branch repeated extglobs. picomatch is a dev-only transitive dependency of vite/typescript-eslint (console build and lint); it is not shipped in the runtime image. The advisory's patched_versions is '<0.0.0' and the latest published version (4.0.7) is still in the vulnerable range, so there is no upgrade that clears it. Remove this entry when a patched picomatch is published.",
+      "reviewed": "2026-11-17"
+    }
+  ]
+}
