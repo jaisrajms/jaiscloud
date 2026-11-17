@@ -8,6 +8,7 @@ reference material it links to.
 |---|---|
 | [`wire-contract.md`](wire-contract.md) | What the emulator's fidelity matrix promises: the per-operation/per-transport wire contract, the pinned API artifacts, the CI gates, and the surfaces that are explicitly non-`ga`. |
 | [`testability.md`](testability.md) | The local-testability contract: per service, what a local run may be trusted to prove and what must be verified on real GCP, plus the behaviour classes (`p1`–`p5`) the depth gate requires. |
+| [`ci.md`](ci.md) | Running JaisCloud in **your** CI: service containers (GitHub Actions, GitLab, Compose), Postgres-backed runs, the executor tests that need pods, and clients that insist on `https://` (native TLS, a thin proxy, or the Istio front door). Assets in [`deploy/ci/`](../../deploy/ci/). |
 | [`bigquery-sql-engine.md`](bigquery-sql-engine.md) | Decision record (BQ0) freezing the BigQuery engine choice (pure-Go in-process SQLite, one engine in memory and `--dsn` modes) and the v1 dialect subset. |
 | [`fidelity-reconciliation.md`](fidelity-reconciliation.md) | The AUD5 reconciliation of the fidelity matrix against wire evidence, code and the official Discovery documents, with the durable re-check. |
 | [`dataproc-gke-version-aliases.md`](dataproc-gke-version-aliases.md) | Real-GCP capture (2026-10-30) of the Dataproc-on-GKE `dataproc-<major.minor>` Spark version alias: only `dataproc-2.2` is accepted and it resolves to `3.5-dataproc-28`. |

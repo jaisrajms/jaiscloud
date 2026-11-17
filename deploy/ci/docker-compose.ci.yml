@@ -1,0 +1,101 @@
+# CI compose for integration tests that need a JaisCloud substrate.
+#
+# Run ONE service name at a time (starting several at once would collide on
+# 8080/4566). Everything is ephemeral unless you pick a *-postgres variant.
+#
+#   docker compose -f deploy/ci/docker-compose.ci.yml up -d gcp
+#   docker compose -f deploy/ci/docker-compose.ci.yml up -d gcp-postgres
+#   docker compose -f deploy/ci/docker-compose.ci.yml up -d aws
+#   docker compose -f deploy/ci/docker-compose.ci.yml up -d aws-postgres
+#   docker compose -f deploy/ci/docker-compose.ci.yml up -d gcp tls   # + TLS front door
+#   docker compose -f deploy/ci/docker-compose.ci.yml down -v
+#
+# The image is distroless (no shell, no curl/wget), so there is deliberately no
+# container healthcheck: wait from the host instead, e.g.
+#   until curl -sf http://127.0.0.1:8080/_jaiscloud/health; do sleep 1; done
+#
+# See docs/gcp/ci.md for the full recipe (executors, TLS clients, determinism).
+
+name: jaiscloud-ci
+
+services:
+  # ── GCP substrate, in-memory ───────────────────────────────────────────────
+  gcp:
+    image: ${JAISCLOUD_GCP_IMAGE:-jaisraj/jaiscloud-gcp:latest}
+    command: ["start", "--port", "8080", "--grpc-port", "8081", "--ephemeral"]
+    ports:
+      - "${JAISCLOUD_GCP_REST_PORT:-8080}:8080"
+      - "${JAISCLOUD_GCP_GRPC_PORT:-8081}:8081"
+
+  # ── AWS substrate, in-memory (every service on one port) ───────────────────
+  aws:
+    image: ${JAISCLOUD_AWS_IMAGE:-jaisraj/jaiscloud-aws:latest}
+    command: ["start", "--port", "4566", "--ephemeral"]
+    ports:
+      - "${JAISCLOUD_AWS_PORT:-4566}:4566"
+
+  # ── Shared PostgreSQL server for the persistent variants ───────────────────
+  # One database per cloud: `jaiscloud` (AWS) and `jaiscloud_gcp` (GCP), so a
+  # reset of one substrate can drop one database without touching the other.
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: jaiscloud
+      POSTGRES_PASSWORD: jaiscloud
+      POSTGRES_DB: jaiscloud
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U jaiscloud"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+    volumes:
+      # Creates jaiscloud_gcp only on a FRESH volume (initdb runs once).
+      - ./postgres-init:/docker-entrypoint-initdb.d:ro
+
+  # ── GCP substrate backed by PostgreSQL ─────────────────────────────────────
+  # Metadata is in Postgres; blob BYTES go to the container's writable layer
+  # (/tmp), so they survive `docker restart` but not a recreate/down. For bytes
+  # that must outlive the container, bind-mount a world-writable host dir
+  # (mkdir -m 777 blobs) at /data/blobs and point --blob-dir there.
+  gcp-postgres:
+    image: ${JAISCLOUD_GCP_IMAGE:-jaisraj/jaiscloud-gcp:latest}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    command:
+      - start
+      - --port=8080
+      - --grpc-port=8081
+      - --dsn=postgres://jaiscloud:jaiscloud@postgres:5432/jaiscloud_gcp
+      - --blob-dir=/tmp/blobs
+    ports:
+      - "${JAISCLOUD_GCP_REST_PORT:-8080}:8080"
+      - "${JAISCLOUD_GCP_GRPC_PORT:-8081}:8081"
+
+  # ── AWS substrate backed by PostgreSQL ─────────────────────────────────────
+  aws-postgres:
+    image: ${JAISCLOUD_AWS_IMAGE:-jaisraj/jaiscloud-aws:latest}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    command:
+      - start
+      - --port=4566
+      - --dsn=postgres://jaiscloud:jaiscloud@postgres:5432/jaiscloud
+      - --blob-dir=/tmp/blobs
+    ports:
+      - "${JAISCLOUD_AWS_PORT:-4566}:4566"
+
+  # ── Optional TLS front door for clients that insist on https ───────────────
+  # REST only: it proxies to gcp:8080 preserving Host. gRPC-over-TLS needs the
+  # Istio front door (deploy/k8s/istio). Generate certs first:
+  #   deploy/ci/ci-tls/gen.sh
+  tls:
+    image: nginx:1.27-alpine
+    depends_on:
+      - gcp
+    volumes:
+      - ./ci-tls/certs:/etc/nginx/certs:ro
+      - ./ci-tls/nginx.conf:/etc/nginx/nginx.conf:ro
+    ports:
+      - "${JAISCLOUD_TLS_PORT:-443}:443"

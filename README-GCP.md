@@ -176,6 +176,16 @@ Ports: `8080` REST/admin, `8081` gRPC (h2c), `4567` console with `--ui`. The ima
 `8080`; publish `8081`/`4567` explicitly as above. Pin a version instead of `latest` in CI
 (`jaisraj/jaiscloud-gcp:0.1.1`); `jaiscloud-gcp version` prints the tag the image was built from.
 
+### Running in CI
+
+The emulator needs no Kubernetes cluster and no mesh: start the container, wait
+on `GET /_jaiscloud/health` from the host (the image is distroless and has no
+shell), and point clients at it with the `*_EMULATOR_HOST` variables above.
+[`docs/gcp/ci.md`](docs/gcp/ci.md) has the recipes for GitHub Actions, GitLab,
+Compose, Postgres-backed runs, executor tests that **do** need pods, and clients
+that insist on `https://` (native TLS, a thin proxy, or the Istio front door).
+Ready-made files: [`deploy/ci/`](deploy/ci/).
+
 ### Homebrew (macOS) and Scoop (Windows)
 
 ```bash
