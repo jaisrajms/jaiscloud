@@ -837,9 +837,12 @@ external DSN followed by a rollout restart. The base DSN's database component is
 replaced with `jaiscloud` / `jaiscloud_gcp` for those Secrets (one database per
 cloud); `JAISCLOUD_AWS_DSN` / `JAISCLOUD_GCP_DSN` are used verbatim for an exact
 per-substrate DSN. `deploy.sh --check --json` reports
-`store.mode=bundled|external`; for an external store `store.ready` is `false` and
-`store.databases.*` is `null` (`store.databasesProbe=unavailable`), meaning "not
-probeable" (there is no pod to exec), not "missing". Migrating the pre-split
+`store.mode=bundled|external` and `store.workload` (resolved as
+`STORE_WORKLOAD=<deployment|statefulset>/<name>`, then `deployment/postgres`,
+then `statefulset/postgres`); for an external store `store.ready` is `false` and
+`store.databases.*` is `null` (`store.databasesProbe=unavailable`,
+`store.probeReason=external`), meaning "not probeable" (a read-only probe never
+creates a pod to exec), not "missing". Migrating the pre-split
 store into an external target is not supported yet — the command refuses before
 touching anything.
 

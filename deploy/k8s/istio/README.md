@@ -375,18 +375,26 @@ Recommendation: while a substrate is parked, remove its suffix from the CoreDNS
 Corefile (one line per suffix in `dns.yaml`) and re-add it on resume; keep the
 `hostAliases` and `clusterIP` forms pointed at the gateway/Service of whichever
 substrate is running. `deploy/deploy.sh --check --json` reports
-`dns.rewrites` / `dns.suffixes` / `dns.stale` and warns per stale suffix, so the
-check tells you which rule to drop.
+`dns.rewrites` / `dns.suffixes` / `dns.target(s)` / `dns.stale` and warns per
+stale target, so the check tells you which rule to drop. A rewrite is judged by
+what it names: `gateway` (istio-ingressgateway + Gateway/jaiscloud + the owning
+substrate's state) or `service:<ns>/<name>` (the Service must exist and have
+ready endpoints). An `unknown` target — an address that matches no Service in
+the JaisCloud namespaces, or a line the probe cannot parse — is reported, never
+called stale.
 
 The CA is the opposite case: **park keeps it**. `certs/gen.sh` writes the CA
 ConfigMap `jaiscloud-ca-cert` into each substrate namespace for managed
-workloads that trust the front door; a resumed substrate, its Dataproc drivers
-and Cloud Run pods still need it, so do not delete it with the compute. It only
-becomes stale when the issuer is gone: if the TLS secret
-`istio-system/jaiscloud-wildcard` (and the `Gateway`) no longer exist, a
-remaining copy is a stale CA — re-run `certs/gen.sh` or remove the copy. The
-preflight reports `ca.aws` / `ca.gcp` / `ca.issuerPresent` and warns once per
-namespace that still has a copy without an issuer.
+workloads that trust the front door, labelled `jaiscloud.io/issuer=mesh`; a
+resumed substrate, its Dataproc drivers and Cloud Run pods still need it, so do
+not delete it with the compute. It only becomes stale when the issuer is gone:
+if the TLS secret `istio-system/jaiscloud-wildcard` (and the `Gateway`) no
+longer exist, a remaining *labelled* copy is a stale CA — re-run `certs/gen.sh`
+or remove the copy. An unlabelled copy is a host-issued CA (for example a TLS
+sidecar on the emulator), so the preflight reports `ca.issuers.<cloud>=external`
+and never warns about it. The preflight reports `ca.aws` / `ca.gcp` /
+`ca.issuerPresent` / `ca.issuers.*` and warns once per namespace that still has
+a mesh-labelled copy without an issuer.
 
 ## Addressing the substrates
 
@@ -420,7 +428,11 @@ supported options — neither is in the shipped manifests:
    the namespace, and the data (PVCs, databases) lives outside it. The address
    must not already be allocated to another Service, or the API server rejects
    the create, and it must stay inside the CIDR, which differs per cluster; that
-   is why the manifests do not pin one.
+   is why the manifests do not pin one. To make the real cloud hostnames resolve
+   to that address cluster-wide, use the CoreDNS `template` form in
+   [`dns.yaml`](dns.yaml) instead of a rewrite; it needs no mesh, and the
+   preflight reports it as `dns.target=service:<ns>/<name>` and only calls it
+   stale when the Service or its endpoints are gone.
 
 **The emulator-host variables take `host:port`, not just an IP.** The official
 `PUBSUB_EMULATOR_HOST`, `FIRESTORE_EMULATOR_HOST` and `STORAGE_EMULATOR_HOST`

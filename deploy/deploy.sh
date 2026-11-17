@@ -369,6 +369,13 @@ Environment:
   JAISCLOUD_AWS_DSN               Exact DSN for the AWS DSN Secret (verbatim,
                                   overrides the rewritten STORE_DSN)
   JAISCLOUD_GCP_DSN               Exact DSN for the GCP DSN Secret (verbatim)
+  STORE_WORKLOAD=<kind>/<name>    With --check: the bundled store workload the
+                                  preflight probes (default: deployment/postgres,
+                                  then statefulset/postgres)
+  PREFLIGHT_TIMEOUT_IMPL          With --check: auto (default), timeout,
+                                  gtimeout, watchdog or none — the wall-clock
+                                  helper used for the psql exec (macOS has no
+                                  GNU timeout; the watchdog is the fallback)
   STORE_INIT_IMAGE                Image for the external-store psql pod
                                   (default postgres:16-alpine)
   LEGACY_NAMESPACE                Namespace holding the pre-split store

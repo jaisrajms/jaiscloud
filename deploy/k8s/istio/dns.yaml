@@ -45,6 +45,29 @@
 # use https and the default port (no port suffix in the URL).
 #
 # ─────────────────────────────────────────────────────────────────────────────
+# Alternative: a CoreDNS template answering the pinned Service ClusterIP
+# ─────────────────────────────────────────────────────────────────────────────
+# A mesh is not required. When the suffix should resolve straight to a Service's
+# pinned `spec.clusterIP` (the layout for literal-IP clients and a host-issued
+# TLS sidecar), a `template` answers instead of a rewrite. It is cluster-wide
+# like the rewrite above, but it names a Service, not the gateway:
+#
+#     template IN A (.*\.)?googleapis\.com\.?$ {
+#         answer "{{ .Name }}" 10.43.x.y          # the Service's spec.clusterIP
+#     }
+#
+# One block per suffix, inserted in the same place as the rewrite lines. The
+# preflight resolves the `answer` address to the Service that holds it (searched
+# in the JaisCloud namespaces) and reports dns.target=service:<ns>/<name>; the
+# rewrite is stale only when that Service is missing or has no ready endpoints
+# (a parked substrate empties them). An address that matches no known Service is
+# reported as dns.target=unknown and never called stale — the probe does not
+# guess about objects it cannot see.
+#
+# Keep the address stable: if the Service is recreated with a different
+# clusterIP, update the template's answer to match.
+#
+# ─────────────────────────────────────────────────────────────────────────────
 # Procedure (review every step; this is the cluster's resolver)
 # ─────────────────────────────────────────────────────────────────────────────
 #

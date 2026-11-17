@@ -489,7 +489,7 @@ playbook:
     - action: Edit a manifest in a running cluster by hand
       why: deploy.sh/up-k8s apply the repository manifests; changes drift and check-deploy-images/contract checks will not see them
     - action: Treat store.databases=null as a missing database, or delete a CA ConfigMap that park kept
-      why: null means unknown (external store / no ready pod / failed exec) — creating a database or a substrate to 'fix' it is a guess; the CA copy is what a resumed substrate and its managed workloads trust, so only remove it when ca.issuerPresent=false
+      why: null means unknown (external store / no ready workload / failed exec — see store.probeReason) — creating a database or a substrate to 'fix' it is a guess; the CA copy is what a resumed substrate and its managed workloads trust, so only remove it when ca.issuerPresent=false, and only judge a copy that certs/gen.sh labelled issuer=mesh
   executor_modes:
     precedence: JAISCLOUD_<SUBSYSTEM>_EXECUTOR_MODE > JAISCLOUD_EXECUTOR_MODE > engine default (mock)
     variables:
@@ -522,13 +522,13 @@ playbook:
       fix: kubectl apply -f deploy/k8s/rbac-shared.yaml && kubectl apply -f deploy/k8s/rbac-gcp.yaml; verify JAISCLOUD_K8S_SA / _NAMESPACE (the emulator resolves them from env or the projected token); deploy.sh --check --json reports rbac.effective.gcp.deleteNamespaces=no for a missing grant (unknown = the kubeconfig may not impersonate)
       symptom: driver/broker Pods Forbidden
     - cause: a cluster-wide CoreDNS rewrite still points the suffix at the gateway, whose route now has no ready backend
-      fix: remove that suffix's rewrite for the parked period and re-add it on resume (deploy/k8s/istio/dns.yaml); deploy.sh --check --json reports dns.suffixes and dns.stale=true
+      fix: remove that suffix's rewrite for the parked period and re-add it on resume (deploy/k8s/istio/dns.yaml); deploy.sh --check --json reports dns.suffixes, dns.target (gateway vs service:<ns>/<name>) and dns.stale=true
       symptom: after parking a substrate, clients of its cloud hostnames hang or return 503
-    - cause: the store is external (no pod to exec), the postgres Deployment is not ready, or the psql exec failed
-      fix: 'unknown, not missing: verify an external server with your own psql; do not create a database or deploy a substrate to ''fix'' a null (store.databasesProbe says exec vs unavailable)'
+    - cause: the store is external (no pod to exec), the bundled workload (resolve it with STORE_WORKLOAD / deployment/postgres / statefulset/postgres) is absent or not ready, or the psql exec failed/timed out
+      fix: 'unknown, not missing: store.probeReason says external|no-workload|not-ready|exec-failed; verify an external server with your own psql and do not create a database or deploy a substrate to ''fix'' a null'
       symptom: store.databases.jaiscloud / jaiscloud_gcp is null
-    - cause: the CA ConfigMap jaiscloud-ca-cert is still in a substrate namespace but its issuer (istio-system/jaiscloud-wildcard + Gateway) is gone
-      fix: re-run deploy/k8s/istio/certs/gen.sh, or remove the stale copy from that namespace; deploy.sh --check --json reports ca.issuerPresent=false
+    - cause: a mesh-labelled CA ConfigMap jaiscloud-ca-cert (jaiscloud.io/issuer=mesh) is still in a substrate namespace but its issuer (istio-system/jaiscloud-wildcard + Gateway) is gone
+      fix: re-run deploy/k8s/istio/certs/gen.sh, or remove the stale copy from that namespace; deploy.sh --check --json reports ca.issuerPresent=false and ca.issuers.<cloud>=mesh. An unlabelled copy is host-issued (issuer=external) and is never reported as stale
       symptom: certificate errors from a client after removing the mesh
     - cause: kind/k3d have no LoadBalancer controller
       fix: use the port-forward deploy.sh prints; the front door is the external HTTP surface
@@ -597,25 +597,28 @@ playbook:
       parked: Deployment scaled to spec.replicas=0; namespaces, PVCs, databases and state survive
       running: Deployment present, spec.replicas > 0, availableReplicas >= 1
     store_probes:
-      databases: 'tri-state: store.databases.jaiscloud / .jaiscloud_gcp are true|false|null. true/false only when the bundled store Deployment is ready and psql answered; null (unknown, NOT missing) for an external store, an absent/not-ready Deployment, or a failed exec.'
+      databases: 'tri-state: store.databases.jaiscloud / .jaiscloud_gcp are true|false|null. true/false only when the resolved bundled store workload is ready and psql answered; null (unknown, NOT missing) for an external store, a workload that is absent or not ready, or a failed exec.'
       databasesProbe: exec when both psql probes answered; unavailable otherwise
       env: substrates.<cloud> env probes (sparkImage, kafkaBrokerMode) resolve an explicit env literal/valueFrom first, then envFrom in order (later source wins); Secret data is base64-decoded and an unreadable/missing ref is empty, not an error
-      recommendations: only false means a database is missing (create-gcp-db); null never does — verify an external store with your own psql instead of creating anything
+      probeReason: ok | external | no-workload | not-ready | exec-failed — why the databases are null
+      recommendations: only false means a database is missing (create-gcp-db); null never does — verify an external store with your own psql instead of creating anything (the read-only probe never creates a pod; external-store probing is DSL9)
+      workload: 'resolved like --migrate-store: STORE_WORKLOAD=<deployment|statefulset>/<name> when set, otherwise deployment/postgres, then statefulset/postgres'
   platform:
     ca:
-      check: 'deploy/deploy.sh --check --json   # ca.aws, ca.gcp, ca.issuerPresent'
-      objects: Secret istio-system/jaiscloud-wildcard (issuer) + ConfigMap jaiscloud-ca-cert in each substrate namespace (trust copy for managed workloads)
+      check: 'deploy/deploy.sh --check --json   # ca.aws, ca.gcp, ca.issuerPresent, ca.issuers.<cloud>=mesh|external|absent'
+      objects: Secret istio-system/jaiscloud-wildcard (issuer) + ConfigMap jaiscloud-ca-cert in each substrate namespace (trust copy for managed workloads), labelled jaiscloud.io/issuer=mesh by certs/gen.sh and by deploy.sh's restore path
       park: 'park KEEPS the CA copy: a resumed substrate, its Dataproc drivers and Cloud Run pods still trust the front door. Do not delete it with the compute.'
-      stale: 'a copy with no issuer (no jaiscloud-wildcard secret and no Gateway) is stale: re-run certs/gen.sh or remove the copy; the preflight warns once per namespace that still holds one.'
+      stale: 'only a mesh-labelled copy with no issuer (no jaiscloud-wildcard secret and no Gateway) is stale: re-run certs/gen.sh or remove the copy; the preflight warns once per namespace that still holds one. An unlabelled copy is host-issued (issuer=external) and is never judged — re-run certs/gen.sh to label an old copy it created.'
       written_by: deploy/k8s/istio/certs/gen.sh (--force rotates; clients must re-trust)
     dns:
-      check: 'deploy/deploy.sh --check --json   # dns.rewrites=true|false|unknown, dns.suffixes, dns.stale'
+      check: 'deploy/deploy.sh --check --json   # dns.rewrites=true|false|unknown, dns.suffixes, dns.target(s), dns.stale'
       object: ConfigMap kube-system/coredns, key Corefile (read-only probe; deploy/k8s/istio/dns.yaml is documentation and is never applied)
       override_kinds:
-        cluster_wide: CoreDNS rewrite/template mapping a cloud suffix to istio-ingressgateway.istio-system.svc.cluster.local — every pod in the cluster gets it, including pods that really want the public cloud
+        cluster_wide: CoreDNS rewrite/template mapping a cloud suffix to istio-ingressgateway.istio-system.svc.cluster.local (the mesh) or to a pinned Service ClusterIP — every pod in the cluster gets it, including pods that really want the public cloud
         per_workload: Pod spec.hostAliases listing concrete hosts -> the gateway ClusterIP — no wildcards, no port, per workload
         pinned_service_ip: Service spec.clusterIP pinned to an unused address in the service CIDR — immutable; changing it means recreating the Service
-      stale: 'a rewrite for a suffix whose substrate is parked/absent, or with no ready gateway (istio-ingressgateway + Gateway/jaiscloud), leaves clients resolving a dead backend: they time out or get a fast 503. Remove that suffix''s rewrite while parked and re-add it on resume.'
+      stale: a gateway target is stale with no ready ingress (istio-ingressgateway + Gateway/jaiscloud) or when its owning substrate is parked/absent; a service target is stale when the Service is missing or has no ready endpoints (a park empties them). An unknown target is reported and never called stale. Remove that suffix's rewrite while parked and re-add it on resume.
+      target: dns.target is gateway (istio-system/istio-ingressgateway), service:<ns>/<name> (a rewrite name or a template answer IP resolved to the Service that holds it), unknown, or mixed; dns.targets maps each suffix. Resolution searches only the JaisCloud namespaces (never a cluster-wide list).
     kubernetes:
       check: 'deploy/deploy.sh --check --json   # rbac.serverVersion + rbac.admissionPolicy'
       enforced_by: deploy/deploy.sh require_isolation_prereqs() — refuses install/reset/migrate on < 1.30 or when the VAP API is missing
@@ -734,7 +737,7 @@ playbook:
           run: deploy/deploy.sh --gcp --yes --store-dsn postgres://user:pass@db.example.com:5432/postgres
         - expect: store.mode=external, store.present=true, store.ready=false (not probeable), substrates ready, recommended=[]
           id: verify
-          note: 'store.ready/store.databases=false mean ''not probeable'', not ''missing'': there is no postgres Deployment to exec psql in.'
+          note: 'store.ready=false and store.databases=null mean ''not probeable'', not ''missing'' (store.probeReason=external): the read-only probe never creates a pod to exec psql in.'
           run: deploy/deploy.sh --check --json
       summary: Install both substrates against a PostgreSQL server you already run (no postgres.yaml, no postgres-pvc).
     inspect:
@@ -825,8 +828,8 @@ playbook:
           run: Read/write the GCP substrate (port-forward 8080, or --switch gcp)
         - expect: dns.stale=false, ca.issuerPresent=true
           id: dns-ca
-          note: 'A CoreDNS rewrite (deploy/k8s/istio/dns.yaml) is cluster-wide and survives the park: while the substrate is parked the suffix still resolves to the gateway with no ready backend, so clients time out or get a fast 503. Remove that suffix''s rewrite while parked and re-add it on resume (dns.suffixes names it, dns.stale flags it). A per-pod hostAliases entry keeps the gateway IP (nothing to change for a switch); a pinned Service clusterIP keeps its address but loses its endpoints (connection refused; do not point a client at a parked Service). The CA ConfigMap jaiscloud-ca-cert is KEPT on purpose — a resumed substrate and its managed workloads still trust the front door; it is stale only when istio-system/jaiscloud-wildcard and the Gateway are both gone (then re-run certs/gen.sh or remove it).'
-          run: 'deploy/deploy.sh --check --json   # dns.stale, ca.*'
+          note: 'A CoreDNS rewrite (deploy/k8s/istio/dns.yaml) is cluster-wide and survives the park: while the substrate is parked the suffix still resolves to its target with no ready backend, so clients time out or get a fast 503. Remove that suffix''s rewrite while parked and re-add it on resume (dns.suffixes names it, dns.target says what it points at, dns.stale flags it). A per-pod hostAliases entry keeps the gateway IP (nothing to change for a switch); a pinned Service clusterIP keeps its address but loses its endpoints (connection refused; do not point a client at a parked Service), and a template targeting it is judged by those endpoints. The CA ConfigMap jaiscloud-ca-cert is KEPT on purpose — a resumed substrate and its managed workloads still trust the front door; only a mesh-labelled copy is stale, and only when istio-system/jaiscloud-wildcard and the Gateway are both gone (then re-run certs/gen.sh or remove it). An unlabelled copy is host-issued and never warned about.'
+          run: 'deploy/deploy.sh --check --json   # dns.target(s)/dns.stale, ca.*'
         - expect: image compared with the parked one BEFORE scaling (mismatch refused, names --allow-upgrade), parked digest pinned with kubectl set image, scale to 1, rollout, POST /_jaiscloud/resume, <cloud>.state=running and the <cloud>.parked-* keys cleared
           id: resume
           note: 'A resume never changes the binary silently: --allow-upgrade / ALLOW_UPGRADE=1 is the explicit opt-in for a new image (the store may migrate). With no recorded digest it warns that it cannot pin, and the post-rollout digest comparison stays a warning.'
@@ -949,7 +952,7 @@ playbook:
     - expect: store.databasesProbe=exec with store.databases true/false for a bundled store (null + unavailable for an external or unprobeable one); rbac.policyMatchesSA=true; rbac.effective.<cloud>.deleteNamespaces=yes (unknown means the kubeconfig could not impersonate)
       id: preflight-store-rbac
       run: deploy/deploy.sh --check --json
-    - expect: dns.stale=false when any cloud suffix is rewritten (a parked/absent substrate or a missing gateway makes it stale); ca.issuerPresent=true whenever a jaiscloud-ca-cert copy exists
+    - expect: dns.stale=false when every cloud suffix resolves to a healthy target (a gateway target needs the mesh and its substrate; a service target needs a ready Service); ca.issuerPresent=true whenever a jaiscloud-ca-cert copy exists, and only ca.issuers.<cloud>=mesh copies are judged stale
       id: preflight-dns-ca
       run: deploy/deploy.sh --check --json
     - expect: 4/4 passed

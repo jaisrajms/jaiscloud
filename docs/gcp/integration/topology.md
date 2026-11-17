@@ -121,11 +121,17 @@ exists":
 
 - **Store databases are tri-state.** `store.databases.jaiscloud` /
   `.jaiscloud_gcp` are `true`, `false` or `null`. `true`/`false` only when the
-  bundled store Deployment is ready and `psql` answered; `null` means *unknown* —
-  an external store (no pod to exec), a Deployment that is absent or not ready,
-  or a failing exec. `store.databasesProbe` is `exec` when both probes answered
-  and `unavailable` otherwise. Only `false` is a missing database, so `null`
-  never produces a "create the database" recommendation.
+  bundled store workload is ready and `psql` answered; `null` means *unknown* —
+  an external store (no pod to exec), a workload that is absent or not ready, or
+  a failing exec. `store.workload` names what was probed, resolved the way
+  `--migrate-store` resolves a legacy store: `STORE_WORKLOAD=<kind>/<name>` when
+  set, otherwise `deployment/postgres`, then `statefulset/postgres`.
+  `store.databasesProbe` is `exec` when both probes answered and `unavailable`
+  otherwise, and `store.probeReason` says why (`external`, `no-workload`,
+  `not-ready`, `exec-failed`). Only `false` is a missing database, so `null`
+  never produces a "create the database" recommendation. The probe never creates
+  a pod, so an external server stays unprobeable by design — verify it with your
+  own `psql`.
 - **RBAC is probed, not assumed.** `rbac.effective.<cloud>` reports what the
   Deployment's own ServiceAccount
   (`spec.template.spec.serviceAccountName`, falling back to `jaiscloud` /
@@ -220,7 +226,7 @@ cluster-wide DNS rewrite does not know that:
 
 | override | what park/switch does to it | what to do |
 |---|---|---|
-| **CoreDNS rewrite** (`deploy/k8s/istio/dns.yaml`, cluster-wide) | nothing — it is the cluster's resolver, not JaisCloud's object | a rewrite for a parked/absent substrate still resolves to the gateway, whose route then has no ready backend: clients hang or get a 503. Remove that suffix's rewrite while parked and re-add it on resume (or keep it and accept the fast failure). `deploy/deploy.sh --check` reports `dns.rewrites` / `dns.suffixes` / `dns.stale` and warns per stale suffix. |
+| **CoreDNS rewrite** (`deploy/k8s/istio/dns.yaml`, cluster-wide) | nothing — it is the cluster's resolver, not JaisCloud's object | a rewrite for a parked/absent substrate still resolves to its named target, whose backend has no ready endpoints: clients hang or get a 503. Remove that suffix's rewrite while parked and re-add it on resume (or keep it and accept the fast failure). `deploy/deploy.sh --check` reports `dns.rewrites` / `dns.suffixes` / `dns.target(s)` / `dns.stale` and warns per stale target — a gateway rewrite is judged by the mesh (ready ingress + `Gateway/jaiscloud` + the owning substrate's state), a `service:<ns>/<name>` target by the Service and its ready endpoints, and an `unknown` target is reported but never called stale. |
 | **Pod `hostAliases`** (per workload) | nothing — it lives in the client pod spec | the client pod keeps resolving the name to the gateway ClusterIP; restart/repoint the client when you switch, or point it at the resumed substrate's Service |
 | **pinned `clusterIP`** (per Service) | nothing — a Service keeps its address while it exists | a parked substrate's Service still has the address but no endpoints, so a dialer gets connection refused/503; resume it, or pin the address of the substrate you run |
 
@@ -231,13 +237,15 @@ address then points at nothing; re-add it only when the substrate is resumed.
 
 The CA is different: park **keeps** the CA ConfigMap in each substrate namespace
 (a resumed substrate and its managed workloads still trust the front door) and it
-is only stale when the issuer is gone. `deploy.sh --check` reports
-`ca.{aws,gcp}` (the copy exists) and `ca.issuerPresent` (the
-`istio-system/jaiscloud-wildcard` TLS secret or the gateway exists); a copy
-without an issuer is a warning — re-run `deploy/k8s/istio/certs/gen.sh` or remove
-the copy. With the mesh removed entirely you get one warning per namespace that
-still holds a copy (each names its own namespace), never a claim that both are
-required.
+is only stale when the issuer is gone. `certs/gen.sh` labels what it creates
+(`jaiscloud.io/issuer=mesh`), and `deploy.sh --check` reports `ca.{aws,gcp}`
+(the copy exists), `ca.issuerPresent` (the `istio-system/jaiscloud-wildcard` TLS
+secret or the gateway exists) and `ca.issuers.{aws,gcp}` (`mesh`, `external` or
+`absent`). Only a `mesh`-labelled copy without an issuer is a warning — re-run
+`deploy/k8s/istio/certs/gen.sh` or remove the copy; an unlabelled copy is a
+host-issued CA and is never judged. With the mesh removed entirely you get one
+warning per namespace that still holds a labelled copy (each names its own
+namespace), never a claim that both are required.
 
 The three DNS override kinds (cluster-wide CoreDNS rewrite, per-pod
 `hostAliases`, pinned Service `clusterIP`) and their park/switch consequences are
@@ -372,9 +380,11 @@ documented in
     replaced per cloud; per-substrate overrides are verbatim). The choice is
     recorded as `store` in the install record (`bundled|external`) and reported
     by the preflight as `store.mode`. An external store is not probeable from the
-    cluster, so `store.ready` is `false` and `store.databases.*` is `null`
-    (`store.databasesProbe=unavailable`) — unknown, not missing — and
-    `--migrate-store` into an external target is unsupported (it refuses).
+    cluster (a read-only probe never creates a pod), so `store.ready` is `false`
+    and `store.databases.*` is `null`
+    (`store.databasesProbe=unavailable`, `store.probeReason=external`) — unknown,
+    not missing — and `--migrate-store` into an external target is unsupported
+    (it refuses).
 
 ## Where each fact lives
 
@@ -387,13 +397,14 @@ documented in
   the `playbook` section of `contract.yaml` (authored in
   [`playbook.yaml`](playbook.yaml)).
 - **Read-only cluster state**: `deploy/deploy.sh --check [--json]`
-  (`scripts/integration-preflight.sh`): intent, legacy, store (with the tri-state
-  `store.databases` and `databasesProbe`), substrates (effective `sparkImage`
-  through `envFrom`/`valueFrom`), `mesh`, `dns` (CoreDNS rewrites and staleness),
-  `ca` (per-namespace CA copies and the issuer), `rbac` (bindings plus the
-  effective `auth can-i` view and `policyMatchesSA`), `warnings` and
-  `recommended`. The predicates are regression-tested offline with a fake
-  `kubectl`:
+  (`scripts/integration-preflight.sh`): intent, legacy, store (with the resolved
+  `store.workload`, the tri-state `store.databases`, `databasesProbe` and
+  `probeReason`), substrates (effective `sparkImage` through
+  `envFrom`/`valueFrom`), `mesh`, `dns` (CoreDNS rewrites, each suffix's target
+  and staleness), `ca` (per-namespace CA copies, their `issuer` and the mesh
+  issuer), `rbac` (bindings plus the effective `auth can-i` view and
+  `policyMatchesSA`), `warnings` and `recommended`. The predicates are
+  regression-tested offline with a fake `kubectl`:
   `scripts/integration-preflight-test.sh` (`make test-integration-preflight`).
 - **The same pack without the source tree**: `jaiscloud-gcp agent-guide`
   (brief), `--json` (contract), `--emit DIR` (manifests + scripts + docs); both
