@@ -686,16 +686,45 @@ Migrate once, before (or instead of) a fresh deploy:
 
 ```bash
 ./deploy/deploy.sh --migrate-store --yes
-# dumps database `jaiscloud` from jaiscloud/deployment/postgres, starts the new
-# store in jaiscloud-data and restores the dump into BOTH databases (so the
-# pre-split GCP schema travels too), then brings the AWS substrate back.
-# It stops the legacy Postgres and keeps its PVC as a rollback copy; the new
-# store's PVC must not exist yet (it refuses to overwrite).
+# stops every legacy writer, dumps database `jaiscloud` from
+# jaiscloud/deployment/postgres, starts the new store in jaiscloud-data and
+# restores the dump into BOTH databases (so the pre-split GCP schema travels),
+# then brings both substrates back.
 ```
 
-The GCP substrate then starts against `jaiscloud_gcp` (its database), which is
-created by the same run. Delete the rollback copy only after verifying both
-substrates: `kubectl -n jaiscloud delete pvc postgres-pvc`.
+If the old install also ran the **GCP emulator in the `jaiscloud` namespace**
+(the pre-split manifest did), the command handles that side as well:
+
+- it stops that Deployment before the dump (otherwise its writes would be lost);
+- it copies the object **bytes** from `jaiscloud/jaiscloud-gcp-blobs-pvc` to
+  `jaiscloud-gcp/jaiscloud-gcp-blobs-pvc` with two short-lived helper Pods
+  (a PVC cannot be mounted across namespaces). The helper image defaults to
+  `busybox:1.36` — preload it if the cluster cannot pull from Docker Hub
+  (`BLOB_MIGRATE_IMAGE=<image>` overrides it), or set `SKIP_BLOB_MIGRATE=1` to
+  copy the claim yourself;
+- it removes the old `deployment/jaiscloud-gcp` and `service/jaiscloud-gcp` from
+  `jaiscloud`, so only the new substrate in `jaiscloud-gcp` remains.
+
+Both old volumes (`postgres-pvc` and, when present, `jaiscloud-gcp-blobs-pvc`)
+are kept in `jaiscloud` as **rollback copies**. Verify both substrates — the
+GCP bucket/object reads back through the new pod, the AWS and GCP databases both
+answer — then delete them:
+
+```bash
+kubectl -n jaiscloud delete pvc postgres-pvc jaiscloud-gcp-blobs-pvc
+```
+
+The new `jaiscloud-data/postgres-pvc` must not exist yet (the command refuses to
+overwrite it), so run the migration before applying the new manifests; it
+applies the namespaces and manifests it needs itself. A pre-split install's
+instance IDs and TLS certificates are not migrated: the new manifests pin
+`aws-substrate-1`/`gcp-substrate-1` and regenerate the certificate.
+
+The old **sample workloads** are left to you: if you had applied
+`deploy/k8s/gcp-samples/samples.yaml` or `deploy/k8s/lakehouse/pipeline.yaml` in
+the old layout, re-apply them (they now target `jaiscloud-gcp`) and delete the
+old copies from `jaiscloud` — the migration does not remove user workloads
+beyond the emulator Deployment itself.
 
 Wait for the pods:
 ```bash

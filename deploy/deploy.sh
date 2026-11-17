@@ -17,7 +17,8 @@
 #   ./deploy/deploy.sh --gcp        # apply the GCP substrate manifests (no image build)
 #   ./deploy/deploy.sh --migrate-store
 #                                   # one-time: move the pre-split store from
-#                                   # ns jaiscloud into jaiscloud-data
+#                                   # ns jaiscloud into jaiscloud-data, and the
+#                                   # old GCP object bytes into jaiscloud-gcp
 #   ./deploy/deploy.sh --delete     # remove the AWS workloads; keep every PVC and Postgres
 #   ./deploy/deploy.sh --reset      # AWS-only, database-scoped: drop the `jaiscloud` db +
 #                                   # the AWS namespace/PVC; GCP (`jaiscloud_gcp`, its PVC)
@@ -91,9 +92,14 @@ Usage:
                                   database `jaiscloud` from ns jaiscloud/deployment/
                                   postgres and restore it into the new store in
                                   jaiscloud-data (both databases, so pre-split GCP
-                                  state travels). Stops the old Postgres and keeps
-                                  its PVC as a rollback copy. Refuses when the new
-                                  postgres-pvc already exists.
+                                  state travels). If the old GCP emulator ran in
+                                  the jaiscloud namespace, it is stopped, its
+                                  object bytes are copied to
+                                  jaiscloud-gcp/jaiscloud-gcp-blobs-pvc and the old
+                                  workload is removed (SKIP_BLOB_MIGRATE=1 copies
+                                  by hand; BLOB_MIGRATE_IMAGE overrides busybox).
+                                  Keeps both old PVCs as rollback copies, and
+                                  refuses when the new postgres-pvc already exists.
   ./deploy/deploy.sh --delete     Remove the AWS workloads; keep ALL PVCs and Postgres
   ./deploy/deploy.sh --reset      AWS-only, database-scoped reset: drop/recreate the
                                   `jaiscloud` database, delete the jaiscloud namespace (its
@@ -162,6 +168,74 @@ scale_to_zero() {
   fi
   kubectl -n "$ns" scale deployment "$deployment" --replicas=0 --timeout=120s >/dev/null
   kubectl -n "$ns" wait --for=delete pod -l "$selector" --timeout=120s >/dev/null 2>&1 ||     warn "$deployment pods in $ns did not terminate within 120s"
+}
+
+# migrate_blobs <src-ns> <src-pvc> <dst-ns> <dst-pvc>
+#   Streams every file from one claim into another with two short-lived helper
+#   pods, because a PersistentVolumeClaim cannot be mounted across namespaces.
+#   Verifies the file count and removes the helpers. SKIP_BLOB_MIGRATE=1 skips
+#   the copy (the source claim is left in place).
+migrate_blobs() {
+  local src_ns=$1 src_pvc=$2 dst_ns=$3 dst_pvc=$4
+  local image="${BLOB_MIGRATE_IMAGE:-busybox:1.36}" src_count dst_count
+  if [[ "${SKIP_BLOB_MIGRATE:-0}" == "1" ]]; then
+    warn "SKIP_BLOB_MIGRATE=1 — not copying $src_ns/pvc/$src_pvc (left in place)"
+    return 0
+  fi
+  info "Copying object bytes: $src_ns/pvc/$src_pvc -> $dst_ns/pvc/$dst_pvc"
+  kubectl -n "$src_ns" delete pod dpl-blob-src --ignore-not-found >/dev/null 2>&1 || true
+  kubectl -n "$dst_ns" delete pod dpl-blob-dst --ignore-not-found >/dev/null 2>&1 || true
+  cat <<EOF | kubectl apply -f - >/dev/null
+apiVersion: v1
+kind: Pod
+metadata:
+  name: dpl-blob-src
+  namespace: $src_ns
+spec:
+  restartPolicy: Never
+  containers:
+    - name: copy
+      image: $image
+      command: ["sleep", "3600"]
+      volumeMounts:
+        - {name: data, mountPath: /data}
+  volumes:
+    - name: data
+      persistentVolumeClaim: {claimName: $src_pvc}
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: dpl-blob-dst
+  namespace: $dst_ns
+spec:
+  restartPolicy: Never
+  containers:
+    - name: copy
+      image: $image
+      command: ["sleep", "3600"]
+      volumeMounts:
+        - {name: data, mountPath: /data}
+  volumes:
+    - name: data
+      persistentVolumeClaim: {claimName: $dst_pvc}
+EOF
+  if ! kubectl -n "$src_ns" wait --for=condition=Ready pod/dpl-blob-src --timeout=180s >/dev/null 2>&1 \
+     || ! kubectl -n "$dst_ns" wait --for=condition=Ready pod/dpl-blob-dst --timeout=180s >/dev/null 2>&1; then
+    kubectl -n "$src_ns" delete pod dpl-blob-src --ignore-not-found >/dev/null 2>&1 || true
+    kubectl -n "$dst_ns" delete pod dpl-blob-dst --ignore-not-found >/dev/null 2>&1 || true
+    die "a blob-copy helper pod did not become Ready (image '$image' not pullable?) — preload the image or set SKIP_BLOB_MIGRATE=1"
+  fi
+  kubectl -n "$src_ns" exec dpl-blob-src -- tar cf - -C /data . \
+    | kubectl -n "$dst_ns" exec -i dpl-blob-dst -- tar xf - -C /data
+  src_count=$(kubectl -n "$src_ns" exec dpl-blob-src -- sh -c 'find /data -type f | wc -l' | tr -d '[:space:]')
+  dst_count=$(kubectl -n "$dst_ns" exec dpl-blob-dst -- sh -c 'find /data -type f | wc -l' | tr -d '[:space:]')
+  kubectl -n "$src_ns" delete pod dpl-blob-src --ignore-not-found >/dev/null 2>&1 || true
+  kubectl -n "$dst_ns" delete pod dpl-blob-dst --ignore-not-found >/dev/null 2>&1 || true
+  if [[ -z "$src_count" || "$src_count" != "$dst_count" ]]; then
+    die "blob copy incomplete: $src_count file(s) in the source, $dst_count in the destination — the source claim is untouched"
+  fi
+  ok "Copied $src_count file(s) into $dst_ns/pvc/$dst_pvc."
 }
 
 # psql_admin <psql args...> — run psql as the postgres superuser inside the
@@ -410,10 +484,24 @@ if [[ "$MODE" == "migrate-store" ]]; then
     die "pvc/$POSTGRES_PVC already exists in $NAMESPACE_DATA — the new store is deployed; refusing to overwrite it (drop it first if this is a retry)"
   fi
 
-  # Stop the AWS writer BEFORE the dump: anything it writes after the snapshot
+  # A pre-split install ran the GCP emulator in the AWS namespace too, with its
+  # object bytes on jaiscloud-gcp-blobs-pvc there. Detect it so the bytes are
+  # migrated (a PVC cannot move namespaces) and the old workload is stopped.
+  legacy_gcp=0
+  legacy_gcp_pvc="${LEGACY_GCP_BLOBS_PVC:-jaiscloud-gcp-blobs-pvc}"
+  gcp_blobs_pvc="${GCP_BLOBS_PVC:-jaiscloud-gcp-blobs-pvc}"
+  if kubectl -n "$OLD_NS" get deployment jaiscloud-gcp &>/dev/null; then
+    legacy_gcp=1
+    info "Legacy GCP emulator found in $OLD_NS; its object bytes will be migrated."
+  fi
+
+  # Stop the writers BEFORE the dump: anything they write after the snapshot
   # would be silently lost. The legacy Postgres stays up (it is the dump source).
-  info "Stopping the AWS emulator (single writer to the legacy store)..."
+  info "Stopping the emulators that write to the legacy store..."
   scale_to_zero "$NAMESPACE_AWS" jaiscloud app=jaiscloud
+  if [[ "$legacy_gcp" -eq 1 ]]; then
+    scale_to_zero "$OLD_NS" jaiscloud-gcp app=jaiscloud-gcp
+  fi
 
   info "Dumping database '$AWS_DB' from $OLD_NS/deployment/postgres..."
   DUMP_FILE="$(mktemp "${TMPDIR:-/tmp}/jaiscloud-store.XXXXXX.dump")"
@@ -441,16 +529,36 @@ if [[ "$MODE" == "migrate-store" ]]; then
   kubectl -n "$OLD_NS" delete deployment postgres --ignore-not-found
   kubectl -n "$OLD_NS" delete service postgres postgres-external --ignore-not-found
 
+  if [[ "$legacy_gcp" -eq 1 ]]; then
+    info "Bringing up the GCP substrate in $NAMESPACE_GCP (paused for the byte copy)..."
+    kubectl apply -f "$K8S_DIR/jaiscloud-gcp.yaml"
+    scale_to_zero "$NAMESPACE_GCP" jaiscloud-gcp app=jaiscloud-gcp
+    if kubectl -n "$OLD_NS" get pvc "$legacy_gcp_pvc" &>/dev/null; then
+      migrate_blobs "$OLD_NS" "$legacy_gcp_pvc" "$NAMESPACE_GCP" "$gcp_blobs_pvc"
+    else
+      warn "no pvc/$legacy_gcp_pvc in $OLD_NS — no GCP object bytes to copy"
+    fi
+    kubectl apply -f "$K8S_DIR/jaiscloud-gcp.yaml"
+    wait_for_rollout deployment/jaiscloud-gcp "$NAMESPACE_GCP" 180s
+    # The legacy GCP workload must not keep running in the AWS namespace.
+    kubectl -n "$OLD_NS" delete deployment jaiscloud-gcp --ignore-not-found
+    kubectl -n "$OLD_NS" delete service jaiscloud-gcp --ignore-not-found
+  fi
+
   info "Recreating the AWS substrate against the migrated store..."
   apply_aws_workloads
   wait_for_rollout deployment/jaiscloud "$NAMESPACE_AWS"
 
   ok "Store migrated from $OLD_NS to $NAMESPACE_DATA."
   echo ""
-  echo "  The legacy pvc/postgres-pvc was kept in $OLD_NS as a rollback copy."
-  echo "  Verify both substrates, then delete it:"
-  echo "    kubectl -n $OLD_NS delete pvc $POSTGRES_PVC --ignore-not-found"
-  echo "  (NOTE: $0 --reset deletes the $OLD_NS namespace, and with it that copy.)"
+  echo "  Legacy volumes kept in $OLD_NS as rollback copies:"
+  echo "    - pvc/$POSTGRES_PVC (the pre-split store)"
+  if [[ "$legacy_gcp" -eq 1 ]]; then
+    echo "    - pvc/$legacy_gcp_pvc (the pre-split GCP object bytes, now copied)"
+  fi
+  echo "  Verify both substrates, then delete them:"
+  echo "    kubectl -n $OLD_NS delete pvc $POSTGRES_PVC $legacy_gcp_pvc --ignore-not-found"
+  echo "  (NOTE: $0 --reset deletes the $OLD_NS namespace, and with it those copies.)"
   exit 0
 fi
 

@@ -288,8 +288,10 @@ kubectl apply -f deploy/k8s/namespace.yaml -f deploy/k8s/postgres.yaml \
   Run workloads land in its own namespace and its instance ID (`gcp-substrate-1`)
   is stable across pod rolls.
 - Upgrading an install from the single-namespace layout: the Postgres PVC is
-  namespace-scoped, so run `./deploy/deploy.sh --migrate-store` once to move the
-  existing store into `jaiscloud-data` (it restores into both databases). See
+  namespace-scoped, so run `./deploy/deploy.sh --migrate-store` once. It moves
+  the existing store into `jaiscloud-data` (restoring into both databases) and,
+  if the old GCP emulator ran in the `jaiscloud` namespace, copies its object
+  bytes into `jaiscloud-gcp` and removes the old workload. See
   [the Developer Guide](DEVELOPER_GUIDE.md#setup-3--jaiscloud-on-kubernetes).
 
 ### Istio front door (optional)
