@@ -213,6 +213,7 @@ func startCmd() *cobra.Command {
 				Cloud:      "aws",
 				Region:     cfg.Region,
 				AccountID:  cfg.AccountID,
+				Version:    version,
 				StateDir:   stateDir,
 			})
 			// Wire blob store and KEK fingerprint for tarball export/import.

@@ -467,6 +467,44 @@ playbook:
     - docs/gcp/integration/topology.md — the invariants the layout must keep.
     - scripts/integration-preflight.sh (deploy/deploy.sh --check) — read-only cluster inspection.
     - If the contract and a manifest disagree, the manifest wins; regenerate the contract.
+  lifecycle:
+    install_record:
+      fields:
+        desired: comma list of cloud=state, e.g. aws=running,gcp=parked
+        installed: comma list of clouds that were installed, e.g. aws,gcp
+        schema: "1"
+      object: ConfigMap jaiscloud-data/jaiscloud-install
+      owned_by: deploy/deploy.sh — no static manifest declares it, so an apply cannot erase the recorded intent
+      skipped_when: jaiscloud-data does not exist (a warning, not a reason to create the store)
+      survives: a substrate reset (--reset / --gcp-reset deletes only its own namespace); it lives with the store
+      written_by:
+        - '(default) aws install: installed += aws, desired aws=running'
+        - '--gcp: installed += gcp, desired gcp=running'
+        - '--delete: installed kept, desired aws=absent'
+        - '--reset: desired aws=running (after the reinstall)'
+        - '--gcp-reset: desired gcp=running'
+        - '--migrate-store: installed aws,gcp, desired both running'
+    intent:
+      check:
+        expect: intent.source=flag, intent.installed=[aws], intent.desired.aws=running, substrates[*].state/replicas/imageID
+        run: deploy/deploy.sh --check --json --substrate aws
+      leaks: 'a cloud outside installed with a namespace, Deployment or database is a warning: ''unexpected <cloud> footprint (intent=...)'''
+      no_intent: when nothing is installed and no flag is given, the preflight says so and asks for --substrate instead of recommending a cloud
+      precedence:
+        - --substrate / --desired flags
+        - ConfigMap jaiscloud-install in jaiscloud-data
+        - inference from the substrate namespaces/Deployments
+      recommendations: 'relative to intent: only an installed cloud is recommended, and an absent intended cloud is non-optional; a cloud outside installed is never a deploy target'
+      source_values:
+        - flag
+        - cluster
+        - inferred
+      strict: exit 1 when a non-optional recommendation or a leak warning exists; optional work (the mesh) does not fail --strict
+    states:
+      absent: no Deployment in the substrate namespace (data may still exist)
+      degraded: 'probe-only: present and scaled up, but nothing is available'
+      parked: Deployment scaled to spec.replicas=0; namespaces, PVCs, databases and state survive
+      running: Deployment present, spec.replicas > 0, availableReplicas >= 1
   prerequisites:
     - check: kubectl version --client
       id: kubectl
@@ -506,9 +544,9 @@ playbook:
       summary: Enable Dataproc / Managed Kafka / Cloud Run on Kubernetes.
     inspect:
       steps:
-        - expect: exit 0; JSON with context, namespaces, legacy, store, substrates, mesh, recommended[]
+        - expect: exit 0; JSON with context, intent, namespaces, legacy, store, substrates, mesh, recommended[]
           id: preflight
-          note: No mutation. Act on recommended[]; do not guess from the presence of a pod.
+          note: No mutation. Act on recommended[]; do not guess from the presence of a pod. Pass --substrate aws|gcp|both (and --desired) to assert an intended shape.
           run: deploy/deploy.sh --check --json
         - expect: Same facts, human-readable.
           id: human-preflight
@@ -616,7 +654,7 @@ playbook:
         - --delete
         - --reset
         - --gcp-reset
-        - --check
+        - --check [--substrate aws|gcp|both] [--desired aws=running,gcp=parked]
         - --plan
         - --skip-build
         - --yes

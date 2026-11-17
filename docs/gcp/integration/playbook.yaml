@@ -26,14 +26,47 @@ prerequisites:
     check: "kubectl config current-context"
     note: "kind/k3d nodes cannot see the host's image store; deploy.sh loads built images for those contexts."
 
+lifecycle:
+  install_record:
+    object: "ConfigMap jaiscloud-data/jaiscloud-install"
+    owned_by: "deploy/deploy.sh — no static manifest declares it, so an apply cannot erase the recorded intent"
+    survives: "a substrate reset (--reset / --gcp-reset deletes only its own namespace); it lives with the store"
+    fields:
+      schema: "1"
+      installed: "comma list of clouds that were installed, e.g. aws,gcp"
+      desired: "comma list of cloud=state, e.g. aws=running,gcp=parked"
+    written_by:
+      - "(default) aws install: installed += aws, desired aws=running"
+      - "--gcp: installed += gcp, desired gcp=running"
+      - "--delete: installed kept, desired aws=absent"
+      - "--reset: desired aws=running (after the reinstall)"
+      - "--gcp-reset: desired gcp=running"
+      - "--migrate-store: installed aws,gcp, desired both running"
+    skipped_when: "jaiscloud-data does not exist (a warning, not a reason to create the store)"
+  states:
+    running: "Deployment present, spec.replicas > 0, availableReplicas >= 1"
+    parked: "Deployment scaled to spec.replicas=0; namespaces, PVCs, databases and state survive"
+    absent: "no Deployment in the substrate namespace (data may still exist)"
+    degraded: "probe-only: present and scaled up, but nothing is available"
+  intent:
+    precedence: ["--substrate / --desired flags", "ConfigMap jaiscloud-install in jaiscloud-data", "inference from the substrate namespaces/Deployments"]
+    source_values: ["flag", "cluster", "inferred"]
+    check:
+      run: "deploy/deploy.sh --check --json --substrate aws"
+      expect: "intent.source=flag, intent.installed=[aws], intent.desired.aws=running, substrates[*].state/replicas/imageID"
+    recommendations: "relative to intent: only an installed cloud is recommended, and an absent intended cloud is non-optional; a cloud outside installed is never a deploy target"
+    leaks: "a cloud outside installed with a namespace, Deployment or database is a warning: 'unexpected <cloud> footprint (intent=...)'"
+    strict: "exit 1 when a non-optional recommendation or a leak warning exists; optional work (the mesh) does not fail --strict"
+    no_intent: "when nothing is installed and no flag is given, the preflight says so and asks for --substrate instead of recommending a cloud"
+
 scenarios:
   inspect:
     summary: "Read-only: what is already installed, and what is the next safe step?"
     steps:
       - id: preflight
         run: "deploy/deploy.sh --check --json"
-        expect: "exit 0; JSON with context, namespaces, legacy, store, substrates, mesh, recommended[]"
-        note: "No mutation. Act on recommended[]; do not guess from the presence of a pod."
+        expect: "exit 0; JSON with context, intent, namespaces, legacy, store, substrates, mesh, recommended[]"
+        note: "No mutation. Act on recommended[]; do not guess from the presence of a pod. Pass --substrate aws|gcp|both (and --desired) to assert an intended shape."
       - id: human-preflight
         run: "deploy/deploy.sh --check"
         expect: "Same facts, human-readable."
@@ -235,7 +268,7 @@ tooling:
     note: "The binary embeds this pack; --emit writes the deployment kit (manifests, deploy.sh, preflight, Istio/CI assets, docs) for users who only have an image or a release binary. In-cluster: kubectl -n <ns> exec deploy/<workload> -- /jaiscloud agent-guide."
   deploy_sh:
     entry: "deploy/deploy.sh"
-    modes: ["(default) aws install", "--gcp", "--migrate-store", "--delete", "--reset", "--gcp-reset", "--check", "--plan", "--skip-build", "--yes"]
+    modes: ["(default) aws install", "--gcp", "--migrate-store", "--delete", "--reset", "--gcp-reset", "--check [--substrate aws|gcp|both] [--desired aws=running,gcp=parked]", "--plan", "--skip-build", "--yes"]
     exit_codes: {0: success, 1: failure, 2: usage/refused}
   make:
     entry: "make help"

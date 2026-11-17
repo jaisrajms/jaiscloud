@@ -1471,6 +1471,7 @@ func startCmd() *cobra.Command {
 				Cloud:     "gcp",
 				Region:    cfg.Region,
 				AccountID: cfg.ProjectID,
+				Version:   version,
 				StateDir:  stateDir,
 			})
 			if cfg.KMSMasterKey != "" {

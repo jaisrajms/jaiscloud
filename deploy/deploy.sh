@@ -28,12 +28,21 @@
 #   ./deploy/deploy.sh --check      # READ-ONLY inspection: cluster state, legacy
 #                                   # detection, store, substrates, mesh, next steps
 #   ./deploy/deploy.sh --check --json # same as machine-readable JSON (--strict: exit 1
-#                                   # when something is missing)
+#                                   # when the intended shape does not hold)
+#   ./deploy/deploy.sh --check --substrate aws
+#                                   # intent-aware check: treat AWS as the intended
+#                                   # install (--desired overrides the states)
 #   ./deploy/deploy.sh --plan       # print the commands a mode would run, then exit
 #   ./deploy/deploy.sh --skip-build # do not run `docker build`; use the image already
 #                                   # imported into the cluster (SKIP_IMAGE_BUILD=1)
 #   ./deploy/deploy.sh --yes        # non-interactive (ASSUME_YES=1)
 #   ./deploy/deploy.sh --help       # this text
+#
+# Install record:
+#   Every install/delete/reset path merges ConfigMap jaiscloud-install in
+#   jaiscloud-data (schema, installed, desired). It lives with the store, so a
+#   substrate reset never loses the record of what was installed and what the
+#   operator wants running; the preflight uses it to scope its advice.
 #
 # Every prompt can be skipped non-interactively with --yes / ASSUME_YES=1.
 # The image build can be skipped with --skip-build / SKIP_IMAGE_BUILD=1, for a
@@ -116,10 +125,17 @@ Usage:
                                   `jaiscloud_gcp`, then re-apply jaiscloud-gcp.yaml. The AWS
                                   substrate and jaiscloud-data are never touched.
   --check                         READ-ONLY: inspect the cluster (namespaces, legacy
-                                  layout, store, substrates, mesh) and print the next
-                                  safe step. Alias for scripts/integration-preflight.sh.
+                                  layout, store, substrates, mesh, install intent) and
+                                  print the next safe step. Alias for
+                                  scripts/integration-preflight.sh.
   --json                          With --check: machine-readable JSON.
-  --strict                        With --check: exit 1 unless nothing is missing.
+  --strict                        With --check: exit 1 unless the intended shape holds
+                                  (no non-optional recommendation, no unexpected
+                                  footprint from a cloud outside the intent).
+  --substrate aws|gcp|both        With --check: override the recorded intent.
+  --desired aws=running,gcp=parked
+                                  With --check: override the desired states
+                                  (running|parked|absent).
   --plan                          Print the kubectl/docker/psql commands this mode would
                                   run, then exit 0 without executing them.
   --skip-build                    Do not run `docker build`; deploy the image already
@@ -386,6 +402,86 @@ restore_aws_ca_configmap() {
     --from-literal=ca.crt="$ca" --dry-run=client -o yaml | kubectl apply -f - >/dev/null
 }
 
+# ── install record (jaiscloud-data/jaiscloud-install) ────────────────────────
+# The record lives with the store, so a substrate reset — which deletes only its
+# own namespace — never erases what was installed and what the operator wants
+# running. The preflight reads it to make its recommendations intent-relative.
+# deploy.sh owns this object; no static manifest declares it, because applying
+# a manifest would reset `installed`/`desired` to a fixed value.
+INSTALL_CONFIGMAP="jaiscloud-install"
+
+# install_record_field <installed|desired> — the stored value ("" when absent).
+install_record_field() {
+  kubectl -n "$NAMESPACE_DATA" get configmap "$INSTALL_CONFIGMAP" \
+    -o jsonpath="{.data.$1}" 2>/dev/null || true
+}
+
+# csv_has <csv> <item>
+csv_has() {
+  local item
+  IFS=',' read -r -a items <<<"$1"
+  for item in ${items+"${items[@]}"}; do
+    [[ "$item" == "$2" ]] && return 0
+  done
+  return 1
+}
+
+# csv_add <csv> <item> — item appended once, order preserved.
+csv_add() {
+  local item
+  IFS=',' read -r -a items <<<"$1"
+  for item in ${items+"${items[@]}"}; do
+    [[ "$item" == "$2" ]] && { printf '%s' "$1"; return 0; }
+  done
+  if [[ -z "$1" ]]; then printf '%s' "$2"; else printf '%s,%s' "$1" "$2"; fi
+}
+
+# csv_set <csv cloud=state,...> <cloud> <state> — replace the cloud's entry (or
+# add it), keeping the other cloud. Canonical order (aws, then gcp) so repeated
+# runs do not churn the record.
+csv_set() {
+  local csv=$1 key=$2 value=$3 aws="" gcp="" item
+  IFS=',' read -r -a items <<<"$csv"
+  for item in ${items+"${items[@]}"}; do
+    case "${item%%=*}" in
+      aws) aws="aws=${item#*=}"; [[ "$key" == "aws" ]] && aws="aws=$value" ;;
+      gcp) gcp="gcp=${item#*=}"; [[ "$key" == "gcp" ]] && gcp="gcp=$value" ;;
+    esac
+  done
+  [[ -z "$aws" && "$key" == "aws" ]] && aws="aws=$value"
+  [[ -z "$gcp" && "$key" == "gcp" ]] && gcp="gcp=$value"
+  printf '%s' "${aws}${aws:+${gcp:+,}}${gcp}"
+}
+
+# record_intent <aws|gcp> <running|parked|absent> [add=1] — merge the cloud into
+# `installed` (unless add=0, for a teardown of a cloud that was never installed)
+# and set its `desired` state. Never creates the store namespace just to record
+# intent; a cluster without jaiscloud-data gets a warning.
+record_intent() {
+  local cloud=$1 state=$2 add=${3:-1} installed desired
+  if ! kubectl get namespace "$NAMESPACE_DATA" &>/dev/null; then
+    warn "namespace $NAMESPACE_DATA does not exist — not recording install intent for '$cloud'"
+    return 0
+  fi
+  installed=$(install_record_field installed)
+  if [[ "$add" == "1" ]]; then
+    installed=$(csv_add "$installed" "$cloud")
+  elif ! csv_has "$installed" "$cloud"; then
+    return 0
+  fi
+  desired=$(install_record_field desired)
+  desired=$(csv_set "$desired" "$cloud" "$state")
+  if ! kubectl -n "$NAMESPACE_DATA" create configmap "$INSTALL_CONFIGMAP" \
+      --from-literal=schema=1 \
+      --from-literal=installed="$installed" \
+      --from-literal=desired="$desired" \
+      --dry-run=client -o yaml | kubectl apply -f - >/dev/null; then
+    warn "could not write the install record $NAMESPACE_DATA/$INSTALL_CONFIGMAP — the preflight will fall back to inference"
+    return 0
+  fi
+  info "Install record ($NAMESPACE_DATA/$INSTALL_CONFIGMAP): installed=$installed desired=$desired"
+}
+
 print_endpoints() {
   local aws_host="" context
   context=$(kubectl config current-context 2>/dev/null || true)
@@ -426,6 +522,8 @@ MODE="deploy"
 PLAN=0
 PREFLIGHT_JSON=0
 PREFLIGHT_STRICT=0
+PREFLIGHT_SUBSTRATE=""
+PREFLIGHT_DESIRED=""
 while (($#)); do
   case "$1" in
     --delete)        MODE="delete" ;;
@@ -436,6 +534,12 @@ while (($#)); do
     --check)         MODE="check" ;;
     --json)          PREFLIGHT_JSON=1 ;;
     --strict)        PREFLIGHT_STRICT=1 ;;
+    --substrate)     [[ -n "${2:-}" ]] || die "--substrate needs a value (aws, gcp or both)"
+                     PREFLIGHT_SUBSTRATE="$2"; shift ;;
+    --substrate=*)   PREFLIGHT_SUBSTRATE="${1#*=}" ;;
+    --desired)       [[ -n "${2:-}" ]] || die "--desired needs a value (aws=running,gcp=parked)"
+                     PREFLIGHT_DESIRED="$2"; shift ;;
+    --desired=*)     PREFLIGHT_DESIRED="${1#*=}" ;;
     --plan)          PLAN=1 ;;
     -y|--yes)        ASSUME_YES=1 ;;
     --skip-build)    SKIP_IMAGE_BUILD=1 ;;
@@ -453,12 +557,22 @@ if [[ "$MODE" == "check" ]]; then
   args=()
   [[ "$PREFLIGHT_JSON" == "1" ]] && args+=(--json)
   [[ "$PREFLIGHT_STRICT" == "1" ]] && args+=(--strict)
+  [[ -n "$PREFLIGHT_SUBSTRATE" ]] && args+=(--substrate "$PREFLIGHT_SUBSTRATE")
+  [[ -n "$PREFLIGHT_DESIRED" ]] && args+=(--desired "$PREFLIGHT_DESIRED")
   exec "$REPO_ROOT/scripts/integration-preflight.sh" ${args+"${args[@]}"}
 fi
 
 # ── --plan: print what the selected mode would run, without running it ──────
 
 plan() { printf '  + %s\n' "$*"; }
+
+# plan_install_record <clouds to add to installed> <cloud=state pairs to set>
+#   The record is merged with whatever is already stored, so the plan shows the
+#   intent transition instead of a fixed document.
+plan_install_record() {
+  plan "kubectl -n $NAMESPACE_DATA get configmap $INSTALL_CONFIGMAP -o jsonpath='{.data}'   # merge installed += $1"
+  plan "kubectl -n $NAMESPACE_DATA create configmap $INSTALL_CONFIGMAP --from-literal=schema=1 --from-literal=installed=<merged> --from-literal=desired=<merged, $2> --dry-run=client -o yaml | kubectl apply -f -"
+}
 
 print_plan() {
   local mode=$1
@@ -478,6 +592,7 @@ print_plan() {
       plan "kubectl apply -f $K8S_DIR/jaiscloud.yaml"
       plan "kubectl -n $NAMESPACE_DATA rollout status deployment/postgres --timeout=120s"
       plan "kubectl -n $NAMESPACE_AWS rollout status deployment/jaiscloud --timeout=120s"
+      plan_install_record "aws" "aws=running"
       ;;
     gcp)
       plan "kubectl apply -f $K8S_DIR/namespace.yaml"
@@ -488,6 +603,7 @@ print_plan() {
       plan "kubectl apply -f $K8S_DIR/jaiscloud-gcp.yaml"
       [[ -n "${JAISCLOUD_GCP_IMAGE:-}" ]] && plan "kubectl -n $NAMESPACE_GCP set image deployment/jaiscloud-gcp jaiscloud-gcp=$JAISCLOUD_GCP_IMAGE"
       plan "kubectl -n $NAMESPACE_GCP rollout status deployment/jaiscloud-gcp --timeout=180s"
+      plan_install_record "gcp" "gcp=running"
       ;;
     migrate-store)
       local OLD_NS="${LEGACY_NAMESPACE:-$NAMESPACE_AWS}"
@@ -501,6 +617,7 @@ print_plan() {
       plan "kubectl -n $OLD_NS delete deployment postgres; delete service postgres postgres-external"
       plan "# legacy GCP: apply jaiscloud-gcp.yaml, scale to 0, tar-copy the blob PVC, scale to 1, delete the old Deployment/Service"
       plan "kubectl apply -f $K8S_DIR/jaiscloud.yaml"
+      plan_install_record "aws" "aws=running (and gcp when the legacy GCP workload exists)"
       ;;
     reset)
       plan "kubectl -n $NAMESPACE_AWS scale deployment jaiscloud --replicas=0   # when present"
@@ -509,15 +626,18 @@ print_plan() {
       plan "kubectl apply -f $K8S_DIR/namespace.yaml"
       plan "kubectl apply -f $K8S_DIR/rbac.yaml"
       plan "kubectl apply -f $K8S_DIR/jaiscloud.yaml"
+      plan_install_record "aws" "aws=running"
       ;;
     gcp-reset)
       plan "kubectl -n $NAMESPACE_GCP scale deployment jaiscloud-gcp --replicas=0   # when present"
       plan "kubectl -n $NAMESPACE_GCP delete pvc $GCP_PVC"
       plan "kubectl -n $NAMESPACE_DATA exec deploy/postgres -- psql -c 'DROP DATABASE IF EXISTS jaiscloud_gcp WITH (FORCE)' -c 'CREATE DATABASE jaiscloud_gcp OWNER jaiscloud'"
       plan "kubectl apply -f $K8S_DIR/jaiscloud-gcp.yaml"
+      plan_install_record "gcp" "gcp=running"
       ;;
     delete)
       plan "kubectl -n $NAMESPACE_AWS delete deployment jaiscloud service jaiscloud configmap jaiscloud-config secret jaiscloud-dsn"
+      plan_install_record "aws" "aws=absent"
       ;;
     *) plan "# unknown mode: $mode" ;;
   esac
@@ -538,6 +658,7 @@ if [[ "$MODE" == "delete" ]]; then
   kubectl delete service    jaiscloud -n "$NAMESPACE_AWS" --ignore-not-found
   kubectl delete configmap  jaiscloud-config -n "$NAMESPACE_AWS" --ignore-not-found
   kubectl delete secret     jaiscloud-dsn    -n "$NAMESPACE_AWS" --ignore-not-found
+  record_intent aws absent 0
   ok "AWS workloads removed. Persisted data retained:"
   for pvc in "${AWS_PVCS[@]}"; do
     kubectl get pvc "$pvc" -n "$NAMESPACE_AWS" --no-headers 2>/dev/null \
@@ -581,6 +702,7 @@ if [[ "$MODE" == "reset" ]]; then
   fi
   apply_aws_workloads
   wait_for_rollout deployment/jaiscloud "$NAMESPACE_AWS"
+  record_intent aws running
   ok "AWS substrate reset. The GCP substrate and Postgres were left untouched."
   print_endpoints
   exit 0
@@ -612,6 +734,7 @@ if [[ "$MODE" == "gcp-reset" ]]; then
   info "Re-applying the GCP substrate..."
   kubectl apply -f "$K8S_DIR/jaiscloud-gcp.yaml"
   wait_for_rollout deployment/jaiscloud-gcp "$NAMESPACE_GCP" 180s
+  record_intent gcp running
   ok "GCP substrate reset. The AWS substrate and Postgres were left untouched."
   print_endpoints
   exit 0
@@ -632,6 +755,7 @@ if [[ "$MODE" == "gcp" ]]; then
   kubectl apply -f "$K8S_DIR/jaiscloud-gcp.yaml"
   apply_gcp_image_override
   wait_for_rollout deployment/jaiscloud-gcp "$NAMESPACE_GCP" 180s
+  record_intent gcp running
   ok "GCP substrate is ready in namespace $NAMESPACE_GCP."
   print_endpoints
   exit 0
@@ -718,6 +842,8 @@ if [[ "$MODE" == "migrate-store" ]]; then
   apply_aws_workloads
   wait_for_rollout deployment/jaiscloud "$NAMESPACE_AWS"
 
+  record_intent aws running
+  [[ "$legacy_gcp" -eq 1 ]] && record_intent gcp running
   ok "Store migrated from $OLD_NS to $NAMESPACE_DATA."
   echo ""
   echo "  Legacy volumes kept in $OLD_NS as rollback copies:"
@@ -759,6 +885,7 @@ wait_for_rollout "$POSTGRES_DEPLOYMENT" "$NAMESPACE_DATA"
 ok "Postgres is ready."
 wait_for_rollout deployment/jaiscloud "$NAMESPACE_AWS"
 ok "JaisCloud (AWS) is ready."
+record_intent aws running
 
 # ── smoke test ────────────────────────────────────────────────────────────────
 

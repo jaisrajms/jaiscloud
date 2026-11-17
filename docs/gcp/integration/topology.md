@@ -37,6 +37,46 @@ shape is what it is and what must not be relaxed.
 | `jaiscloud-data` | shared store | Deployment `postgres`, `postgres-pvc`, Secret `postgres-secret` (server env), Services `postgres:5432` / `postgres-external:30543` |
 | `istio-system` | optional front door | `istio-ingressgateway`, `Gateway jaiscloud`, TLS secret `jaiscloud-wildcard`, CA ConfigMap `jaiscloud-ca-cert` (also copied into each substrate namespace for managed workloads) |
 
+## Install intent and state
+
+Presence is not intent: a cluster can hold only AWS on purpose, and a leftover
+GCP namespace can be a leak rather than an invitation to deploy GCP. `deploy.sh`
+records the intent in ConfigMap `jaiscloud-install` in `jaiscloud-data`.
+
+| key | value |
+|---|---|
+| `schema` | `1` |
+| `installed` | comma list of clouds that were installed, e.g. `aws,gcp` |
+| `desired` | comma list of `cloud=state`, e.g. `aws=running,gcp=parked` |
+
+The record lives with the store, so a substrate reset (which deletes only its own
+namespace) never loses it. **`deploy.sh` owns this object; no static manifest
+declares it** — a manifest apply would reset `installed`/`desired` to a fixed
+value and erase the operator's intent. Every path that changes what runs records
+it: install (`aws=running`), `--gcp` (`gcp=running`), `--delete` (`aws=absent`),
+`--reset` / `--gcp-reset` (back to `running`), and `--migrate-store` (`aws` and
+`gcp` both `running`). When `jaiscloud-data` does not exist yet, the write is
+skipped with a warning rather than creating the store just to record intent.
+
+Desired states are `running`, `parked` (Deployment scaled to 0; namespaces, PVCs
+and databases survive) and `absent` (no Deployment). The preflight derives the
+observed `substrates.<cloud>.state` from the cluster and additionally reports
+`degraded` (present and scaled up, but nothing available). The JSON carries
+`replicas` (desired scale) and `imageID` (the digest the pod actually runs, per
+the first pod container status) next to `present`/`ready`.
+
+`deploy/deploy.sh --check` resolves intent in this order: `--substrate` /
+`--desired` flags, then the `jaiscloud-install` record, then inference from the
+substrate namespaces/Deployments (`intent.source` = `flag|cluster|inferred`).
+Advice is relative to that intent:
+
+- only an installed cloud gets a `deploy-<cloud>` recommendation, and it is
+  non-optional when that cloud's state is `absent`;
+- a cloud outside `installed` that still has a namespace, Deployment or database
+  is reported as a leak warning (`unexpected <cloud> footprint (intent=...)`);
+- `--strict` exits 1 when any non-optional recommendation or leak warning
+  exists; optional work (the mesh) never fails it.
+
 ## Invariants
 
 1. **The store outlives the substrates.** `jaiscloud-data` is never deleted by a

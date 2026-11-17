@@ -73,6 +73,7 @@ type HandlerMeta struct {
 	Cloud      string
 	Region     string
 	AccountID  string
+	Version    string // binary version, reported by GET /_jaiscloud/doctor
 	StateDir   string // used for --new-instance instance-id persistence
 }
 
@@ -302,6 +303,7 @@ func (h *Handler) Doctor(w http.ResponseWriter, r *http.Request) {
 	resp := map[string]any{
 		"status":      "ok",
 		"cloud":       meta.Cloud,
+		"version":     meta.Version,
 		"agent_guide": agentGuide,
 	}
 

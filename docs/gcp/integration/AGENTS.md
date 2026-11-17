@@ -38,7 +38,14 @@ manifest disagree, the manifest wins — regenerate with
 ## Hard rules
 
 - **Inspect before you act**: `deploy/deploy.sh --check --json` is read-only and
-  returns the cluster state plus `recommended[]`. Start there on every run.
+  returns the cluster state, the install intent and `recommended[]`. Start there
+  on every run. Pass `--substrate aws|gcp|both` (and optionally
+  `--desired aws=running,gcp=parked`) when you know the intended shape: the
+  advice then covers only installed clouds, and anything else is a leak.
+- **The install record is intent, not a manifest**: `jaiscloud-data/jaiscloud-install`
+  (`schema`, `installed`, `desired`) is written by `deploy.sh` and survives
+  substrate resets. Read it through the preflight; do not hand-edit it and do
+  not add it to a manifest.
 - **Use the tools, not ad-hoc YAML**: apply the repository manifests via
   `deploy/deploy.sh`/`make`. Hand-editing a live Deployment creates drift that
   neither the contract check nor the preflight will see.
@@ -57,6 +64,7 @@ manifest disagree, the manifest wins — regenerate with
 |---|---|
 | kubectl context / cluster kind | `kubectl config current-context`; `kubectl cluster-info` |
 | does the cluster already run JaisCloud? | `deploy/deploy.sh --check --json` |
+| what is installed, and what is wanted? | preflight `intent.source` / `intent.installed` / `intent.desired`, or `kubectl -n jaiscloud-data get configmap jaiscloud-install -o yaml` |
 | legacy pre-split layout? | preflight `legacy.postgresInAws` / `legacy.gcpInAws` |
 | is the store already at the new layout? | preflight `store.present` / `store.databases` |
 | is the mesh installed? | preflight `mesh.installed` |
@@ -148,7 +156,8 @@ Spark image with the GCS connector in `JAISCLOUD_K8S_SPARK_IMAGE`; see
 ## Verifying
 
 Use `contract.playbook.verification`. The cheapest full check is the preflight
-(`recommended: []` means nothing is missing); the strongest is
+(`recommended: []` means the intended shape holds; `--strict` returns 0 only
+then, with no leak warnings); the strongest is
 `ALLOW_RESET=1 make test-dual-substrate-k8s` (destructive: it drops the AWS
 database to prove GCP survives).
 
@@ -177,7 +186,8 @@ boundary).
 
 | Need | Command |
 |---|---|
-| read-only state | `deploy/deploy.sh --check [--json]` (`scripts/integration-preflight.sh`) |
+| read-only state | `deploy/deploy.sh --check [--json] [--substrate aws\|gcp\|both] [--desired aws=running,gcp=parked]` (`scripts/integration-preflight.sh`) |
+| install intent | preflight `intent.*`; record in ConfigMap `jaiscloud-data/jaiscloud-install` (written by `deploy.sh`) |
 | the pack, from the binary | `jaiscloud-gcp agent-guide` / `--json` / `--emit DIR` (`--force` to overwrite) |
 | preview | `deploy/deploy.sh <mode> --plan` |
 | install AWS / GCP | `deploy/deploy.sh [--yes]` / `deploy/deploy.sh --gcp --yes` |

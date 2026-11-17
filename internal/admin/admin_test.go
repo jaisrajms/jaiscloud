@@ -149,7 +149,7 @@ func decodeExportEnvelope(t *testing.T, body []byte) version.Envelope {
 func TestDoctorReportsAgentGuide(t *testing.T) {
 	for _, cloud := range []string{"aws", "gcp"} {
 		h := NewHandler()
-		h.SetMeta(HandlerMeta{Cloud: cloud})
+		h.SetMeta(HandlerMeta{Cloud: cloud, Version: "v9.9.9"})
 		rec := httptest.NewRecorder()
 		h.Doctor(rec, httptest.NewRequest(http.MethodGet, "/_jaiscloud/doctor", nil))
 
@@ -163,6 +163,11 @@ func TestDoctorReportsAgentGuide(t *testing.T) {
 		}
 		if got["cloud"] != cloud {
 			t.Fatalf("%s: cloud = %v", cloud, got["cloud"])
+		}
+		// The running binary version lets a client tell a parked substrate that
+		// resumes after an upgrade which build it is actually talking to.
+		if got["version"] != "v9.9.9" {
+			t.Fatalf("%s: version = %v, want %q", cloud, got["version"], "v9.9.9")
 		}
 	}
 }
