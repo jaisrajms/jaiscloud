@@ -18,10 +18,13 @@
 #   {api}.execute-api.{region}.amazonaws.com       (internal/aws execute-api)
 #   s3.{region}.amazonaws.com                      (every regional AWS endpoint)
 #   {bucket}.s3.{region}.amazonaws.com             (S3 virtual-hosted style)
+#   api.ecr.{region}.amazonaws.com                 (two-label service hosts)
+#   streams.dynamodb.{region}.amazonaws.com
 #
 # Those are generated per location/region from RUN_APP_LOCATIONS (default:
-# "us-central1"), AWS_REGIONS (default: "us-east-1") and EXTRA_SANS appends
-# anything else (space separated, DNS: values only).
+# "us-central1"), AWS_REGIONS (default: "us-east-1"), AWS_SERVICE_PREFIXES
+# (default: "api.ecr streams.dynamodb s3-control s3-object-lambda") and
+# EXTRA_SANS appends anything else (space separated, DNS: values only).
 #
 # Why AWS needs two levels beyond `*.amazonaws.com`: X.509 wildcards match
 # exactly one label, so `*.amazonaws.com` covers `sts.amazonaws.com` but NOT
@@ -72,8 +75,10 @@
 #   DAYS                certificate lifetime in days (default 825)
 #   RUN_APP_LOCATIONS   locations for the deep *.run.app SANs (default us-central1)
 #   EXECUTE_API_REGIONS regions for the deep execute-api SANs (default us-east-1)
-#   AWS_REGIONS         regions for the two AWS depth SANs, `*.{region}.amazonaws.com`
-#                       and `*.s3.{region}.amazonaws.com` (default us-east-1)
+#   AWS_REGIONS         regions for the AWS depth SANs (default us-east-1)
+#   AWS_SERVICE_PREFIXES two-label AWS service hosts that need a SAN one level
+#                       deeper than `*.{region}.amazonaws.com` (default
+#                       "api.ecr streams.dynamodb s3-control s3-object-lambda")
 #   EXTRA_SANS          extra DNS SANs, space separated (default empty)
 #
 # --force semantics: everything under OUT_DIR is regenerated, so the CA identity
@@ -113,6 +118,7 @@ DAYS="${DAYS:-825}"
 RUN_APP_LOCATIONS="${RUN_APP_LOCATIONS:-us-central1}"
 EXECUTE_API_REGIONS="${EXECUTE_API_REGIONS:-us-east-1}"
 AWS_REGIONS="${AWS_REGIONS:-us-east-1}"
+AWS_SERVICE_PREFIXES="${AWS_SERVICE_PREFIXES:-api.ecr streams.dynamodb s3-control s3-object-lambda}"
 EXTRA_SANS="${EXTRA_SANS:-}"
 
 log() { printf '==> %s\n' "$*" >&2; }
@@ -140,6 +146,11 @@ SANS+=("*.s3.amazonaws.com")
 for region in $AWS_REGIONS; do
   SANS+=("*.${region}.amazonaws.com")
   SANS+=("*.s3.${region}.amazonaws.com")
+  # Two-label service hosts (api.ecr, streams.dynamodb, …) need their own SAN:
+  # `*.{region}.amazonaws.com` only covers one label before the region.
+  for prefix in $AWS_SERVICE_PREFIXES; do
+    SANS+=("*.${prefix}.${region}.amazonaws.com")
+  done
 done
 for extra in $EXTRA_SANS; do
   SANS+=("$extra")
@@ -210,6 +221,8 @@ for host in \
   s3.us-east-1.amazonaws.com \
   bucket.s3.us-east-1.amazonaws.com \
   dynamodb.us-east-1.amazonaws.com \
+  api.ecr.us-east-1.amazonaws.com \
+  streams.dynamodb.us-east-1.amazonaws.com \
   us-central1-my-project.cloudfunctions.net \
   svc-abc.us-central1.run.app \
   abc.execute-api.us-east-1.amazonaws.com; do

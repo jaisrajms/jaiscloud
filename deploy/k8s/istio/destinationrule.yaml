@@ -10,9 +10,6 @@
 # Protocol selection is NOT configured here, because Istio has no DestinationRule
 # field that selects the upstream protocol: it comes from the destination
 # Service's port (`name: grpc` / `name: grpc-*`, or `appProtocol: http2`).
-# h2UpgradePolicy is the one h2 knob a DestinationRule has; it only applies when
-# the port is detected as HTTP, so it is a belt to the port-name braces rather
-# than a substitute — kept explicit so the h2c intent is visible in one place.
 #
 # exportTo: the gateway is in istio-system and the Service is in jaiscloud-gcp;
 # without exportTo, a DestinationRule is only visible to clients in its own

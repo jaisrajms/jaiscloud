@@ -146,9 +146,13 @@ Everything below is idempotent; run from the repo root.
    The ConfigMap shape is exactly what the platform TLS code already consumes —
    `internal/platform/config.go` defaults `JAISCLOUD_PLATFORM_TLS_CA_SOURCES` to
    `CASource{Name: "jaiscloud", Source: CASourceRef{Kind: "configMap", Name:
-   "jaiscloud-ca-cert", Key: "ca.crt"}}`, so managed workloads (Spark, Cloud Run,
-   functions, Kafka) import it without any env var of their own. `gen.sh` only
-   *writes* the objects: it never sets that variable and never edits a manifest.
+   "jaiscloud-ca-cert", Key: "ca.crt"}}`, so a workload that sets
+   `JAISCLOUD_PLATFORM_TLS_ENABLED=true` imports it without any extra env. The
+   shipped substrate manifests keep platform TLS **disabled**: they talk to the
+   emulator over plaintext in-cluster Service DNS and TLS termination is the
+   gateway's job, so no CA is needed on that path. The ConfigMap is for
+   workloads you point at the front door instead. `gen.sh` only *writes* the
+   objects: it never sets that variable and never edits a manifest.
 
    Re-running is a no-op; `--force` regenerates the CA, and then every client
    that trusted the old `ca.crt` must re-import it and running pods must be

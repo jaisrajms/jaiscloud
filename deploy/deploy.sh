@@ -335,6 +335,7 @@ if [[ "$MODE" == "reset" ]]; then
   # The store may not exist yet (e.g. --reset on a cluster that never ran the
   # full deploy); bring it up so the recreated AWS pod has a database.
   if ! postgres_deployed; then
+    kubectl apply -f "$K8S_DIR/namespace.yaml"
     kubectl apply -f "$K8S_DIR/postgres.yaml"
     wait_for_rollout "$POSTGRES_DEPLOYMENT" "$NAMESPACE_DATA"
   fi
@@ -409,6 +410,11 @@ if [[ "$MODE" == "migrate-store" ]]; then
     die "pvc/$POSTGRES_PVC already exists in $NAMESPACE_DATA — the new store is deployed; refusing to overwrite it (drop it first if this is a retry)"
   fi
 
+  # Stop the AWS writer BEFORE the dump: anything it writes after the snapshot
+  # would be silently lost. The legacy Postgres stays up (it is the dump source).
+  info "Stopping the AWS emulator (single writer to the legacy store)..."
+  scale_to_zero "$NAMESPACE_AWS" jaiscloud app=jaiscloud
+
   info "Dumping database '$AWS_DB' from $OLD_NS/deployment/postgres..."
   DUMP_FILE="$(mktemp "${TMPDIR:-/tmp}/jaiscloud-store.XXXXXX.dump")"
   trap 'rm -f "$DUMP_FILE"' EXIT
@@ -416,11 +422,11 @@ if [[ "$MODE" == "migrate-store" ]]; then
     pg_dump -U jaiscloud --no-owner --no-privileges -Fc -d "$AWS_DB" > "$DUMP_FILE"
   [[ -s "$DUMP_FILE" ]] || die "the dump is empty — refusing to continue"
 
-  info "Stopping writers (AWS deployment and the legacy Postgres)..."
-  kubectl -n "$NAMESPACE_AWS" scale deployment jaiscloud --replicas=0 --ignore-not-found 2>/dev/null || true
-  kubectl -n "$OLD_NS" scale "$POSTGRES_DEPLOYMENT" --replicas=0
+  info "Stopping the legacy Postgres (the dump is complete)..."
+  scale_to_zero "$OLD_NS" postgres app=postgres
 
   info "Starting the new store in $NAMESPACE_DATA..."
+  kubectl apply -f "$K8S_DIR/namespace.yaml"
   kubectl apply -f "$K8S_DIR/postgres.yaml"
   wait_for_rollout "$POSTGRES_DEPLOYMENT" "$NAMESPACE_DATA"
   ensure_database "$GCP_DB"

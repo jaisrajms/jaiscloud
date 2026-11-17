@@ -47,7 +47,7 @@
 # needs `/_jaiscloud/reset` between cases and does not need a cluster.
 #
 # Env:
-#   K8S_NAMESPACE            (default: jaiscloud)
+#   K8S_NAMESPACE            (default: jaiscloud-gcp)
 #   CLOUDRUN_BROWSER_SUFFIX  (default: run.localhost)
 #   CLOUDRUN_BROWSER_PORT    (default: 18080)
 #   SPINE_HEALTH_PORT        (default: 18099)  local port for the health forward

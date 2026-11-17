@@ -89,6 +89,11 @@ metadata:
   namespace: jaiscloud
 spec:
   replicas: 1
+  # Single writer to Postgres and to the ReadWriteOnce blob PVC: replace the old
+  # pod before starting the new one (the GCP substrate does the same), so a
+  # rollout never runs two emulators with the same instance ID and DSN.
+  strategy:
+    type: Recreate
   selector:
     matchLabels:
       app: jaiscloud

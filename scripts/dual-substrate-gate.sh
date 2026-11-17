@@ -87,7 +87,8 @@ kube() { "${KUBECTL[@]}" "$@"; }
 # wait_port <host> <port> — poll until the port accepts a TCP connection.
 wait_port() {
   local host=$1 port=$2 i
-  for i in $(seq 1 $((GATE_TIMEOUT / 2))); do
+  # sleep 0.5 per iteration, so 2*GATE_TIMEOUT iterations ≈ GATE_TIMEOUT seconds.
+  for i in $(seq 1 $((GATE_TIMEOUT * 2))); do
     if (exec 3<>"/dev/tcp/$host/$port") 2>/dev/null; then
       exec 3>&- || true
       return 0
@@ -177,6 +178,12 @@ db_exists() {
     | tr -d '[:space:]'
 }
 
+# db_sql <db> <sql> — run SQL in one database and print the scalar result.
+db_sql() {
+  kube -n "$NS_DATA" exec deploy/postgres -- \
+    psql -U jaiscloud -d "$1" -tAc "$2" 2>/dev/null | tr -d '[:space:]'
+}
+
 # ── prerequisites ───────────────────────────────────────────────────────────
 head_ "prerequisites"
 kube get namespace "$NS_AWS" >/dev/null 2>&1 || die "namespace $NS_AWS not found — deploy the AWS substrate first"
@@ -223,6 +230,15 @@ else
   fail "AWS substrate is not healthy before the reset"
 fi
 stop_forward "$AWS_PID" "$AWS_PF_PORT"
+
+# Positive control: leave a marker IN the AWS database. The reset must actually
+# drop/recreate it, so a regressed no-op reset cannot pass this gate.
+db_sql jaiscloud "CREATE TABLE IF NOT EXISTS public.dpl_gate_probe (id int); INSERT INTO public.dpl_gate_probe VALUES (1)" >/dev/null
+if [[ "$(db_sql jaiscloud "SELECT count(*) FROM public.dpl_gate_probe")" == "1" ]]; then
+  pass "AWS database carries a pre-reset probe row"
+else
+  fail "could not write the AWS probe row"
+fi
 
 # ── 2. the reset under test ─────────────────────────────────────────────────
 head_ "2. deploy/deploy.sh --reset (AWS-only, database-scoped)"
@@ -271,6 +287,11 @@ if [[ "$(db_exists jaiscloud)" == "1" ]]; then
   pass "database jaiscloud was recreated"
 else
   fail "database jaiscloud is missing after the reset"
+fi
+if [[ "$(db_sql jaiscloud "SELECT to_regclass('public.dpl_gate_probe') IS NOT NULL")" == "f" ]]; then
+  pass "the AWS reset really dropped the old database (probe row gone)"
+else
+  fail "pre-reset data is still in the AWS database — the reset did not drop it"
 fi
 forward "$NS_AWS" jaiscloud "$AWS_PF_PORT" 4566
 AWS_PID="$FORWARD_PID"
