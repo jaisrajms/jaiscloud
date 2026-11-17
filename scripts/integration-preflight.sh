@@ -68,17 +68,25 @@
 #   fix is to re-apply that rendered object, never to hand-edit the default.
 #
 # The store:
-#   store.mode is bundled (PostgreSQL Deployment in NS_DATA) or external (a
+#   store.mode is bundled (a PostgreSQL workload in NS_DATA) or external (a
 #   server the operator brought: deploy.sh --store-dsn / JAISCLOUD_STORE_DSN, no
 #   postgres.yaml). The mode comes from the install record's `store` key, then
-#   falls back to bundled when the record or the Deployment exists, and to
-#   external when a substrate exists without a bundled postgres Deployment.
+#   falls back to bundled when the record or the workload exists, and to
+#   external when a substrate exists without a bundled store workload.
+#   The bundled workload is resolved the way --migrate-store resolves a legacy
+#   store: STORE_WORKLOAD=<deployment|statefulset>/<name> when set, otherwise
+#   deployment/postgres, then statefulset/postgres. store.workload names what was
+#   probed ("" when none/external); a statefulset's claim is derived from its
+#   volumeClaimTemplate, so store.pvc stays the Deployment's postgres-pvc.
 #   store.databases is TRI-STATE: true / false / null. true|false only when the
-#   bundled store Deployment is ready and psql answered; null when the store is
-#   external, the Deployment is absent or not ready, or the exec/psql failed —
+#   resolved workload is ready and psql answered; null when the store is
+#   external, the workload is absent or not ready, or the exec/psql failed —
 #   "unknown", never "missing". store.databasesProbe is "exec" when both psql
-#   probes answered, "unavailable" otherwise. Recommendations only treat `false`
-#   as a missing database.
+#   probes answered, "unavailable" otherwise, and store.probeReason says why it
+#   was unavailable (external|no-workload|not-ready|exec-failed). The probe never
+#   creates a pod (that would mutate the cluster), so an external server is
+#   reported as unprobeable (DSL9); verify it with your own psql.
+#   Recommendations only treat `false` as a missing database.
 #
 # Images / env:
 #   substrates.<cloud>.image is the Deployment's image, imageID the digest the
@@ -100,16 +108,29 @@
 # DNS and CA:
 #   dns.reads the kube-system/coredns ConfigMap Corefile (read-only; Forbidden or
 #   absent -> unknown) and reports dns.rewrites (true|false|unknown),
-#   dns.suffixes (the cloud suffixes mapped to the gateway) and dns.stale.
-#   A rewrite whose substrate is parked or absent, or a rewrite with no ready
-#   gateway, is stale: clients resolve a dead backend and time out (or get a fast
-#   503); remove that suffix's rewrite and re-add it on resume.
+#   dns.suffixes (the cloud suffixes with a rewrite/template), dns.target(s) and
+#   dns.stale. A rewrite is judged by the target it names, never by assuming the
+#   mesh: `rewrite … <name>.<ns>.svc.cluster.local` resolves to a Service, and a
+#   `template` block's `answer <ip>` resolves to the Service holding that
+#   spec.clusterIP (searched in the JaisCloud namespaces only). dns.target is
+#   "gateway" (istio-system/istio-ingressgateway), "service:<ns>/<name>",
+#   "unknown", or "mixed" when suffixes point at different targets; dns.targets
+#   maps each suffix to its own target.
+#   A gateway target is stale when no ready ingress serves it (that also needs
+#   Gateway/jaiscloud) or its owning substrate is parked/absent. A service target
+#   is stale only when the Service is missing or has no ready endpoints (a park
+#   empties them). An unknown target is reported, never called stale: the probe
+#   only diagnoses what it can see first-hand.
 #   ca.aws / ca.gcp report the jaiscloud-ca-cert ConfigMap in each substrate
 #   namespace, ca.issuerPresent the Istio gateway TLS secret
-#   istio-system/jaiscloud-wildcard (or the Gateway resource). A CA copy with no
-#   issuing mesh is a stale CA: re-run certs/gen.sh or remove it. Park keeps the
-#   CA copy (a resumed substrate and its managed workloads still trust the
-#   front door), so it is not stale while the secret exists.
+#   istio-system/jaiscloud-wildcard (or the Gateway resource), and
+#   ca.issuers.<cloud> what the copy claims to be: "mesh" (labelled
+#   jaiscloud.io/issuer=mesh by certs/gen.sh), "external" (unlabelled: a
+#   host-issued CA copy JaisCloud did not create) or "absent". Only a
+#   mesh-labelled copy with no issuing mesh is a stale CA: re-run certs/gen.sh
+#   (which labels what it writes) or remove it. Park keeps the CA copy (a resumed
+#   substrate and its managed workloads still trust the front door), so it is not
+#   stale while the secret exists.
 #
 # Also reachable as: deploy/deploy.sh --check [--json] [--strict]
 #                    [--substrate ...] [--desired ...]
@@ -122,6 +143,13 @@
 #                 the same layout a (custom-names) install used.
 #   SA_AWS/SA_GCP  unused here (the ServiceAccount is read from each Deployment);
 #                 accepted so a caller can pass deploy.sh's environment through.
+#   STORE_WORKLOAD=<deployment|statefulset>/<name>
+#                 the bundled store workload to probe (default: resolve
+#                 deployment/postgres, then statefulset/postgres)
+#   PREFLIGHT_TIMEOUT_IMPL  auto (default: timeout -> gtimeout -> bash watchdog),
+#                 timeout|gtimeout|watchdog|none. macOS has no GNU `timeout`, so
+#                 no bare `timeout` call exists in this script; the offline
+#                 harness pins `watchdog` to exercise the macOS path everywhere.
 #
 # Exit codes:
 #   0  probe completed (read `recommended` / `warnings`)
@@ -187,6 +215,62 @@ if [[ -n "$KUBE_CONTEXT" ]]; then
 fi
 
 kc() { "${KUBECTL[@]}" --request-timeout=10s "$@"; }
+
+# ── portable wall-clock bound ───────────────────────────────────────────────
+# macOS ships no GNU `timeout`, so this script must never call it unguarded.
+# PREFLIGHT_TIMEOUT_IMPL resolves once: `auto` prefers timeout -> gtimeout ->
+# a bash watchdog (the macOS path). The offline harness pins `watchdog` so every
+# case exercises that path on Linux.
+PREFLIGHT_TIMEOUT_IMPL="${PREFLIGHT_TIMEOUT_IMPL:-auto}"
+case "$PREFLIGHT_TIMEOUT_IMPL" in
+  auto)
+    if command -v timeout >/dev/null 2>&1; then PREFLIGHT_TIMEOUT_IMPL=timeout
+    elif command -v gtimeout >/dev/null 2>&1; then PREFLIGHT_TIMEOUT_IMPL=gtimeout
+    else PREFLIGHT_TIMEOUT_IMPL=watchdog
+    fi ;;
+  timeout|gtimeout)
+    command -v "$PREFLIGHT_TIMEOUT_IMPL" >/dev/null 2>&1 \
+      || usage_error "PREFLIGHT_TIMEOUT_IMPL=$PREFLIGHT_TIMEOUT_IMPL, but '$PREFLIGHT_TIMEOUT_IMPL' is not on PATH" ;;
+  watchdog|none) ;;
+  *) usage_error "PREFLIGHT_TIMEOUT_IMPL must be auto, timeout, gtimeout, watchdog or none (got '$PREFLIGHT_TIMEOUT_IMPL')" ;;
+esac
+
+# bounded <seconds> <command...> — run a command with a wall-clock limit (the
+# helper every exec uses instead of a bare `timeout`). Pass an executable, not a
+# shell function: timeout/gtimeout exec their argument. `none` runs it unbounded;
+# kubectl still carries --request-timeout.
+bounded() {
+  local secs=$1 pid wd rc=0
+  shift
+  case "$PREFLIGHT_TIMEOUT_IMPL" in
+    none) "$@" ;;
+    timeout|gtimeout) "$PREFLIGHT_TIMEOUT_IMPL" "$secs" "$@" ;;
+    watchdog)
+      # Portable watchdog (macOS bash 3.2 + no GNU coreutils). Output goes to
+      # files, not pipes: a killed command's children can outlive it, and a
+      # lingering child holding a pipe would make `$(bounded …)` wait out the
+      # full timeout even though the command already returned.
+      local out_f err_f
+      out_f=$(mktemp "${TMPDIR:-/tmp}/jaiscloud-preflight-out.XXXXXX" 2>/dev/null || true)
+      err_f=$(mktemp "${TMPDIR:-/tmp}/jaiscloud-preflight-err.XXXXXX" 2>/dev/null || true)
+      if [[ -z "$out_f" || -z "$err_f" ]]; then
+        [[ -n "$out_f" ]] && rm -f "$out_f"
+        [[ -n "$err_f" ]] && rm -f "$err_f"
+        "$@"
+        return $?
+      fi
+      "$@" >"$out_f" 2>"$err_f" &
+      pid=$!
+      ( sleep "$secs"; pkill -TERM -P "$pid" 2>/dev/null || true; kill -TERM "$pid" 2>/dev/null && sleep 1 && kill -KILL "$pid" 2>/dev/null ) >/dev/null 2>&1 &
+      wd=$!
+      wait "$pid" || rc=$?
+      kill -TERM "$wd" 2>/dev/null || true
+      cat "$out_f"
+      cat "$err_f" >&2
+      rm -f "$out_f" "$err_f"
+      return "$rc" ;;
+  esac
+}
 
 say()  { printf '%s\n' "$*"; }
 head_() { printf '\n== %s\n' "$*"; }
@@ -282,10 +366,38 @@ yn() { [[ "$1" == "1" ]] && echo yes || echo no; }
 
 # deployment_present <ns> <name>
 deployment_present() { probe_ok kc -n "$1" get deployment "$2"; }
+# sts_present <ns> <name>
+sts_present() { probe_ok kc -n "$1" get statefulset "$2"; }
 # sa_present <ns> <name>
 sa_present() { probe_ok kc -n "$1" get serviceaccount "$2"; }
 # pvc_present <ns> <name>
 pvc_present() { probe_ok kc -n "$1" get pvc "$2"; }
+# svc_present <ns> <name>
+svc_present() { probe_ok kc -n "$1" get service "$2"; }
+# svc_ready <ns> <name> — 1 when the Service has at least one ready address
+# (Endpoints, the object the kubelet-side datapath actually programs). A Service
+# with no Endpoints object or only notReadyAddresses is 0.
+svc_ready() {
+  local ip
+  ip=$(kc -n "$1" get endpoints "$2" -o jsonpath='{.subsets[*].addresses[*].ip}' 2>/dev/null || true)
+  [[ -n "$ip" ]] && echo 1 || echo 0
+}
+# svc_by_cluster_ip <ip> — "ns/name" of the first Service whose spec.clusterIP is
+# that address, searched in the namespaces this pack owns (never a cluster-wide
+# list, which the probe may not be allowed to make).
+svc_by_cluster_ip() {
+  local ip=$1 ns all first
+  all=$(
+    for ns in "$NS_AWS" "$NS_GCP" "$NS_DATA" istio-system; do
+      kc -n "$ns" get services \
+        -o jsonpath='{range .items[*]}{.metadata.name}{" "}{.spec.clusterIP}{"\n"}{end}' 2>/dev/null \
+        | awk -v ns="$ns" -v ip="$ip" '$2==ip {print ns "/" $1}'
+    done
+  ) || true
+  first=${all%%$'\n'*}
+  [[ -n "$first" ]] && printf '%s' "$first"
+  return 0
+}
 
 # object_label <namespace> <kind> <name> <key> — one metadata label ("" when
 # absent). Bracket notation: the label keys contain dots and a slash.
@@ -313,6 +425,13 @@ deployment_ready() {
   [[ "${n:-0}" -ge 1 ]] && echo 1 || echo 0
 }
 
+# sts_ready <ns> <name> — readyReplicas >= 1 (a StatefulSet's readiness field)
+sts_ready() {
+  local n
+  n=$(field "$1" statefulset "$2" '{{if .status.readyReplicas}}{{.status.readyReplicas}}{{else}}0{{end}}')
+  [[ "${n:-0}" -ge 1 ]] && echo 1 || echo 0
+}
+
 # deployment_image <ns> <name>
 deployment_image() {
   field "$1" deployment "$2" '{{range .spec.template.spec.containers}}{{.image}}{{"\n"}}{{end}}' | head -1
@@ -334,13 +453,20 @@ deployment_env() {
 configmap_key() {
   kc -n "$1" get configmap "$2" -o go-template="{{index .data \"$3\"}}" 2>/dev/null || true
 }
+# b64decode — stdin base64 -> stdout. GNU/BSD spell the decode flag differently
+# (`base64 -d` vs `base64 -D`), and macOS ships the BSD form; openssl is the last
+# resort (every JaisCloud host has it for the dev CA).
+b64decode() {
+  base64 -d 2>/dev/null || base64 -D 2>/dev/null || openssl base64 -d -A 2>/dev/null || true
+}
+
 # secret_key <ns> <name> <key> — data.<key>, base64-decoded (Secret data is
 # base64); "" when anything is missing.
 secret_key() {
   local v
   v=$(kc -n "$1" get secret "$2" -o go-template="{{index .data \"$3\"}}" 2>/dev/null) || return 0
   [[ -n "$v" ]] || return 0
-  printf '%s' "$v" | base64 -d 2>/dev/null || true
+  printf '%s' "$v" | b64decode
 }
 
 # deployment_env_entry <ns> <deployment> <name> — the first container's explicit
@@ -439,15 +565,17 @@ pvc_status() { field "$1" pvc "$2" '{{.status.phase}}'; }
 pvc_capacity() { field "$1" pvc "$2" '{{index .status.capacity "storage"}}'; }
 
 # db_state <name> — TRI-STATE: true|false|null.
-#   true|false  the bundled store Deployment is ready and psql answered (psql
-#               exits 0; an empty row set means the database is absent)
-#   null        the store is external, the Deployment is absent/not ready, or
-#               the psql exec failed — "unknown", never "missing"
+#   true|false  the resolved bundled store workload is ready and psql answered
+#               (psql exits 0; an empty row set means the database is absent)
+#   null        the store is external, the workload is absent/not ready, or the
+#               psql exec failed/timed out — "unknown", never "missing"
+# The exec is wall-clock bounded through `bounded` (never a bare GNU `timeout`).
 db_state() {
   local out rc=0
   [[ "$STORE_MODE" == "external" ]] && { echo null; return; }
-  if [[ "$(deployment_ready "$NS_DATA" postgres)" != "1" ]]; then echo null; return; fi
-  out=$(timeout 15 "${KUBECTL[@]}" --request-timeout=10s -n "$NS_DATA" exec deploy/postgres -- \
+  [[ "$STORE_PRESENT" == "1" && -n "$STORE_WORKLOAD" ]] || { echo null; return; }
+  [[ "$STORE_READY" == "1" ]] || { echo null; return; }
+  out=$(bounded 15 "${KUBECTL[@]}" --request-timeout=10s -n "$NS_DATA" exec "$STORE_WORKLOAD" -- \
         psql -U jaiscloud -d postgres -tAc "SELECT 1 FROM pg_database WHERE datname='$1'" 2>/dev/null) || rc=$?
   out=$(printf '%s' "$out" | tr -d '[:space:]')
   [[ "$rc" -eq 0 ]] || { echo null; return; }
@@ -537,9 +665,47 @@ fi
 LEGACY_GCP=$(deployment_present "$NS_AWS" jaiscloud-gcp)
 LEGACY_GCP_MARKED=0
 [[ "$LEGACY_GCP" == "1" ]] && legacy_marked "$NS_AWS" deployment jaiscloud-gcp && LEGACY_GCP_MARKED=1
-STORE_DEPLOY=$(deployment_present "$NS_DATA" postgres)
-STORE_PVC=$(pvc_status "$NS_DATA" postgres-pvc)
-STORE_READY=$(deployment_ready "$NS_DATA" postgres)
+
+# ── bundled store workload ──────────────────────────────────────────────────
+# postgres.yaml is a Deployment, but a host may run its store as a StatefulSet
+# (the common managed shape) or under another name. Resolve it the same way
+# --migrate-store resolves a legacy store, so the database probe follows the
+# object that actually serves: STORE_WORKLOAD=<kind>/<name> when set, else
+# deployment/postgres, then statefulset/postgres.
+STORE_WORKLOAD_ENV="${STORE_WORKLOAD:-}"
+STORE_KIND=""
+STORE_NAME=""
+STORE_WORKLOAD=""
+if [[ -n "$STORE_WORKLOAD_ENV" ]]; then
+  case "$STORE_WORKLOAD_ENV" in
+    deployment/?*|statefulset/?*) ;;
+    *) usage_error "STORE_WORKLOAD must be '<deployment|statefulset>/<name>' (got '$STORE_WORKLOAD_ENV')" ;;
+  esac
+  STORE_KIND="${STORE_WORKLOAD_ENV%%/*}"
+  STORE_NAME="${STORE_WORKLOAD_ENV#*/}"
+  case "$STORE_NAME" in
+    */*) usage_error "STORE_WORKLOAD must be '<deployment|statefulset>/<name>' (got '$STORE_WORKLOAD_ENV')" ;;
+  esac
+  STORE_WORKLOAD="$STORE_WORKLOAD_ENV"
+elif [[ "$(deployment_present "$NS_DATA" postgres)" == "1" ]]; then
+  STORE_KIND=deployment; STORE_NAME=postgres; STORE_WORKLOAD=deployment/postgres
+elif [[ "$(sts_present "$NS_DATA" postgres)" == "1" ]]; then
+  STORE_KIND=statefulset; STORE_NAME=postgres; STORE_WORKLOAD=statefulset/postgres
+fi
+STORE_WL_PRESENT=0
+STORE_READY=0
+case "$STORE_KIND" in
+  deployment)
+    STORE_WL_PRESENT=$(deployment_present "$NS_DATA" "$STORE_NAME")
+    [[ "$STORE_WL_PRESENT" == "1" ]] && STORE_READY=$(deployment_ready "$NS_DATA" "$STORE_NAME") ;;
+  statefulset)
+    STORE_WL_PRESENT=$(sts_present "$NS_DATA" "$STORE_NAME")
+    [[ "$STORE_WL_PRESENT" == "1" ]] && STORE_READY=$(sts_ready "$NS_DATA" "$STORE_NAME") ;;
+esac
+# postgres-pvc is the Deployment's claim. A StatefulSet derives its claim from a
+# volumeClaimTemplate (postgres-data-postgres-0), so it is not reported here.
+STORE_PVC=""
+[[ "$STORE_KIND" == "deployment" ]] && STORE_PVC=$(pvc_status "$NS_DATA" postgres-pvc)
 # Database probes are tri-state and depend on store.mode, so they run after the
 # mode is resolved (below), not here.
 
@@ -612,36 +778,48 @@ if [[ "$RECORD_PRESENT" == "1" ]]; then
   RECORD_STORE=$(field "$NS_DATA" configmap jaiscloud-install '{{index .data "store"}}')
 fi
 
-# The store is either bundled (a postgres Deployment in NS_DATA) or external (a
+# The store is either bundled (a PostgreSQL workload in NS_DATA) or external (a
 # server the operator brought; deploy.sh --store-dsn). The record is
-# authoritative; otherwise a Deployment/record means bundled, and a substrate
-# without one means external. For an external store there is no pod to exec, so
-# the database probe is null = "unknown", never "missing".
+# authoritative; otherwise a workload (resolved above) means bundled, and a
+# substrate without one means external. An explicit STORE_WORKLOAD is the
+# operator's declaration of a bundled store even while the object is missing, so
+# it never flips the mode to external. For an external store there is no pod to
+# exec, so the database probe is null = "unknown", never "missing".
 STORE_MODE="bundled"
 if [[ -n "$RECORD_STORE" ]]; then
   case "$RECORD_STORE" in
     bundled|external) STORE_MODE="$RECORD_STORE" ;;
   esac
-elif [[ "$STORE_DEPLOY" != "1" && "$RECORD_PRESENT" != "1" && "$SUBSTRATE_PRESENT" == "1" ]]; then
+elif [[ -n "$STORE_WORKLOAD_ENV" ]]; then
+  STORE_MODE="bundled"
+elif [[ "$STORE_WL_PRESENT" != "1" && "$RECORD_PRESENT" != "1" && "$SUBSTRATE_PRESENT" == "1" ]]; then
   STORE_MODE="external"
 fi
 if [[ "$STORE_MODE" == "external" ]]; then
   STORE_PRESENT=1
   STORE_READY=0
 else
-  STORE_PRESENT="$STORE_DEPLOY"
+  STORE_PRESENT="$STORE_WL_PRESENT"
 fi
 # Tri-state database probes + the probe disposition. "exec" means the bundled
-# store Deployment was ready and both psql probes returned an answer (true or
-# false); anything else is "unavailable" (external store, absent/not-ready
-# Deployment, or a failed exec) and the databases stay null.
+# store workload was ready and both psql probes returned an answer (true or
+# false); anything else is "unavailable" and store.probeReason says why
+# (external store, no bundled workload, a workload that is not ready, or a
+# failed exec) and the databases stay null.
 DB_AWS=$(db_state jaiscloud)
 DB_GCP=$(db_state jaiscloud_gcp)
-DATABASES_PROBE="unavailable"
-if [[ "$STORE_MODE" != "external" && "$STORE_READY" == "1" \
-      && "$DB_AWS" != "null" && "$DB_GCP" != "null" ]]; then
-  DATABASES_PROBE="exec"
+STORE_PROBE_REASON="ok"
+if [[ "$STORE_MODE" == "external" ]]; then
+  STORE_PROBE_REASON="external"
+elif [[ "$STORE_PRESENT" != "1" ]]; then
+  STORE_PROBE_REASON="no-workload"
+elif [[ "$STORE_READY" != "1" ]]; then
+  STORE_PROBE_REASON="not-ready"
+elif [[ "$DB_AWS" == "null" || "$DB_GCP" == "null" ]]; then
+  STORE_PROBE_REASON="exec-failed"
 fi
+DATABASES_PROBE="unavailable"
+[[ "$STORE_PROBE_REASON" == "ok" ]] && DATABASES_PROBE="exec"
 
 # A pre-split object that is scaled to 0 while the new store serves is a
 # retained rollback copy of a *marked* (migrated) store — deploy.sh
@@ -653,12 +831,12 @@ LEGACY_PG_REPLICAS=$(deployment_replicas "$NS_AWS" postgres "$LEGACY_PG_DEPLOY")
 [[ "$LEGACY_PG_DEPLOY" == "1" ]] || LEGACY_PG_REPLICAS=$(sts_replicas "$NS_AWS" postgres "$LEGACY_PG_STS")
 LEGACY_PG_RETAINED=0
 if [[ "$LEGACY_PG_MARKED" == "1" && "$LEGACY_PG_REPLICAS" == "0" ]]; then
-  if [[ "$STORE_DEPLOY" == "1" || "$STORE_MODE" == "external" ]]; then LEGACY_PG_RETAINED=1; fi
+  if [[ "$STORE_PRESENT" == "1" || "$STORE_MODE" == "external" ]]; then LEGACY_PG_RETAINED=1; fi
 fi
 LEGACY_GCP_REPLICAS=$(deployment_replicas "$NS_AWS" jaiscloud-gcp "$LEGACY_GCP")
 LEGACY_GCP_RETAINED=0
 if [[ "$LEGACY_GCP_MARKED" == "1" && "$LEGACY_GCP_REPLICAS" == "0" ]]; then
-  if [[ "$GCP_PRESENT" == "1" || "$STORE_DEPLOY" == "1" || "$STORE_MODE" == "external" ]]; then
+  if [[ "$GCP_PRESENT" == "1" || "$STORE_PRESENT" == "1" || "$STORE_MODE" == "external" ]]; then
     LEGACY_GCP_RETAINED=1
   fi
 fi
@@ -836,64 +1014,169 @@ COREFILE=""
 DNS_REWRITES=unknown
 DNS_SUFFIXES=""
 DNS_STALE=0
+DNS_TARGET=""
+DNS_TARGETS_JSON=""
+DNS_TARGETS_SEEN=""
+DNS_TARGET_LINES=""
 # A "gateway" means both the Istio Gateway route resource and a ready ingress
 # Deployment: a rewrite pointing at a gateway Service with no route accepts the
 # connection and answers 404/503.
 GATEWAY_READY=0
 [[ "$MESH_GW" == "1" && "$MESH_GATEWAY" == "1" ]] && GATEWAY_READY=1
+
+# dns_rewrite_target <suffix-pattern> — the target of the first rewrite or
+# template for one cloud suffix, as "name|<dns-name>" or "ip|<address>", or
+# "unknown|" when the construct exists but its target is not parseable. Empty
+# when the Corefile has no rewrite/template line for the suffix.
+# Only the two documented shapes are parsed (deploy/k8s/istio/dns.yaml):
+#   rewrite [stop] name regex (.*\.)?googleapis\.com\.?$ <target>
+#   template IN A (.*\.)?googleapis\.com\.?$ { ... answer "{{ .Name }}" <ip> ... }
+dns_rewrite_target() {
+  local pat=$1 line last target="" seen=0 in_tpl=0
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    line=${line%%#*}
+    [[ -n "${line//[[:space:]]/}" ]] || continue
+    if (( in_tpl )); then
+      if [[ "$line" =~ (^|[^[:alnum:]_])answer([^[:alnum:]_]|$) ]]; then
+        last=${line##*[[:space:]]}
+        last=${last%\"}
+        [[ -n "$target" ]] || target="ip|$last"
+      fi
+      [[ "$line" == *"}"* ]] && in_tpl=0
+      continue
+    fi
+    if [[ "$line" =~ ^[[:space:]]*rewrite([[:space:]]|$) ]] && [[ "$line" =~ $pat ]]; then
+      last=${line##*[[:space:]]}
+      last=${last%.}
+      case "$last" in
+        ""|rewrite|stop|name|suffix|regex|answer) printf 'unknown|\n' ;;
+        *) printf 'name|%s\n' "$last" ;;
+      esac
+      return 0
+    fi
+    if [[ "$line" =~ ^[[:space:]]*template([[:space:]]|$) ]] && [[ "$line" =~ $pat ]]; then
+      seen=1
+      if [[ "$line" == *"}"* ]]; then in_tpl=0; else in_tpl=1; fi
+      # The documented form puts `answer` on its own line; accept the one-line
+      # form too by stripping the closing brace before taking the last token.
+      if [[ "$line" =~ (^|[^[:alnum:]_])answer([^[:alnum:]_]|$) ]]; then
+        last=${line%\}*}
+        last=${last##*[[:space:]]}
+        last=${last%\"}
+        [[ -n "$target" ]] || target="ip|$last"
+      fi
+      continue
+    fi
+  done <<<"$COREFILE"
+  if (( seen )); then
+    if [[ -n "$target" ]]; then printf '%s\n' "$target"; else printf 'unknown|\n'; fi
+  fi
+  return 0
+}
+
 if [[ "$COREDNS_PRESENT" == "1" && -n "$COREFILE" ]]; then
   DNS_REWRITES=false
-  while read -r suffix owner; do
-    [[ -n "$suffix" ]] || continue
-    pat=""
+  for suffix in amazonaws.com googleapis.com run.app cloudfunctions.net; do
     case "$suffix" in
-      amazonaws.com)      pat='amazonaws\\?[.]com' ;;
-      googleapis.com)     pat='googleapis\\?[.]com' ;;
-      run.app)            pat='run\\?[.]app' ;;
-      cloudfunctions.net) pat='cloudfunctions\\?[.]net' ;;
+      amazonaws.com)      pat='amazonaws\\?[.]com';      owner=aws ;;
+      googleapis.com)     pat='googleapis\\?[.]com';     owner=gcp ;;
+      run.app)            pat='run\\?[.]app';            owner=gcp ;;
+      cloudfunctions.net) pat='cloudfunctions\\?[.]net'; owner=gcp ;;
     esac
-    # One line that names the suffix AND a rewrite/template/gateway target. This
-    # is a heuristic on purpose: the Corefile is free-form, and the documented
-    # fragment is one `rewrite ... <suffix-regex> istio-ingressgateway...` line
-    # per suffix (dns.yaml).
-    if printf '%s\n' "$COREFILE" | grep -E "$pat" | grep -Eiq 'rewrite|template|istio-ingressgateway'; then
-      DNS_REWRITES=true
-      DNS_SUFFIXES=$(list_add "$DNS_SUFFIXES" "$suffix")
-      if [[ "$GATEWAY_READY" != "1" ]]; then
-        warn_add "CoreDNS rewrites $suffix to the JaisCloud gateway, but no ready gateway serves it (istio-system/istio-ingressgateway + Gateway/jaiscloud): clients that resolve $suffix hit a dead route; remove the $suffix rewrite or (re)install the mesh — see deploy/k8s/istio/dns.yaml"
-        DNS_STALE=1
-      else
-        case "$owner" in
-          aws) owner_state=$AWS_STATE ;;
-          gcp) owner_state=$GCP_STATE ;;
-        esac
-        case "$owner_state" in
-          parked|absent)
-            warn_add "CoreDNS rewrites $suffix to the JaisCloud gateway, but the $owner substrate is $owner_state: clients that resolve $suffix reach a parked/absent backend and time out (or get a fast 503); remove the $suffix rewrite for now (deploy/k8s/istio/dns.yaml) and re-add it when you resume $owner"
-            DNS_STALE=1 ;;
-        esac
-      fi
-    fi
-  done <<'EOF'
-amazonaws.com aws
-googleapis.com gcp
-run.app gcp
-cloudfunctions.net gcp
-EOF
+    raw=$(dns_rewrite_target "$pat")
+    [[ -n "$raw" ]] || continue
+    DNS_REWRITES=true
+    DNS_SUFFIXES=$(list_add "$DNS_SUFFIXES" "$suffix")
+    kind=${raw%%|*}
+    value=${raw#*|}
+    target=unknown
+    case "$kind" in
+      name)
+        case "$value" in
+          *.svc.cluster.local)
+            rest=${value%.svc.cluster.local}
+            tname=${rest%%.*}
+            tns=${rest#*.}
+            if [[ "$tns" == "istio-system" && "$tname" == "istio-ingressgateway" ]]; then
+              target=gateway
+            else
+              target="service:$tns/$tname"
+            fi ;;
+        esac ;;
+      ip)
+        hit=$(svc_by_cluster_ip "$value")
+        if [[ -n "$hit" ]]; then
+          target="service:$hit"
+          [[ "$hit" == "istio-system/istio-ingressgateway" ]] && target=gateway
+        fi ;;
+    esac
+
+    case "$target" in
+      gateway)
+        if [[ "$GATEWAY_READY" != "1" ]]; then
+          warn_add "CoreDNS rewrites $suffix to the JaisCloud gateway, but no ready gateway serves it (istio-system/istio-ingressgateway + Gateway/jaiscloud): clients that resolve $suffix hit a dead route; remove the $suffix rewrite or (re)install the mesh — see deploy/k8s/istio/dns.yaml"
+          DNS_STALE=1
+        else
+          case "$owner" in
+            aws) owner_state=$AWS_STATE ;;
+            gcp) owner_state=$GCP_STATE ;;
+          esac
+          case "$owner_state" in
+            parked|absent)
+              warn_add "CoreDNS rewrites $suffix to the JaisCloud gateway, but the $owner substrate is $owner_state: clients that resolve $suffix reach a parked/absent backend and time out (or get a fast 503); remove the $suffix rewrite for now (deploy/k8s/istio/dns.yaml) and re-add it when you resume $owner"
+              DNS_STALE=1 ;;
+          esac
+        fi ;;
+      service:*)
+        rest=${target#service:}
+        tns=${rest%%/*}
+        tname=${rest#*/}
+        if [[ "$(svc_present "$tns" "$tname")" != "1" ]]; then
+          warn_add "CoreDNS rewrites $suffix to service $tns/$tname, which does not exist: clients that resolve $suffix reach nothing; remove the $suffix rewrite or recreate $tns/$tname — see deploy/k8s/istio/dns.yaml"
+          DNS_STALE=1
+        elif [[ "$(svc_ready "$tns" "$tname")" != "1" ]]; then
+          warn_add "CoreDNS rewrites $suffix to service $tns/$tname, which has no ready endpoints (parked or scaled to 0): clients that resolve $suffix reach a dead backend; remove the $suffix rewrite until $tns/$tname is ready again — see deploy/k8s/istio/dns.yaml"
+          DNS_STALE=1
+        fi ;;
+    esac
+
+    DNS_TARGETS_JSON+="${DNS_TARGETS_JSON:+, }\"$suffix\": \"$(json_escape "$target")\""
+    DNS_TARGET_LINES+="$suffix -> $target"$'\n'
+    case " $DNS_TARGETS_SEEN " in
+      *" $target "*) ;;
+      *) DNS_TARGETS_SEEN="${DNS_TARGETS_SEEN:+$DNS_TARGETS_SEEN }$target" ;;
+    esac
+  done
+  case "$DNS_TARGETS_SEEN" in
+    "") ;;
+    *" "*) DNS_TARGET="mixed" ;;
+    *) DNS_TARGET="$DNS_TARGETS_SEEN" ;;
+  esac
 fi
 
-# ── CA copies: a ConfigMap with no issuing mesh is stale ────────────────────
+# ── CA copies: only a mesh-labelled copy can be a stale JaisCloud CA ────────
 # Park keeps the CA (a resumed substrate and its managed workloads still trust
-# the front door), so a CA copy is only stale when the issuer itself is gone.
+# the front door), so a copy is only stale when the issuer it names is gone.
+# certs/gen.sh labels what it creates (jaiscloud.io/issuer=mesh) and deploy.sh
+# labels a copy it restores; anything else in the namespace is a host-issued CA
+# the probe must not judge.
+ca_issuer_kind() { # ca_issuer_kind <namespace> <present 1|0> — mesh|external|absent
+  local label
+  [[ "$2" == "1" ]] || { echo absent; return; }
+  label=$(field "$1" configmap jaiscloud-ca-cert '{{index .metadata.labels "jaiscloud.io/issuer"}}')
+  [[ "$label" == "mesh" ]] && echo mesh || echo external
+}
 CA_AWS=$(probe_ok kc -n "$NS_AWS" get configmap jaiscloud-ca-cert)
 CA_GCP=$(probe_ok kc -n "$NS_GCP" get configmap jaiscloud-ca-cert)
 CA_ISSUER=0
 [[ "$MESH_SECRET" == "1" || "$MESH_GW" == "1" ]] && CA_ISSUER=1
+CA_ISSUER_AWS=$(ca_issuer_kind "$NS_AWS" "$CA_AWS")
+CA_ISSUER_GCP=$(ca_issuer_kind "$NS_GCP" "$CA_GCP")
 if [[ "$CA_ISSUER" != "1" ]]; then
-  [[ "$CA_AWS" == "1" ]] && \
-    warn_add "the CA ConfigMap jaiscloud-ca-cert in $NS_AWS has no issuing mesh (istio-system/jaiscloud-wildcard is missing): stale CA — re-run deploy/k8s/istio/certs/gen.sh or remove it"
-  [[ "$CA_GCP" == "1" ]] && \
-    warn_add "the CA ConfigMap jaiscloud-ca-cert in $NS_GCP has no issuing mesh (istio-system/jaiscloud-wildcard is missing): stale CA — re-run deploy/k8s/istio/certs/gen.sh or remove it"
+  [[ "$CA_ISSUER_AWS" == "mesh" ]] && \
+    warn_add "the CA ConfigMap jaiscloud-ca-cert in $NS_AWS is labelled jaiscloud.io/issuer=mesh, but no issuing mesh exists (istio-system/jaiscloud-wildcard is missing): stale CA — re-run deploy/k8s/istio/certs/gen.sh or remove it"
+  [[ "$CA_ISSUER_GCP" == "mesh" ]] && \
+    warn_add "the CA ConfigMap jaiscloud-ca-cert in $NS_GCP is labelled jaiscloud.io/issuer=mesh, but no issuing mesh exists (istio-system/jaiscloud-wildcard is missing): stale CA — re-run deploy/k8s/istio/certs/gen.sh or remove it"
 fi
 
 [[ "$LEGACY_PENDING" == "1" ]] && \
@@ -946,8 +1229,11 @@ SKEW_GCP=$(migration_skew_warning "$NS_GCP" jaiscloud-gcp)
   warn_add "istio-system exists but Gateway/jaiscloud is missing; run the mesh scenario"
 [[ "$MESH_ISTIOD" == "1" ]] && \
   warn_add "istiod is already installed; do not run \`istioctl install --set profile=minimal\` (it can replace the existing IOP); use the gateway-only overlay in deploy/k8s/istio/istiooperator-gateway-only.yaml"
-[[ "$STORE_DEPLOY" == "0" && -n "$STORE_PVC" ]] && \
-  warn_add "pvc postgres-pvc exists in $NS_DATA but deployment/postgres is missing"
+[[ "$STORE_PRESENT" == "0" && -n "$STORE_PVC" ]] && \
+  warn_add "pvc postgres-pvc exists in $NS_DATA but no bundled store workload (deployment/postgres or statefulset/postgres) is present"
+if [[ -n "$STORE_WORKLOAD_ENV" && "$STORE_WL_PRESENT" != "1" ]]; then
+  warn_add "STORE_WORKLOAD=$STORE_WORKLOAD_ENV does not exist in $NS_DATA: the database probe cannot run (store.workload=$STORE_WORKLOAD, store.databases=null)"
+fi
 for leak in ${LEAKS+"${LEAKS[@]}"}; do warn_add "$leak"; done
 if [[ "$LEGACY_NAMESPACE_ADMIN" == "1" && "$NAMESPACE_ADMIN_PRESENT" == "0" ]]; then
   warn_add "legacy combined clusterrolebinding jaiscloud-namespace-admin is bound to both substrates; re-run an install path (deploy/deploy.sh) to replace it with jaiscloud-namespace-admin-aws / jaiscloud-namespace-admin-gcp"
@@ -1091,12 +1377,12 @@ if [[ "$JSON" == "1" ]]; then
     "$(b "$LEGACY_PG_MARKED")" "$(b "$LEGACY_GCP_MARKED")" "$(b "$LEGACY_CANDIDATE")" \
     "$(b "$LEGACY_PENDING")" "$(b "$LEGACY_PG_RETAINED")" "$(b "$LEGACY_GCP_RETAINED")"
   printf '  "store": {\n'
-  printf '    "mode": "%s", "present": %s, "ready": %s,\n' \
-    "$STORE_MODE" "$(b "$STORE_PRESENT")" "$(b "$STORE_READY")"
+  printf '    "mode": "%s", "present": %s, "ready": %s, "workload": "%s",\n' \
+    "$STORE_MODE" "$(b "$STORE_PRESENT")" "$(b "$STORE_READY")" "$(json_escape "$STORE_WORKLOAD")"
   printf '    "pvc": {"name": "postgres-pvc", "namespace": "%s", "status": "%s", "capacity": "%s"},\n' \
     "$NS_DATA" "$(json_escape "$STORE_PVC")" "$(json_escape "$(pvc_capacity "$NS_DATA" postgres-pvc)")"
-  printf '    "databases": {"jaiscloud": %s, "jaiscloud_gcp": %s}, "databasesProbe": "%s"\n' \
-    "$(tri "$DB_AWS")" "$(tri "$DB_GCP")" "$DATABASES_PROBE"
+  printf '    "databases": {"jaiscloud": %s, "jaiscloud_gcp": %s}, "databasesProbe": "%s", "probeReason": "%s"\n' \
+    "$(tri "$DB_AWS")" "$(tri "$DB_GCP")" "$DATABASES_PROBE" "$STORE_PROBE_REASON"
   printf '  },\n'
   printf '  "substrates": {\n'
   printf '    "aws": {"present": %s, "ready": %s, "state": "%s", "replicas": %s, "image": "%s", "imageID": "%s", "imagePullPolicy": "%s", "privateRegistry": %s},\n' \
@@ -1125,10 +1411,11 @@ if [[ "$JSON" == "1" ]]; then
   printf '  "mesh": {"namespace": %s, "istiod": %s, "existingInstall": %s, "ingressGateway": %s, "tlsSecret": %s, "crds": %s, "gateway": %s, "virtualServices": %s, "destinationRules": %s, "address": "%s"},\n' \
     "$(b "$MESH_NS")" "$(b "$MESH_ISTIOD")" "$(b "$MESH_ISTIOD")" "$(b "$MESH_GATEWAY")" "$(b "$MESH_SECRET")" "$(b "$MESH_CRD")" \
     "$(b "$MESH_GW")" "${MESH_VS:-0}" "${MESH_DR:-0}" "$(json_escape "$MESH_ADDR")"
-  printf '  "dns": {"rewrites": %s, "suffixes": %s, "stale": %s},\n' \
-    "$(tri "$DNS_REWRITES")" "$(csv_json_array "$DNS_SUFFIXES")" "$(b "$DNS_STALE")"
-  printf '  "ca": {"aws": %s, "gcp": %s, "issuerPresent": %s},\n' \
-    "$(b "$CA_AWS")" "$(b "$CA_GCP")" "$(b "$CA_ISSUER")"
+  printf '  "dns": {"rewrites": %s, "suffixes": %s, "stale": %s, "target": "%s", "targets": {%s}},\n' \
+    "$(tri "$DNS_REWRITES")" "$(csv_json_array "$DNS_SUFFIXES")" "$(b "$DNS_STALE")" \
+    "$(json_escape "$DNS_TARGET")" "$DNS_TARGETS_JSON"
+  printf '  "ca": {"aws": %s, "gcp": %s, "issuerPresent": %s, "issuers": {"aws": "%s", "gcp": "%s"}},\n' \
+    "$(b "$CA_AWS")" "$(b "$CA_GCP")" "$(b "$CA_ISSUER")" "$CA_ISSUER_AWS" "$CA_ISSUER_GCP"
   printf '  "rbac": {\n'
   printf '    "namespaceAdmin": %s, "admissionPolicy": %s, "serverVersion": "%s", "source": "auth",\n' \
     "$(b "$NAMESPACE_ADMIN_EFFECTIVE")" "$(b "$VAP_PRESENT")" "$(json_escape "$SERVER_VERSION")"
@@ -1192,14 +1479,15 @@ else
     ok_ "no legacy GCP workload in $NS_AWS"
   fi
   if [[ "$STORE_MODE" == "external" ]]; then
-    ok_ "store: mode=external (your server; no postgres Deployment, database probes skipped)"
+    ok_ "store: mode=external (your server; no bundled workload, database probes skipped — probeReason=external)"
     ok_ "databases: jaiscloud=$(tri_word "$DB_AWS") jaiscloud_gcp=$(tri_word "$DB_GCP") databases-probe=$DATABASES_PROBE"
     say "  note    : store.ready=false and databases=unknown mean 'not probeable', not 'missing'"
   elif [[ "$STORE_PRESENT" == "1" ]]; then
-    ok_ "store: mode=bundled deployment/postgres ready=$([[ "$STORE_READY" == "1" ]] && echo yes || echo no), pvc=${STORE_PVC:-?} databases-probe=$DATABASES_PROBE"
+    ok_ "store: mode=bundled ${STORE_WORKLOAD:-?} ready=$([[ "$STORE_READY" == "1" ]] && echo yes || echo no), pvc=${STORE_PVC:-–} databases-probe=$DATABASES_PROBE${STORE_PROBE_REASON:+ ($STORE_PROBE_REASON)}"
     ok_ "databases: jaiscloud=$(tri_word "$DB_AWS") jaiscloud_gcp=$(tri_word "$DB_GCP")"
   else
-    miss_ "store: mode=bundled $NS_DATA/deployment/postgres"
+    miss_ "store: mode=bundled $NS_DATA/${STORE_WORKLOAD:-deployment/postgres or statefulset/postgres} (probeReason=$STORE_PROBE_REASON)"
+    [[ -n "$STORE_WORKLOAD_ENV" ]] && say "  note    : STORE_WORKLOAD=$STORE_WORKLOAD_ENV does not exist in $NS_DATA"
   fi
   head_ "substrates"
   if [[ "$AWS_PRESENT" == "1" ]]; then
@@ -1249,10 +1537,15 @@ else
   elif [[ "$DNS_REWRITES" == "false" ]]; then
     say "  rewrites: none of amazonaws.com/googleapis.com/run.app/cloudfunctions.net (clients need --resolve or hostAliases)"
   else
-    say "  rewrites: ${DNS_SUFFIXES} -> istio-ingressgateway  stale=$([[ "$DNS_STALE" == "1" ]] && echo yes || echo no)"
+    say "  rewrites: target=${DNS_TARGET:-none}  stale=$([[ "$DNS_STALE" == "1" ]] && echo yes || echo no)"
+    while IFS= read -r line; do
+      [[ -n "$line" ]] && say "            $line"
+    done <<<"$DNS_TARGET_LINES"
+    say "            (target: gateway = istio-ingressgateway; service:<ns>/<name> = a Service's ready endpoints; unknown = not diagnosed)"
   fi
   head_ "ca (TLS trust copies)"
-  say "  configmaps/jaiscloud-ca-cert: aws=$(yn "$CA_AWS") gcp=$(yn "$CA_GCP")  issuer=$([[ "$CA_ISSUER" == "1" ]] && echo 'istio-system/jaiscloud-wildcard' || echo absent)"
+  say "  configmaps/jaiscloud-ca-cert: aws=$(yn "$CA_AWS") issuer=$CA_ISSUER_AWS   gcp=$(yn "$CA_GCP") issuer=$CA_ISSUER_GCP"
+  say "  mesh issuer istio-system/jaiscloud-wildcard: $(yn "$CA_ISSUER")   (only issuer=mesh copies are judged stale; unlabelled = host-issued)"
   head_ "mesh (optional)"
   if [[ "$MESH_NS" == "1" ]]; then
     ok_ "istio-system: istiod=$(yn "$MESH_ISTIOD") gateway=$(yn "$MESH_GATEWAY") route-resource=$(yn "$MESH_GW") tls-secret=$(yn "$MESH_SECRET") virtualServices=${MESH_VS} destinationRules=${MESH_DR}${MESH_ADDR:+ address=$MESH_ADDR}"

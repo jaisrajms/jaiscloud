@@ -28,9 +28,12 @@
 #
 #   store   database probes are tri-state: true/false from psql on a ready
 #           bundled store; null (unknown, not missing) for an external store, a
-#           Deployment that is not ready, or a failed exec — with
-#           store.databasesProbe = exec|unavailable. A null never produces a
-#           "create the database" recommendation.
+#           workload that is not ready, or a failed exec — with
+#           store.databasesProbe = exec|unavailable and store.probeReason saying
+#           why. The bundled workload is resolved (STORE_WORKLOAD, then
+#           deployment/postgres, then statefulset/postgres), so a StatefulSet
+#           store is probed too. A null never produces a "create the database"
+#           recommendation.
 #
 #   rbac    effective permissions come from `kubectl auth can-i --as=<the
 #           Deployment's ServiceAccount>` (yes/no/unknown), and the isolation
@@ -38,12 +41,23 @@
 #           distinct outcomes (warn and fail --strict only for a real gap or a
 #           policy that enforces nothing for the running identity).
 #
-#   dns/ca  a CoreDNS rewrite for a parked/absent substrate (or with no ready
-#           gateway) is stale and warns; a CA ConfigMap with no issuing mesh is a
-#           stale CA and warns. Both are read-only probes.
+#   dns/ca  a CoreDNS rewrite is judged by the target it names: a gateway target
+#           is stale with no ready mesh (or with its substrate parked/absent), a
+#           service target only when the Service is missing or has no ready
+#           endpoints, and an unknown target is reported but never called stale.
+#           A template answering a pinned Service ClusterIP therefore passes
+#           without a mesh. A CA ConfigMap is stale only when it is labelled
+#           jaiscloud.io/issuer=mesh (what certs/gen.sh writes) and the issuer is
+#           gone; an unlabelled copy is host-issued and never warned about. All
+#           probes are read-only.
+#
+#   timeout every case runs with PREFLIGHT_TIMEOUT_IMPL=watchdog by default, so
+#           the bash watchdog (the macOS path: no GNU `timeout`/`gtimeout`) is
+#           exercised throughout; one case also covers the `auto` path.
 #
 # The fixture is one fake cluster written as `kind|namespace|name|key=value;...`
-# lines; the fake kubectl answers the read-only probes the preflight makes. Extra
+# lines; the fake kubectl answers the read-only probes the preflight makes
+# (Deployments, StatefulSets, Services, Endpoints, ConfigMaps, Secrets, …). Extra
 # fixture files: authz.txt (`verb resource ns sa result`, `*` wildcards; an
 # unlisted query answers yes), corefile.txt (the kube-system/coredns Corefile),
 # and psql-fail (a broken store pod).
@@ -111,6 +125,14 @@ data_of() { # data_of <kind> <namespace> <name>
      }' "$resources"
 }
 
+list_of() { # list_of <kind> <namespace> — one "name<TAB>data" line per record
+  awk -F'|' -v k="$1" -v n="$2" '$1==k && ($2==n || $2=="-") {
+    out=""
+    for (i=4; i<=NF; i++) out = out (i>4 ? "|" : "") $i
+    print $3 "\t" out
+  }' "$resources"
+}
+
 field_val() { # field_val <data> <key> — the value of key= in a ;-separated record
   local data=$1 key=$2 entry
   local oldifs=$IFS
@@ -139,7 +161,7 @@ field_has() { # field_has <data> <key> — true when the key exists (even when e
 
 # answer_template <template> <data> — the value the preflight's go-template or
 # jsonpath would produce for this record. Only the forms the preflight uses.
-answer_template() {
+answer_template() { # answer_template <template> <data> <kind> <namespace>
   local template=$1 data=$2 key from rest obj k refs oldifs
   case "$template" in
     *'.metadata.labels'*)
@@ -188,6 +210,16 @@ answer_template() {
       key=$(printf '%s' "$template" | sed -n 's/.*@\.name=="\([^"]*\)".*/\1/p')
       field_val "$data" "env.$key" ;;
     *'.spec.replicas'*)    field_val "$data" "replicas" ;;
+    *'.status.readyReplicas'*) field_val "$data" "ready" ;;
+    *'.items'*)
+      # A list query (only the preflight's Service-by-clusterIP lookup uses it).
+      list_of "$3" "$4" | while IFS=$'\t' read -r _n _d; do
+        [[ -n "$_n" ]] && printf '%s %s\n' "$_n" "$(field_val "$_d" "clusterIP")"
+      done ;;
+    *'.spec.clusterIP'*)   field_val "$data" "clusterIP" ;;
+    *'.subsets'*)
+      # Endpoints readiness: one address when the fixture says ready=1.
+      [[ "$(field_val "$data" "ready")" == "1" ]] && printf '10.0.0.1\n' ;;
     *'containers[0].image'*) field_val "$data" "image" ;;
     *) : ;;
   esac
@@ -288,18 +320,24 @@ case "$kind" in
   */?*) name="${kind#*/}"; kind="${kind%%/*}" ;;
 esac
 case "$kind" in
-  sa) kind=serviceaccount ;;
-  svc) kind=service ;;
-  pvc) kind=persistentvolumeclaim ;;
-  cm) kind=configmap ;;
-  ns) kind=namespace ;;
-  deploy) kind=deployment ;;
-  sts) kind=statefulset ;;
+  sa|serviceaccount) kind=serviceaccount ;;
+  svc|service|services) kind=service ;;
+  pvc|persistentvolumeclaims) kind=persistentvolumeclaim ;;
+  cm|configmaps) kind=configmap ;;
+  ns|namespaces) kind=namespace ;;
+  deploy|deployment|deployments) kind=deployment ;;
+  sts|statefulset|statefulsets) kind=statefulset ;;
+  endpoints|endpoint) kind=endpoints ;;
 esac
+if [[ "$template" == *'.items'* && -z "$name" ]]; then
+  # A list query (the preflight's Service-by-clusterIP lookup).
+  answer_template "$template" "" "$kind" "$ns"
+  exit 0
+fi
 [[ -n "$name" ]] || exit 0
 present "$kind" "$ns" "$name" || exit 1
 data=$(data_of "$kind" "$ns" "$name")
-printf '%s' "$(answer_template "$template" "$data")"
+printf '%s' "$(answer_template "$template" "$data" "$kind" "$ns")"
 exit 0
 SHIM
 chmod +x "$TMP/bin/kubectl"
@@ -349,7 +387,11 @@ new_fixture() { # new_fixture <name> — prints the fixture directory
 run_preflight() { # run_preflight <fixture> <args...>; sets RUN_STATUS and RUN_OUT
   local fixture=$1
   shift
+  # The macOS path by default: PREFLIGHT_TIMEOUT_IMPL=watchdog exercises the bash
+  # watchdog instead of GNU `timeout`, so every case runs without coreutils.
   RUN_OUT=$(PATH="$TMP/bin:$PATH" FIXTURE="$fixture" KUBE_CONTEXT= \
+    PREFLIGHT_TIMEOUT_IMPL="${PREFLIGHT_TIMEOUT_IMPL:-watchdog}" \
+    STORE_WORKLOAD="${STORE_WORKLOAD:-}" \
     NS_AWS=jaiscloud NS_GCP=jaiscloud-gcp NS_DATA=jaiscloud-data \
     "$PREFLIGHT" "$@" 2>&1)
   RUN_STATUS=$?
@@ -663,6 +705,8 @@ expect_status "dns-stale" 0
 expect_json "dns-stale" '.substrates.aws.state' "parked"
 expect_json "dns-stale" '.dns.rewrites' true
 expect_json "dns-stale" '(.dns.suffixes | join(","))' 'amazonaws.com'
+expect_json "dns-stale" '.dns.target' "gateway"
+expect_json "dns-stale" '.dns.targets["amazonaws.com"]' "gateway"
 expect_json "dns-stale" '.dns.stale' true
 expect_out "dns-stale" "CoreDNS rewrites amazonaws.com"
 expect_out "dns-stale" "parked/absent backend"
@@ -683,30 +727,140 @@ EOF
 run_preflight "$F" --json --strict --substrate aws
 expect_json "dns-no-gateway" '.dns.rewrites' true
 expect_json "dns-no-gateway" '(.dns.suffixes | join(","))' 'googleapis.com'
+expect_json "dns-no-gateway" '.dns.target' "gateway"
 expect_json "dns-no-gateway" '.dns.stale' true
 expect_out "dns-no-gateway" "no ready gateway serves it"
 
-# ── 15. a CA ConfigMap with no issuing mesh is stale ───────────────────────
-head_ "15. a CA copy without its issuer is a stale CA"
-F=$(new_fixture "ca-stale")
+# ── 14c. a template pinned to a ready Service needs no mesh ────────────────
+head_ "14c. a CoreDNS template answering a ready Service's ClusterIP is not stale"
+F=$(new_fixture "dns-template-ready")
+{
+  base_fixture
+  echo "configmap|kube-system|coredns|"
+  echo "service|jaiscloud|jaiscloud|clusterIP=10.43.0.10"
+  echo "endpoints|jaiscloud|jaiscloud|ready=1"
+} > "$F/resources.txt"
+cat > "$F/corefile.txt" <<'EOF'
+.:53 {
+    errors
+    template IN A (.*\.)?googleapis\.com\.?$ {
+        answer "{{ .Name }}" 10.43.0.10
+    }
+    kubernetes cluster.local in-addr.arpa ip6.arpa
+}
+EOF
+run_preflight "$F" --json --strict --substrate aws
+expect_status "dns-template-ready" 0
+expect_json "dns-template-ready" '.dns.rewrites' true
+expect_json "dns-template-ready" '.dns.target' "service:jaiscloud/jaiscloud"
+expect_json "dns-template-ready" '.dns.targets["googleapis.com"]' "service:jaiscloud/jaiscloud"
+expect_json "dns-template-ready" '.dns.stale' false
+expect_no_out "dns-template-ready" "no ready gateway"
+expect_no_out "dns-template-ready" "CoreDNS rewrites googleapis.com"
+
+# ── 14d. the same template with no ready endpoints is stale ────────────────
+head_ "14d. a template whose Service has no ready endpoints is stale"
+F=$(new_fixture "dns-template-parked")
+{
+  base_fixture
+  echo "configmap|kube-system|coredns|"
+  echo "service|jaiscloud|jaiscloud|clusterIP=10.43.0.10"
+  echo "endpoints|jaiscloud|jaiscloud|ready=0"
+} > "$F/resources.txt"
+cat > "$F/corefile.txt" <<'EOF'
+.:53 {
+    errors
+    template IN A (.*\.)?googleapis\.com\.?$ {
+        answer "{{ .Name }}" 10.43.0.10
+    }
+    kubernetes cluster.local in-addr.arpa ip6.arpa
+}
+EOF
+run_preflight "$F" --json --strict --substrate aws
+expect_json "dns-template-parked" '.dns.target' "service:jaiscloud/jaiscloud"
+expect_json "dns-template-parked" '.dns.stale' true
+expect_out "dns-template-parked" "service jaiscloud/jaiscloud, which has no ready endpoints"
+expect_out "dns-template-parked" "remove the googleapis.com rewrite"
+
+# ── 14e. a rewrite to a Service that no longer exists is stale ────────────
+head_ "14e. a rewrite naming a deleted Service is stale"
+F=$(new_fixture "dns-service-missing")
+{
+  base_fixture
+  echo "configmap|kube-system|coredns|"
+} > "$F/resources.txt"
+cat > "$F/corefile.txt" <<'EOF'
+.:53 {
+    rewrite stop name regex (.*\.)?googleapis\.com\.?$ jaiscloud-gcp.jaiscloud-gcp.svc.cluster.local.
+    kubernetes cluster.local in-addr.arpa ip6.arpa
+}
+EOF
+run_preflight "$F" --json --strict --substrate aws
+expect_json "dns-service-missing" '.dns.target' "service:jaiscloud-gcp/jaiscloud-gcp"
+expect_json "dns-service-missing" '.dns.stale' true
+expect_out "dns-service-missing" "which does not exist"
+
+# ── 14f. an address that matches no known Service is unknown, not stale ────
+head_ "14f. a template targeting an unknown address is reported, not warned"
+F=$(new_fixture "dns-unknown-target")
+{
+  base_fixture
+  echo "configmap|kube-system|coredns|"
+} > "$F/resources.txt"
+cat > "$F/corefile.txt" <<'EOF'
+.:53 {
+    template IN A (.*\.)?googleapis\.com\.?$ {
+        answer "{{ .Name }}" 203.0.113.10
+    }
+    kubernetes cluster.local in-addr.arpa ip6.arpa
+}
+EOF
+run_preflight "$F" --json --strict --substrate aws
+expect_json "dns-unknown-target" '.dns.rewrites' true
+expect_json "dns-unknown-target" '.dns.target' "unknown"
+expect_json "dns-unknown-target" '.dns.stale' false
+expect_no_out "dns-unknown-target" "CoreDNS rewrites googleapis.com"
+run_preflight "$F" --substrate aws
+expect_out "dns-unknown-target" "target=unknown"
+
+# ── 15. only a mesh-labelled CA copy is judged stale ───────────────────────
+head_ "15. an unlabelled CA copy is host-issued: issuer=external, never stale"
+F=$(new_fixture "ca-external")
 { base_fixture; echo "configmap|jaiscloud|jaiscloud-ca-cert|data.ca.crt=dev-ca"; } > "$F/resources.txt"
+run_preflight "$F" --json --strict --substrate aws
+expect_status "ca-external" 0
+expect_json "ca-external" '.ca.aws' true
+expect_json "ca-external" '.ca.gcp' false
+expect_json "ca-external" '.ca.issuerPresent' false
+expect_json "ca-external" '.ca.issuers.aws' "external"
+expect_json "ca-external" '.ca.issuers.gcp' "absent"
+expect_no_out "ca-external" "stale CA"
+expect_no_out "ca-external" "has no issuing mesh"
+
+head_ "15a. a mesh-labelled CA copy without its issuer is stale"
+F=$(new_fixture "ca-stale")
+{
+  base_fixture
+  echo "configmap|jaiscloud|jaiscloud-ca-cert|data.ca.crt=dev-ca;label.jaiscloud.io/issuer=mesh"
+} > "$F/resources.txt"
 run_preflight "$F" --json --strict --substrate aws
 expect_status "ca-stale" 0
 expect_json "ca-stale" '.ca.aws' true
-expect_json "ca-stale" '.ca.gcp' false
 expect_json "ca-stale" '.ca.issuerPresent' false
-expect_out "ca-stale" "has no issuing mesh"
+expect_json "ca-stale" '.ca.issuers.aws' "mesh"
+expect_out "ca-stale" "labelled jaiscloud.io/issuer=mesh"
 expect_out "ca-stale" "certs/gen.sh"
 
 head_ "15b. a CA copy with the issuer present is not stale"
 F=$(new_fixture "ca-ok")
 {
   base_fixture
-  echo "configmap|jaiscloud|jaiscloud-ca-cert|data.ca.crt=dev-ca"
+  echo "configmap|jaiscloud|jaiscloud-ca-cert|data.ca.crt=dev-ca;label.jaiscloud.io/issuer=mesh"
   echo "secret|istio-system|jaiscloud-wildcard|"
 } > "$F/resources.txt"
 run_preflight "$F" --json --strict --substrate aws
 expect_json "ca-ok" '.ca.issuerPresent' true
+expect_json "ca-ok" '.ca.issuers.aws' "mesh"
 expect_no_out "ca-ok" "stale CA"
 
 # ── 16. no CoreDNS ConfigMap: rewrite state is unknown, not "none" ─────────
@@ -719,6 +873,69 @@ expect_json "dns-unknown" '(.dns.suffixes | length)' 0
 expect_json "dns-unknown" '.dns.stale' false
 run_preflight "$F" --substrate aws
 expect_out "dns-unknown" "rewrites: unknown"
+
+# ── 17. the store workload is resolved, not assumed ────────────────────────
+head_ "17. a StatefulSet store (the common managed shape) is probed"
+F=$(new_fixture "store-sts")
+{
+  base_fixture | grep -v '^deployment|jaiscloud-data|postgres|' | grep -v '^persistentvolumeclaim|jaiscloud-data|postgres-pvc|'
+  echo "statefulset|jaiscloud-data|postgres|replicas=1;ready=1;label.app=postgres;label.jaiscloud.io/managed-by=jaiscloud"
+} > "$F/resources.txt"
+run_preflight "$F" --json --strict --substrate aws
+expect_status "store-sts" 0
+expect_json "store-sts" '.store.workload' "statefulset/postgres"
+expect_json "store-sts" '.store.present' true
+expect_json "store-sts" '.store.ready' true
+expect_json "store-sts" '.store.databases.jaiscloud' true
+expect_json "store-sts" '.store.databases.jaiscloud_gcp' false
+expect_json "store-sts" '.store.databasesProbe' "exec"
+expect_json "store-sts" '.store.probeReason' "ok"
+run_preflight "$F" --substrate aws
+expect_out "store-sts" "mode=bundled statefulset/postgres"
+
+head_ "17b. STORE_WORKLOAD names the workload explicitly"
+F=$(new_fixture "store-workload")
+{
+  base_fixture | grep -v '^deployment|jaiscloud-data|postgres|'
+  echo "statefulset|jaiscloud-data|pg-main|replicas=1;ready=1;label.jaiscloud.io/managed-by=jaiscloud"
+} > "$F/resources.txt"
+STORE_WORKLOAD=statefulset/pg-main run_preflight "$F" --json --strict --substrate aws
+expect_json "store-workload" '.store.workload' "statefulset/pg-main"
+expect_json "store-workload" '.store.databases.jaiscloud' true
+expect_json "store-workload" '.store.databasesProbe' "exec"
+
+head_ "17c. a STORE_WORKLOAD that does not exist stays bundled and unprobeable"
+F=$(new_fixture "store-workload-missing")
+base_fixture > "$F/resources.txt"
+STORE_WORKLOAD=statefulset/absent run_preflight "$F" --json --strict --substrate aws
+expect_json "store-workload-missing" '.store.mode' "bundled"
+expect_json "store-workload-missing" '.store.workload' "statefulset/absent"
+expect_json "store-workload-missing" '.store.present' false
+expect_json "store-workload-missing" '.store.databases.jaiscloud' null
+expect_json "store-workload-missing" '.store.databasesProbe' "unavailable"
+expect_json "store-workload-missing" '.store.probeReason' "no-workload"
+expect_out "store-workload-missing" "STORE_WORKLOAD=statefulset/absent does not exist in jaiscloud-data"
+
+head_ "17d. an unready store workload reports probeReason=not-ready"
+F=$(new_fixture "store-not-ready")
+{
+  base_fixture | grep -v '^deployment|jaiscloud-data|postgres|'
+  echo "deployment|jaiscloud-data|postgres|replicas=1;available=0;label.jaiscloud.io/managed-by=jaiscloud"
+} > "$F/resources.txt"
+run_preflight "$F" --json --strict --substrate aws
+expect_json "store-not-ready" '.store.present' true
+expect_json "store-not-ready" '.store.ready' false
+expect_json "store-not-ready" '.store.databases.jaiscloud' null
+expect_json "store-not-ready" '.store.probeReason' "not-ready"
+
+# ── 18. the GNU-timeout path answers too (auto) ────────────────────────────
+head_ "18. PREFLIGHT_TIMEOUT_IMPL=auto (timeout/gtimeout) still probes"
+F=$(new_fixture "store-bundled-auto")
+base_fixture > "$F/resources.txt"
+PREFLIGHT_TIMEOUT_IMPL=auto run_preflight "$F" --json --strict --substrate aws
+expect_status "store-bundled-auto" 0
+expect_json "store-bundled-auto" '.store.databases.jaiscloud' true
+expect_json "store-bundled-auto" '.store.databasesProbe' "exec"
 
 # ── summary ─────────────────────────────────────────────────────────────────
 head_ "summary"

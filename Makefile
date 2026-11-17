@@ -2707,7 +2707,7 @@ check-integration-contract: ## Fail when the committed integration contract is s
 integration-preflight: ## READ-ONLY cluster inspection for agents (PREFLIGHT_FLAGS="--json --strict")
 	scripts/integration-preflight.sh $(PREFLIGHT_FLAGS)
 
-test-integration-preflight: ## Offline preflight harness (fake kubectl: leaks, legacy, env/envFrom, tri-state DB, effective RBAC, VAP match, DNS/CA; no cluster)
+test-integration-preflight: ## Offline preflight harness (fake kubectl: leaks, legacy, env/envFrom, store workloads + tri-state DB, effective RBAC, VAP match, DNS targets, CA issuer labels; no cluster, no GNU timeout)
 	scripts/integration-preflight-test.sh
 
 test-custom-names-render: ## Offline proof that NS_*/SA_* install a custom layout via rendered overlays, and defaults still render to the shipped names
