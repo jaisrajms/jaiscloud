@@ -1,0 +1,73 @@
+# Gateway — the single client-facing front door for both substrates.
+#
+# Clients keep using the REAL cloud hostnames (storage.googleapis.com,
+# sts.amazonaws.com, ...). The gateway terminates TLS for those names with one
+# wildcard certificate and forwards the request to whichever substrate owns the
+# name, keeping the original :authority untouched (see README "Never rewrite
+# authority" — several services route on it).
+#
+# Prerequisites (see README):
+#   - istioctl install --set profile=minimal \
+#       --set components.ingressGateways[0].enabled=true \
+#       --set components.ingressGateways[0].name=istio-ingressgateway \
+#       --set components.ingressGateways[0].k8s.service.type=LoadBalancer
+#     (`profile=minimal` alone installs istiod only — no gateway — so the
+#     ingress gateway component must be enabled explicitly; this is the
+#     selector below.)
+#   - certs/gen.sh                             (creates the jaiscloud-wildcard
+#                                               TLS secret in istio-system)
+#
+# Nothing inside a substrate goes through this gateway: executors, Cloud Run
+# pods, function invocation pods and the Managed Kafka broker all talk to the
+# emulator over in-cluster Service DNS.
+apiVersion: networking.istio.io/v1
+kind: Gateway
+metadata:
+  name: jaiscloud
+  namespace: istio-system
+  labels:
+    app.kubernetes.io/name: jaiscloud
+    app.kubernetes.io/part-of: jaiscloud
+    jaiscloud.io/role: front-door
+spec:
+  # Matches the label istioctl's ingressgateway deployment carries. Everything
+  # in this file is served by that one workload.
+  selector:
+    istio: ingressgateway
+  servers:
+    # Plain HTTP first: every host is redirected to HTTPS so a client that only
+    # knows the hostname (the SDK defaults) never sends credentials in the clear.
+    - name: http-redirect
+      port:
+        number: 80
+        name: http
+        protocol: HTTP
+      hosts:
+        - "*.amazonaws.com"
+        - "*.googleapis.com"
+        - "*.run.app"
+        - "*.cloudfunctions.net"
+      tls:
+        httpsRedirect: true
+
+    # TLS terminates HERE. credentialName names a kubernetes.io/tls secret in
+    # this namespace; its SANs cover the four suffixes (certs/gen.sh).
+    #
+    # Gateway host matching is Envoy suffix matching, so a deep name such as
+    # "abc.execute-api.us-east-1.amazonaws.com" or
+    # "svc-abc.us-central1.run.app" is routed by these four entries too. The
+    # CERTIFICATE, however, needs an explicit one-label wildcard per depth
+    # (X.509 wildcards match exactly one label) — gen.sh adds those SANs.
+    - name: https
+      port:
+        number: 443
+        name: https
+        protocol: HTTPS
+      hosts:
+        - "*.amazonaws.com"
+        - "*.googleapis.com"
+        - "*.run.app"
+        - "*.cloudfunctions.net"
+      tls:
+        mode: SIMPLE
+        credentialName: jaiscloud-wildcard

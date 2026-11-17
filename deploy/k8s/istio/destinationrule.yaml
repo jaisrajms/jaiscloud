@@ -1,0 +1,49 @@
+# DestinationRule for the GCP substrate's gRPC port.
+#
+# Why this file exists: a gRPC client through the gateway opens a long-lived
+# HTTP/2 stream. Two Envoy defaults are wrong for that here —
+# max_requests_per_connection (Envoy rations streams per TCP connection) and the
+# HTTP/2 stream limit (default 2147483647 is fine, but the connection pool's
+# concurrency cap is not). Long-lived streams plus a modest cap means a stream
+# starves a second one, which reads as a hang in the client.
+#
+# Protocol selection is NOT configured here, because Istio has no DestinationRule
+# field that selects the upstream protocol: it comes from the destination
+# Service's port (`name: grpc` / `name: grpc-*`, or `appProtocol: http2`).
+# h2UpgradePolicy is the one h2 knob a DestinationRule has; it only applies when
+# the port is detected as HTTP, so it is a belt to the port-name braces rather
+# than a substitute — kept explicit so the h2c intent is visible in one place.
+#
+# exportTo: the gateway is in istio-system and the Service is in jaiscloud-gcp;
+# without exportTo, a DestinationRule is only visible to clients in its own
+# namespace.
+apiVersion: networking.istio.io/v1
+kind: DestinationRule
+metadata:
+  name: jaiscloud-gcp
+  namespace: istio-system
+  labels:
+    app.kubernetes.io/part-of: jaiscloud
+    jaiscloud.io/role: front-door
+    jaiscloud.io/substrate: gcp
+spec:
+  host: jaiscloud-gcp.jaiscloud-gcp.svc.cluster.local
+  exportTo:
+    - "*"
+  # Settings are scoped to the gRPC port. A host-wide trafficPolicy would also
+  # apply to REST :8080 — including `h2UpgradePolicy`, which mutates plain HTTP
+  # requests with an HTTP/2 upgrade attempt that the origin does not speak.
+  # Port 8081 is named `grpc`, so Istio already selects h2c there; the pool
+  # settings below only keep long-lived streams on their connection.
+  trafficPolicy:
+    portLevelSettings:
+      - port:
+          number: 8081
+        connectionPool:
+          tcp:
+            connectTimeout: 5s
+            maxConnections: 4096
+          http:
+            # Keep gRPC streams on their connection instead of recycling it.
+            maxRequestsPerConnection: 0
+            http2MaxRequests: 4096
