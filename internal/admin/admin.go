@@ -293,9 +293,16 @@ func (h *Handler) Doctor(w http.ResponseWriter, r *http.Request) {
 		kekFP = "none"
 	}
 
+	// Discovery channel for agents that only reach the HTTP API: every binary
+	// embeds the integration guide behind `agent-guide`.
+	agentGuide := "jaiscloud-<cloud> agent-guide"
+	if meta.Cloud != "" {
+		agentGuide = "jaiscloud-" + meta.Cloud + " agent-guide"
+	}
 	resp := map[string]any{
-		"status": "ok",
-		"cloud":  meta.Cloud,
+		"status":      "ok",
+		"cloud":       meta.Cloud,
+		"agent_guide": agentGuide,
 	}
 
 	if r.URL.Query().Get("verbose") == "true" {

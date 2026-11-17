@@ -256,6 +256,12 @@ make up-k8s-gcp       # GCP: jaiscloud-gcp.yaml (+ creates the jaiscloud_gcp dat
 ./deploy/deploy.sh --gcp-reset  # GCP only: drops `jaiscloud_gcp` + the GCP blobs PVC
 ```
 
+Driving this with an LLM agent or a script? Start with
+[`docs/gcp/integration/AGENTS.md`](docs/gcp/integration/AGENTS.md) and
+`./deploy/deploy.sh --check --json` (read-only state + next safe step); the
+binaries carry the same guide (`jaiscloud-gcp agent-guide`, `--json`,
+`--emit DIR`), and `llms.txt` points at the canonical docs.
+
 Both resets are **database-scoped**: `jaiscloud-data`, `postgres-pvc` and the
 other substrate always survive. Upgrading a single-namespace install in place
 needs a one-time `./deploy/deploy.sh --migrate-store` (the Postgres PVC is

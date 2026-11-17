@@ -582,6 +582,7 @@ func (s *Server) ListenAndServe() error {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
+	slog.Info("agent integration guide", "command", fmt.Sprintf("jaiscloud-%s agent-guide", s.cfg.Cloud))
 	mode := "memory+saves"
 	if s.cfg.Ephemeral {
 		mode = "ephemeral"

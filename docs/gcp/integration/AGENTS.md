@@ -13,6 +13,16 @@ The kit carries these integration docs and the top-level guides; links inside th
 guides to the repository's deeper references (wire contract, fidelity matrix)
 point at the source repository.
 
+## Finding this guide
+
+- **Repo checkout**: this file, [`../../gcp/README.md`](../README.md),
+  [`llms.txt`](../../../llms.txt), or the root `AGENTS.md` pointer.
+- **Binary or image**: `jaiscloud-<cloud> --help` lists `agent-guide`;
+  `jaiscloud-<cloud> --help-agent` prints the brief; the image carries
+  `docker inspect -f '{{index .Config.Labels "dev.jaiscloud.agent-guide"}}'`.
+- **Running emulator**: `GET /_jaiscloud/doctor` returns `agent_guide`, and
+  startup logs a one-line hint.
+
 Read, in this order:
 
 1. [`contract.yaml`](contract.yaml) — generated facts: namespaces, objects,

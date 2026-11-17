@@ -2,6 +2,15 @@
 
 > Auto-loaded by OpenCode. Project conventions live in [CLAUDE.md](CLAUDE.md) —
 > read it before coding. This file carries the cross-session workflow rules.
+>
+> **Using JaisCloud, not developing it?** This file is for contributors. Start at
+> [`docs/gcp/integration/AGENTS.md`](docs/gcp/integration/AGENTS.md) (integration
+> runbook), the generated [`contract.yaml`](docs/gcp/integration/contract.yaml)
+> (facts + playbook) and `deploy/deploy.sh --check --json`. Every binary prints
+> its own guide: `jaiscloud-gcp agent-guide` (`--json`, `--emit DIR`), also
+> reachable as `--help-agent`; an image carries it in the
+> `dev.jaiscloud.agent-guide` label and a running emulator reports it from
+> `GET /_jaiscloud/doctor`.
 
 ## GCP parity work — check the status ledger before you plan
 
