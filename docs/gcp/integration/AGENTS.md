@@ -70,7 +70,7 @@ manifest disagree, the manifest wins — regenerate with
 | kubectl context / cluster kind | `kubectl config current-context`; `kubectl cluster-info` |
 | does the cluster already run JaisCloud? | `deploy/deploy.sh --check --json` |
 | what is installed, and what is wanted? | preflight `intent.source` / `intent.installed` / `intent.desired`, or `kubectl -n jaiscloud-data get configmap jaiscloud-install -o yaml` |
-| legacy pre-split layout? | preflight `legacy.postgresInAws` / `legacy.gcpInAws` |
+| legacy pre-split layout? | preflight `legacy.pending` (marked, migrate) vs `legacy.candidate` (unmarked same-named workload — confirm with `LEGACY_CONFIRM=1` or ignore) |
 | is the store already at the new layout? | preflight `store.present` / `store.databases` |
 | is the mesh installed? | preflight `mesh.installed` |
 | is the cluster new enough to enforce the namespace boundary? | preflight `rbac.serverVersion` (needs >= 1.30) |
@@ -90,7 +90,10 @@ every engine, and one engine opts out by naming its own variable.
 
 ```
 deploy/deploy.sh --check --json
-├─ legacy.postgresInAws or legacy.gcpInAws ......... upgrade-legacy (migration; ask first)
+├─ legacy.pending .................................. upgrade-legacy (migration; ask first)
+├─ legacy.candidate only ........................... read the warning: an unmarked
+│                                                    same-named workload; confirm
+│                                                    or ignore, never migrate blindly
 ├─ no namespaces / no store ........................ new install
 │   ├─ only GCP tests? ............................. new-install-gcp
 │   └─ both substrates? ............................ new-install-both
@@ -171,10 +174,12 @@ the substrates" and "Clients with a sidecar").
 ## Scenario 4 — upgrading a pre-split install
 
 Detection is in the preflight (`legacy.*`; it probes `deployment/postgres` and
-`statefulset/postgres`, `legacy.pending` is the actionable flag, and
-`legacy.*Retained` marks a rollback copy). The migration is destructive
-towards the *old* store in the sense that the new store becomes authoritative,
-but the old workload and volumes are kept by default as rollback copies.
+`statefulset/postgres` plus `deployment/jaiscloud-gcp` in the AWS namespace,
+`legacy.pending` is the actionable flag, `legacy.*Retained` marks a rollback copy,
+and `legacy.candidate` marks an *unmarked* same-named workload — a warning, never
+a migration recommendation). The migration is destructive towards the *old*
+store in the sense that the new store becomes authoritative, but the old workload
+and volumes are kept by default as rollback copies.
 **Confirm with the operator, then:**
 
 ```bash
@@ -189,16 +194,30 @@ kubectl -n jaiscloud delete pvc postgres-pvc jaiscloud-gcp-blobs-pvc   # after v
 What it does and what it keeps is in `contract.playbook.scenarios.upgrade-legacy`
 and `destructive`. The source is `deployment/postgres` or `statefulset/postgres`
 (override with `LEGACY_POSTGRES_WORKLOAD=deployment|statefulset/<name>`), in
-`LEGACY_NAMESPACE` (default `jaiscloud`). If the old store is outside the
-cluster, `LEGACY_DSN=postgres://…` dumps it from the **new** store pod after that
-pod is up — no legacy store workload is scaled or deleted in that mode (the
-emulators still stop before the dump).
+`LEGACY_NAMESPACE` (default `jaiscloud`; any other namespace requires
+`LEGACY_CONFIRM=1`). If the old store is outside the cluster,
+`LEGACY_DSN=postgres://…` dumps it from the **new** store pod after that pod is
+up — no legacy store workload is scaled or deleted in that mode (the emulators
+still stop before the dump). `LEGACY_DSN` is an explicit source, so it needs no
+marker.
+
+**The tooling never touches a workload it cannot identify as JaisCloud's.** The
+store's objects carry `jaiscloud.io/managed-by=jaiscloud` (Deployment, PVC,
+Services, Secret); the migration accepts that marker, the conventional
+`app.kubernetes.io/managed-by=jaiscloud`, or `jaiscloud.io/substrate` on the
+legacy GCP workload — and *never* `app=postgres` alone, which any operator-run
+Postgres has. A pre-split build predates the marker, so the first migration needs
+`LEGACY_CONFIRM=1` (or `--legacy-confirm`); without it the command refuses the
+source before dumping anything. An unmarked workload of the same name is a
+`legacy.candidate`: read the preflight warning, and either confirm it with
+`LEGACY_CONFIRM=1` or ignore it.
 
 Deletion is opt-in: by default only the legacy Postgres is scaled to 0, and its
 Deployment/StatefulSet, Services and PVCs stay. `--delete-legacy` (or
 `DELETE_LEGACY=1`) removes the workload and the `postgres`/`postgres-external`
-Services after verifying the object carries `app=postgres`; a mismatch refuses
-unless `LEGACY_DELETE_FORCE=1`. No PVC is ever deleted by the migration.
+Services only when the object carries the JaisCloud marker; a bare
+`app=postgres` object additionally needs `LEGACY_DELETE_FORCE=1`. No PVC is ever
+deleted by the migration.
 
 Object bytes move with `migrate_blobs`: the GCP claim when the legacy GCP
 emulator exists, and the AWS claim when `LEGACY_NAMESPACE` differs from the AWS
@@ -249,9 +268,16 @@ records.
 ```bash
 deploy/deploy.sh --park aws --plan        # review: no manifests re-applied
 deploy/deploy.sh --park gcp               # stop GCP compute, keep its data
-deploy/deploy.sh --resume gcp             # one rollout; warns if the image digest changed
+deploy/deploy.sh --resume gcp             # one rollout; keeps the parked binary
 deploy/deploy.sh --switch aws --yes       # park GCP (when installed), resume AWS
 ```
+
+The park record is **per substrate**: the namespace gets
+`jaiscloud.io/<cloud>.state`, `.parked-at`, `.parked-image`, `.parked-image-id`
+and `.parked-version` (`aws` | `gcp`), alongside the per-cloud `desired` in the
+install record. Two substrates sharing a namespace therefore keep both records;
+read the one for the cloud you care about (from the preflight's
+`substrates.<cloud>` and the install record, not a shared key).
 
 Before scaling the Deployment to 0, `deploy.sh` calls the emulator's
 `POST /_jaiscloud/park`, where each engine quiesces itself: Dataproc cancels
@@ -261,13 +287,25 @@ and Cloud Run removes revision runtimes (keeping Service/Revision records).
 `Resume` runs the reverse through `POST /_jaiscloud/resume`. A 404 from either
 endpoint means the running image predates the API — rebuild and redeploy.
 
+**A resume never changes the binary silently.** Before scaling, it compares the
+Deployment image with the parked one and refuses a mismatch (naming
+`--allow-upgrade` as the only opt-in), then pins the parked `imageID` digest with
+`kubectl set image`, so a moving `:latest` tag cannot slip a new build in and run
+its store migrations. With no recorded digest it warns that it cannot pin; the
+post-rollout digest comparison remains a warning. `--allow-upgrade`
+(`ALLOW_UPGRADE=1`) is the explicit "use the new image, the store may migrate".
+
+**Managed Kafka topic loss is surfaced, not implied.** The park result carries
+`"topicDataLost": true` when a real broker was stopped, `deploy.sh --park gcp`
+warns when `JAISCLOUD_KAFKA_BROKER_MODE` is `k8s`/`docker`/`native`, and the
+preflight reports `substrates.gcp.kafkaBrokerMode` plus a warning. Cluster/topic
+metadata and the namespace survive; the topics do not (no broker PVC).
+
 The switch direction is always park-then-resume, so only one substrate's compute
-runs at a time. Images are tagged `:latest` for now, so a resume after an upgrade
-can pick up whatever digest the node cached (the preflight warns, and
-`--resume` warns when the digest changed); pin a release tag once one exists.
-`--delete [aws|gcp|both]` is the workload-only alternative: it
-removes the Deployment/Service (and DSN Secret, plus the AWS ConfigMap) but never
-the PVCs or the database; the other substrate is untouched unless you pass
+runs at a time. Images are tagged `:latest` for now; a resume pins the parked
+digest as described. `--delete [aws|gcp|both]` is the workload-only alternative:
+it removes the Deployment/Service (and DSN Secret, plus the AWS ConfigMap) but
+never the PVCs or the database; the other substrate is untouched unless you pass
 `both`.
 
 Verify with the lifecycle gate (compute-destructive; needs both substrates
@@ -328,14 +366,15 @@ names, edit those fields together and re-run `deploy/deploy.sh --check`.
 | Need | Command |
 |---|---|
 | read-only state | `deploy/deploy.sh --check [--json] [--substrate aws\|gcp\|both] [--desired aws=running,gcp=parked]` (`scripts/integration-preflight.sh`) |
+| preflight predicates (offline) | `scripts/integration-preflight-test.sh` (fake kubectl: leak + legacy regression, no cluster) |
 | install intent | preflight `intent.*`; record in ConfigMap `jaiscloud-data/jaiscloud-install` (written by `deploy.sh`) |
 | store mode | preflight `store.mode` (`bundled\|external`); install record key `store` |
 | the pack, from the binary | `jaiscloud-gcp agent-guide` / `--json` / `--emit DIR` (`--force` to overwrite) |
 | preview | `deploy/deploy.sh <mode> --plan` |
 | install AWS / GCP | `deploy/deploy.sh [--yes]` / `deploy/deploy.sh --gcp --yes` |
 | bring your own store | `deploy/deploy.sh --yes --store-dsn postgres://…` (`JAISCLOUD_STORE_DSN`, `JAISCLOUD_AWS_DSN`, `JAISCLOUD_GCP_DSN`) |
-| park / resume / switch (compute only) | `deploy/deploy.sh --park <aws\|gcp>` / `--resume <aws\|gcp>` / `--switch <aws\|gcp> --yes` |
-| migrate (keep the legacy workload) | `deploy/deploy.sh --migrate-store --yes` (`--delete-legacy` removes the workload + Services, never a PVC) |
+| park / resume / switch (compute only) | `deploy/deploy.sh --park <aws\|gcp>` / `--resume <aws\|gcp>` (pins the parked digest; `--allow-upgrade` opts into a new image) / `--switch <aws\|gcp> --yes` |
+| migrate (keep the legacy workload) | `deploy/deploy.sh --migrate-store --yes` (marked source; `--legacy-confirm` for a pre-split build, `--delete-legacy` removes the workload + Services, never a PVC) |
 | delete workloads (keep data) | `deploy/deploy.sh --delete [aws\|gcp\|both]` |
 | resets (destructive, scoped) | `--reset` (AWS) / `--gcp-reset` (GCP) |
 | namespace boundary | preflight `rbac.*`; `GATE_ALLOW_RBAC=1 KUBE_CONTEXT=<ctx> make test-rbac-isolation-k8s` (server-side dry runs, K8s >= 1.30) |

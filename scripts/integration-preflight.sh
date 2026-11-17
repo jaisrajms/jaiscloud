@@ -23,8 +23,22 @@
 #   Resolution precedence: --substrate/--desired flags > the cluster record >
 #   inference from the substrate namespaces/Deployments. Recommendations are
 #   relative to the resolved intent: a cloud that is not installed is never
-#   recommended, and a non-installed cloud with objects in the cluster is
-#   reported as a leak warning.
+#   recommended, and a non-installed cloud with real objects in the cluster
+#   (its Deployment, ServiceAccount, database or PVCs, or a namespace labelled
+#   for it) is reported as a leak warning. A bare namespace is not evidence:
+#   namespaces are shared and long-lived, so their existence alone is not a leak.
+#
+# Legacy (pre-split) layout:
+#   legacy.* probes deployment/statefulset `postgres` and deployment
+#   `jaiscloud-gcp` in NS_AWS. Presence alone is not a pending migration: the
+#   object must carry a JaisCloud marker (jaiscloud.io/managed-by=jaiscloud, the
+#   conventional app.kubernetes.io/managed-by=jaiscloud, or
+#   jaiscloud.io/substrate). Only a marked object produces legacy.pending and the
+#   non-optional migrate-store recommendation; an unmarked one is
+#   legacy.candidate=true plus a warning (it may be an unrelated Postgres that
+#   merely shares the name), and deploy.sh --migrate-store refuses it without
+#   LEGACY_CONFIRM=1. legacy.postgresRetained / legacy.gcpRetained mark a
+#   marked, scaled-to-0 rollback copy of an already-migrated store.
 #
 # RBAC/namespace isolation:
 #   Both substrate ServiceAccounts hold cluster-wide namespace delete; the
@@ -196,6 +210,29 @@ yn() { [[ "$1" == "1" ]] && echo yes || echo no; }
 
 # deployment_present <ns> <name>
 deployment_present() { probe_ok kc -n "$1" get deployment "$2"; }
+# sa_present <ns> <name>
+sa_present() { probe_ok kc -n "$1" get serviceaccount "$2"; }
+# pvc_present <ns> <name>
+pvc_present() { probe_ok kc -n "$1" get pvc "$2"; }
+
+# object_label <namespace> <kind> <name> <key> — one metadata label ("" when
+# absent). Bracket notation: the label keys contain dots and a slash.
+object_label() {
+  kc -n "$1" get "$2" "$3" -o jsonpath="{.metadata.labels['$4']}" 2>/dev/null || true
+}
+
+# legacy_marked <namespace> <kind> <name> — 0 when the object carries a JaisCloud
+# marker, 1 otherwise. Accepted markers:
+#   jaiscloud.io/managed-by=jaiscloud       the store's own marker (postgres.yaml)
+#   app.kubernetes.io/managed-by=jaiscloud  the conventional equivalent
+#   jaiscloud.io/substrate=<any>            what the pre-split GCP emulator carried
+# `app=postgres` is NOT evidence: any operator-supplied Postgres has it.
+legacy_marked() {
+  [[ "$(object_label "$1" "$2" "$3" jaiscloud.io/managed-by)" == "jaiscloud" ]] && return 0
+  [[ "$(object_label "$1" "$2" "$3" app.kubernetes.io/managed-by)" == "jaiscloud" ]] && return 0
+  [[ -n "$(object_label "$1" "$2" "$3" jaiscloud.io/substrate)" ]] && return 0
+  return 1
+}
 
 # deployment_ready <ns> <name> — availableReplicas >= 1
 deployment_ready() {
@@ -335,14 +372,26 @@ ROLE_GCP=$(field "" namespace "$NS_GCP" '{{index .metadata.labels "jaiscloud.io/
 ROLE_DATA=$(field "" namespace "$NS_DATA" '{{index .metadata.labels "jaiscloud.io/role"}}' 2>/dev/null || true)
 
 # The pre-split store was a Deployment; --migrate-store also accepts a
-# StatefulSet, so both count as the legacy store here.
+# StatefulSet, so both count as the legacy store here. Presence alone is not a
+# pending migration: the object must carry a JaisCloud marker, otherwise it is a
+# candidate (someone's Postgres that happens to be named postgres).
 LEGACY_PG_DEPLOY=$(deployment_present "$NS_AWS" postgres)
 LEGACY_PG_STS=$(probe_ok kc -n "$NS_AWS" get statefulset postgres)
+LEGACY_PG_OBJECT=""
+if [[ "$LEGACY_PG_STS" == "1" && "$LEGACY_PG_DEPLOY" != "1" ]]; then
+  LEGACY_PG_OBJECT="statefulset/postgres"
+elif [[ "$LEGACY_PG_DEPLOY" == "1" ]]; then
+  LEGACY_PG_OBJECT="deployment/postgres"
+fi
 LEGACY_PG=0
-[[ "$LEGACY_PG_DEPLOY" == "1" || "$LEGACY_PG_STS" == "1" ]] && LEGACY_PG=1
-LEGACY_PG_OBJECT="deployment/postgres"
-[[ "$LEGACY_PG_STS" == "1" && "$LEGACY_PG_DEPLOY" != "1" ]] && LEGACY_PG_OBJECT="statefulset/postgres"
+LEGACY_PG_MARKED=0
+if [[ -n "$LEGACY_PG_OBJECT" ]]; then
+  LEGACY_PG=1
+  legacy_marked "$NS_AWS" "${LEGACY_PG_OBJECT%%/*}" "${LEGACY_PG_OBJECT#*/}" && LEGACY_PG_MARKED=1
+fi
 LEGACY_GCP=$(deployment_present "$NS_AWS" jaiscloud-gcp)
+LEGACY_GCP_MARKED=0
+[[ "$LEGACY_GCP" == "1" ]] && legacy_marked "$NS_AWS" deployment jaiscloud-gcp && LEGACY_GCP_MARKED=1
 STORE_DEPLOY=$(deployment_present "$NS_DATA" postgres)
 STORE_PVC=$(pvc_status "$NS_DATA" postgres-pvc)
 STORE_READY=$(deployment_ready "$NS_DATA" postgres)
@@ -370,6 +419,14 @@ GCP_IMAGE_ID=$(pod_image_id "$NS_GCP" jaiscloud-gcp)
 GCP_SPARK_IMAGE=$(deployment_env "$NS_GCP" jaiscloud-gcp JAISCLOUD_K8S_SPARK_IMAGE)
 GCP_SPARK_PRIVATE=0
 [[ -n "$GCP_SPARK_IMAGE" ]] && GCP_SPARK_PRIVATE=$(private_registry "$GCP_SPARK_IMAGE")
+# Managed Kafka broker mode. A real broker (k8s/docker/native) has no PVC, so a
+# park loses its topics (the cluster/topic records and namespace survive). The
+# /park response reports topicDataLost; this warns before anyone parks.
+GCP_KAFKA_BROKER_MODE=$(deployment_env "$NS_GCP" jaiscloud-gcp JAISCLOUD_KAFKA_BROKER_MODE)
+GCP_KAFKA_REAL=0
+case "$GCP_KAFKA_BROKER_MODE" in
+  k8s|docker|native) GCP_KAFKA_REAL=1 ;;
+esac
 # sparkImageGCS — a deliberately simple heuristic, not a registry query: an unset
 # value or a plain apache/spark image has no GCS connector; any other name is
 # assumed to be a connector build (the repo's spark-gcs, a GCS-enabled image, ...).
@@ -380,6 +437,17 @@ if [[ -n "$GCP_SPARK_IMAGE" ]]; then
     *) GCP_SPARK_GCS=1 ;;
   esac
 fi
+
+# Per-cloud ownership evidence for the leak probe. A namespace alone is shared,
+# long-lived state and proves nothing; its ServiceAccount, Deployment, database or
+# PVCs do.
+SA_AWS=$(sa_present "$NS_AWS" jaiscloud)
+SA_GCP=$(sa_present "$NS_GCP" jaiscloud-gcp)
+PVC_AWS_BLOBS=$(pvc_present "$NS_AWS" jaiscloud-blobs-pvc)
+PVC_AWS_STATE=$(pvc_present "$NS_AWS" jaiscloud-state-pvc)
+PVC_GCP_BLOBS=$(pvc_present "$NS_GCP" jaiscloud-gcp-blobs-pvc)
+PVC_GCP_STATE=$(pvc_present "$NS_GCP" jaiscloud-gcp-state-pvc)
+SUB_GCP=$(field "" namespace "$NS_GCP" '{{index .metadata.labels "jaiscloud.io/substrate"}}')
 
 # A substrate is present when either substrate namespace or Deployment exists:
 # the namespace-admin binding is cluster-wide, so isolation matters even for a
@@ -421,26 +489,32 @@ else
 fi
 
 # A pre-split object that is scaled to 0 while the new store serves is a
-# retained rollback copy (deploy.sh --migrate-store keeps it by default), not a
-# pending migration: re-recommending migrate-store forever would be noise. With
-# an external store the new store has no Deployment, so the record mode is the
-# evidence that the migration already happened.
+# retained rollback copy of a *marked* (migrated) store — deploy.sh
+# --migrate-store keeps it by default — not a pending migration:
+# re-recommending migrate-store forever would be noise. With an external store
+# the new store has no Deployment, so the record mode is the evidence that the
+# migration already happened.
 LEGACY_PG_REPLICAS=$(deployment_replicas "$NS_AWS" postgres "$LEGACY_PG_DEPLOY")
 [[ "$LEGACY_PG_DEPLOY" == "1" ]] || LEGACY_PG_REPLICAS=$(sts_replicas "$NS_AWS" postgres "$LEGACY_PG_STS")
 LEGACY_PG_RETAINED=0
-if [[ "$LEGACY_PG" == "1" && "$LEGACY_PG_REPLICAS" == "0" ]]; then
+if [[ "$LEGACY_PG_MARKED" == "1" && "$LEGACY_PG_REPLICAS" == "0" ]]; then
   if [[ "$STORE_DEPLOY" == "1" || "$STORE_MODE" == "external" ]]; then LEGACY_PG_RETAINED=1; fi
 fi
 LEGACY_GCP_REPLICAS=$(deployment_replicas "$NS_AWS" jaiscloud-gcp "$LEGACY_GCP")
 LEGACY_GCP_RETAINED=0
-if [[ "$LEGACY_GCP" == "1" && "$LEGACY_GCP_REPLICAS" == "0" ]]; then
+if [[ "$LEGACY_GCP_MARKED" == "1" && "$LEGACY_GCP_REPLICAS" == "0" ]]; then
   if [[ "$GCP_PRESENT" == "1" || "$STORE_DEPLOY" == "1" || "$STORE_MODE" == "external" ]]; then
     LEGACY_GCP_RETAINED=1
   fi
 fi
+# Only a marked object is a pending migration; an unmarked one is a candidate the
+# operator must identify (and confirm) before any tooling touches it.
 LEGACY_PENDING=0
-[[ "$LEGACY_PG" == "1" && "$LEGACY_PG_RETAINED" == "0" ]] && LEGACY_PENDING=1
-[[ "$LEGACY_GCP" == "1" && "$LEGACY_GCP_RETAINED" == "0" ]] && LEGACY_PENDING=1
+[[ "$LEGACY_PG_MARKED" == "1" && "$LEGACY_PG_RETAINED" == "0" ]] && LEGACY_PENDING=1
+[[ "$LEGACY_GCP_MARKED" == "1" && "$LEGACY_GCP_RETAINED" == "0" ]] && LEGACY_PENDING=1
+LEGACY_CANDIDATE=0
+[[ "$LEGACY_PG" == "1" && "$LEGACY_PG_MARKED" == "0" ]] && LEGACY_CANDIDATE=1
+[[ "$LEGACY_GCP" == "1" && "$LEGACY_GCP_MARKED" == "0" ]] && LEGACY_CANDIDATE=1
 
 INTENT_SOURCE="inferred"
 if [[ -n "$SUBSTRATE_FLAG" ]]; then
@@ -499,20 +573,33 @@ else
 fi
 
 # Unexpected footprint: a substrate that intent excludes but the cluster still
-# has objects for. Tracked separately so --strict can fail on a leak.
+# has real objects for. A namespace existing is NOT a reason: namespaces are
+# shared and long-lived, so the evidence is the substrate's own objects — its
+# Deployment, its ServiceAccount, its database, its blobs/state PVCs — or a
+# namespace labelled as belonging to that substrate. Tracked separately so
+# --strict can fail on a leak.
 LEAKS=()
 intent_label="${INSTALLED:-none}"
 for cloud in aws gcp; do
   list_has "$INSTALLED" "$cloud" && continue
   if [[ "$cloud" == "aws" ]]; then
-    ns=$NS_AWS ns_p=$NS_AWS_P dep=$AWS_PRESENT db=$DB_AWS
+    ns=$NS_AWS dep=$AWS_PRESENT db=$DB_AWS sa=$SA_AWS sub=$SUB_AWS
+    workload=jaiscloud sa_name=jaiscloud
+    blobs_name=jaiscloud-blobs-pvc state_name=jaiscloud-state-pvc
+    blobs_p=$PVC_AWS_BLOBS state_p=$PVC_AWS_STATE
   else
-    ns=$NS_GCP ns_p=$NS_GCP_P dep=$GCP_PRESENT db=$DB_GCP
+    ns=$NS_GCP dep=$GCP_PRESENT db=$DB_GCP sa=$SA_GCP sub=$SUB_GCP
+    workload=jaiscloud-gcp sa_name=jaiscloud-gcp
+    blobs_name=jaiscloud-gcp-blobs-pvc state_name=jaiscloud-gcp-state-pvc
+    blobs_p=$PVC_GCP_BLOBS state_p=$PVC_GCP_STATE
   fi
   reasons=""
-  [[ "$ns_p" == "1" ]] && reasons+="${reasons:+, }namespace $ns exists"
-  [[ "$dep" == "1" ]] && reasons+="${reasons:+, }Deployment in $ns exists"
+  [[ "$dep" == "1" ]] && reasons+="${reasons:+, }deployment/$workload in $ns exists"
+  [[ "$sa" == "1" ]] && reasons+="${reasons:+, }serviceaccount/$sa_name in $ns exists"
   [[ "$db" == "1" ]] && reasons+="${reasons:+, }its database exists"
+  [[ "$blobs_p" == "1" ]] && reasons+="${reasons:+, }pvc/$blobs_name in $ns exists"
+  [[ "$state_p" == "1" ]] && reasons+="${reasons:+, }pvc/$state_name in $ns exists"
+  [[ "$sub" == "$cloud" ]] && reasons+="${reasons:+, }namespace $ns is labelled jaiscloud.io/substrate=$cloud"
   [[ -n "$reasons" ]] && LEAKS+=("unexpected $cloud footprint (intent=$intent_label): $reasons")
 done
 
@@ -533,6 +620,12 @@ rec_add() { RECOMMENDED+=("$1|$2|$3|$4"); }
 
 [[ "$LEGACY_PENDING" == "1" ]] && \
   warn_add "legacy pre-split layout detected in $NS_AWS; the store and GCP bytes must be migrated"
+if [[ "$LEGACY_PG" == "1" && "$LEGACY_PG_MARKED" == "0" ]]; then
+  warn_add "a workload named postgres exists in $NS_AWS but is not marked as a JaisCloud store; if it is the pre-split store, run deploy.sh --migrate-store with LEGACY_CONFIRM=1, otherwise ignore it"
+fi
+if [[ "$LEGACY_GCP" == "1" && "$LEGACY_GCP_MARKED" == "0" ]]; then
+  warn_add "a workload named jaiscloud-gcp exists in $NS_AWS but is not marked as a JaisCloud emulator; if it is the pre-split GCP workload, run deploy.sh --migrate-store with LEGACY_CONFIRM=1, otherwise ignore it"
+fi
 [[ "$LEGACY_PG_RETAINED" == "1" ]] && \
   warn_add "legacy postgres retained in $NS_AWS (scaled to 0, not serving) as a rollback copy; remove it once verified: kubectl -n $NS_AWS delete $LEGACY_PG_OBJECT service postgres postgres-external pvc postgres-pvc"
 [[ "$LEGACY_GCP_RETAINED" == "1" ]] && \
@@ -551,6 +644,12 @@ if [[ "$GCP_PRESENT" == "1" && "$GCP_SPARK_GCS" == "0" ]]; then
   else
     warn_add "JAISCLOUD_K8S_SPARK_IMAGE='$GCP_SPARK_IMAGE' has no GCS connector; Dataproc jobs that read gs:// need JAISCLOUD_K8S_SPARK_IMAGE set to a GCS-enabled image"
   fi
+fi
+# Managed Kafka broker data is not persistent (no broker PVC): the /park
+# response reports topicDataLost and deploy.sh --park warns; say it up front so a
+# park is never a surprise data loss.
+if [[ "$GCP_PRESENT" == "1" && "$GCP_KAFKA_REAL" == "1" ]]; then
+  warn_add "JAISCLOUD_KAFKA_BROKER_MODE='$GCP_KAFKA_BROKER_MODE': Managed Kafka broker topic data is not persistent (the broker has no PVC), so parking the GCP substrate loses topics; cluster/topic metadata and the namespace survive"
 fi
 # A moving :latest tag means the digest is whatever the node cached, so a parked
 # substrate resumed after an upgrade can change binary (or fail a store
@@ -672,8 +771,10 @@ if [[ "$JSON" == "1" ]]; then
   printf '    "%s": {"present": %s, "role": "%s"},\n' "$NS_GCP" "$(b "$NS_GCP_P")" "$(json_escape "$ROLE_GCP")"
   printf '    "%s": {"present": %s, "role": "%s"}\n' "$NS_DATA" "$(b "$NS_DATA_P")" "$(json_escape "$ROLE_DATA")"
   printf '  },\n'
-  printf '  "legacy": {"postgresInAws": %s, "postgresStatefulSetInAws": %s, "gcpInAws": %s, "pending": %s, "postgresRetained": %s, "gcpRetained": %s},\n' \
-    "$(b "$LEGACY_PG")" "$(b "$LEGACY_PG_STS")" "$(b "$LEGACY_GCP")" "$(b "$LEGACY_PENDING")" "$(b "$LEGACY_PG_RETAINED")" "$(b "$LEGACY_GCP_RETAINED")"
+  printf '  "legacy": {"namespace": "%s", "postgresInAws": %s, "postgresStatefulSetInAws": %s, "gcpInAws": %s, "marked": %s, "gcpMarked": %s, "candidate": %s, "pending": %s, "postgresRetained": %s, "gcpRetained": %s},\n' \
+    "$(json_escape "$NS_AWS")" "$(b "$LEGACY_PG")" "$(b "$LEGACY_PG_STS")" "$(b "$LEGACY_GCP")" \
+    "$(b "$LEGACY_PG_MARKED")" "$(b "$LEGACY_GCP_MARKED")" "$(b "$LEGACY_CANDIDATE")" \
+    "$(b "$LEGACY_PENDING")" "$(b "$LEGACY_PG_RETAINED")" "$(b "$LEGACY_GCP_RETAINED")"
   printf '  "store": {\n'
   printf '    "mode": "%s", "present": %s, "ready": %s,\n' \
     "$STORE_MODE" "$(b "$STORE_PRESENT")" "$(b "$STORE_READY")"
@@ -685,10 +786,10 @@ if [[ "$JSON" == "1" ]]; then
   printf '    "aws": {"present": %s, "ready": %s, "state": "%s", "replicas": %s, "image": "%s", "imageID": "%s", "imagePullPolicy": "%s", "privateRegistry": %s},\n' \
     "$(b "$AWS_PRESENT")" "$(b "$AWS_READY")" "$AWS_STATE" "$AWS_REPLICAS" "$(json_escape "$AWS_IMAGE")" \
     "$(json_escape "$AWS_IMAGE_ID")" "$(json_escape "$AWS_PULL")" "$(b "$AWS_PRIVATE")"
-  printf '    "gcp": {"present": %s, "ready": %s, "state": "%s", "replicas": %s, "image": "%s", "imageID": "%s", "imagePullPolicy": "%s", "privateRegistry": %s, "sparkImage": "%s", "sparkImageGCS": %s}\n' \
+  printf '    "gcp": {"present": %s, "ready": %s, "state": "%s", "replicas": %s, "image": "%s", "imageID": "%s", "imagePullPolicy": "%s", "privateRegistry": %s, "sparkImage": "%s", "sparkImageGCS": %s, "kafkaBrokerMode": "%s"}\n' \
     "$(b "$GCP_PRESENT")" "$(b "$GCP_READY")" "$GCP_STATE" "$GCP_REPLICAS" "$(json_escape "$GCP_IMAGE")" \
     "$(json_escape "$GCP_IMAGE_ID")" "$(json_escape "$GCP_PULL")" "$(b "$GCP_PRIVATE")" \
-    "$(json_escape "$GCP_SPARK_IMAGE")" "$(b "$GCP_SPARK_GCS")"
+    "$(json_escape "$GCP_SPARK_IMAGE")" "$(b "$GCP_SPARK_GCS")" "$(json_escape "$GCP_KAFKA_BROKER_MODE")"
   printf '  },\n'
   printf '  "pvcs": [\n'
   first=1
@@ -743,15 +844,19 @@ else
   head_ "layout"
   if [[ "$LEGACY_PG_RETAINED" == "1" ]]; then
     ok_ "legacy $LEGACY_PG_OBJECT in $NS_AWS is retained (scaled to 0) as a rollback copy"
+  elif [[ "$LEGACY_PG_MARKED" == "1" ]]; then
+    warn_ "legacy $LEGACY_PG_OBJECT in $NS_AWS (marked; pending migration)"
   elif [[ "$LEGACY_PG" == "1" ]]; then
-    warn_ "legacy $LEGACY_PG_OBJECT in $NS_AWS"
+    warn_ "a workload named postgres exists in $NS_AWS but is not marked as a JaisCloud store (candidate, not a pending migration)"
   else
     ok_ "no legacy store in $NS_AWS"
   fi
   if [[ "$LEGACY_GCP_RETAINED" == "1" ]]; then
     ok_ "legacy GCP workload in $NS_AWS is retained (scaled to 0); its bytes were copied"
+  elif [[ "$LEGACY_GCP_MARKED" == "1" ]]; then
+    warn_ "legacy GCP workload in $NS_AWS (marked; pending migration)"
   elif [[ "$LEGACY_GCP" == "1" ]]; then
-    warn_ "legacy GCP workload in $NS_AWS"
+    warn_ "a workload named jaiscloud-gcp exists in $NS_AWS but is not marked as a JaisCloud emulator (candidate, not a pending migration)"
   else
     ok_ "no legacy GCP workload in $NS_AWS"
   fi
@@ -776,6 +881,11 @@ else
     spark_extra=""
     [[ "$GCP_SPARK_PRIVATE" == "1" ]] && spark_extra=" privateRegistry=yes"
     ok_ "gcp spark: ${GCP_SPARK_IMAGE:-<unset>} gcs-connector=$spark_gcs$spark_extra"
+    if [[ -n "$GCP_KAFKA_BROKER_MODE" ]]; then
+      kafka_note=""
+      [[ "$GCP_KAFKA_REAL" == "1" ]] && kafka_note=" (topics are not persistent: lost on park)"
+      say "  gcp kafka: broker-mode=$GCP_KAFKA_BROKER_MODE$kafka_note"
+    fi
   else
     miss_ "gcp: state=$GCP_STATE $NS_GCP/deployment/jaiscloud-gcp"
   fi

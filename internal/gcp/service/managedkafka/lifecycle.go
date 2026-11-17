@@ -14,7 +14,11 @@ type clusterParker interface {
 
 // Park terminates every cluster's broker workloads but keeps all cluster and
 // topic metadata. Broker topics are lost (the broker has no PVC), exactly like
-// a stopped container: the metadata is the source of truth on resume.
+// a stopped container: the metadata is the source of truth on resume. The result
+// reports that loss (topicDataLost) whenever a real broker was stopped, so the
+// /_jaiscloud/park caller can surface it instead of implying a full-fidelity
+// park. In mock mode there is no broker and no topic data at all, so the field is
+// omitted.
 func (s *Service) Park(ctx context.Context, project string) (map[string]any, error) {
 	clusters, err := s.ListAllClusters(ctx, project)
 	if err != nil {
@@ -34,7 +38,12 @@ func (s *Service) Park(ctx context.Context, project string) (map[string]any, err
 			stopped++
 		}
 	}
-	return map[string]any{"brokersStopped": stopped}, nil
+	result := map[string]any{"brokersStopped": stopped}
+	if s.broker != nil {
+		// A real broker's topics live in the broker container, not in a PVC.
+		result["topicDataLost"] = true
+	}
+	return result, nil
 }
 
 // Resume recreates every cluster's broker. It is idempotent: ensureBroker

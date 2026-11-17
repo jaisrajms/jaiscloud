@@ -95,11 +95,17 @@ deliberately separated by *what they destroy*:
 
 | mode | substrate compute | namespaces | PVCs (blobs + state) | databases | resource records (instance ID, LROs, topic/service records) |
 |---|---|---|---|---|---|
-| `--park <cloud>` | terminated (Deployment scaled to 0, engine runtimes stopped, executor Pods/Jobs reaped) | kept | kept | kept | kept |
-| `--resume <cloud>` | recreated (scale to 1, then `POST /_jaiscloud/resume`) | kept | kept | kept | kept; warns when the image digest changed |
+| `--park <cloud>` | terminated (Deployment scaled to 0, engine runtimes stopped, executor Pods/Jobs reaped) | kept | kept | kept | kept (Managed Kafka **topics** excepted — no broker PVC) |
+| `--resume <cloud>` | recreated (scale to 1, then `POST /_jaiscloud/resume`) | kept | kept | kept | kept; refuses a changed binary unless `--allow-upgrade`, else pins the parked digest |
 | `--switch <target>` | other substrate parked, target resumed | kept | kept | kept | kept |
 | `--delete [aws\|gcp\|both]` | removed (Deployment/Service/DSN Secret; AWS ConfigMap too) | kept | kept | kept | kept |
 | `--reset` / `--gcp-reset` | removed, then reinstalled | **deleted** for that substrate | **deleted** (blobs; GCP keeps its state PVC) | **dropped and recreated** for that substrate | **lost** for that substrate |
+
+The park record is **per substrate**: the namespace carries
+`jaiscloud.io/<cloud>.state`, `.parked-at`, `.parked-image`,
+`.parked-image-id` and `.parked-version` (`cloud` = `aws` | `gcp`), next to the
+per-cloud `desired` in the install record. Two substrates sharing one namespace
+therefore keep both records instead of the second park overwriting the first.
 
 Park is the only deliberate compute teardown that never touches data. Before the
 Deployment scales down, the emulator makes its own control plane honest through
@@ -113,7 +119,12 @@ Deployment scales down, the emulator makes its own control plane honest through
   the per-cluster namespace and not the cluster/topic metadata. **Kafka topics
   are lost**: the broker has no PVC, so its log dir dies with the Pod. Topic
   records survive and are recreated on the broker by the next data-plane call.
-  `Resume` starts a fresh broker per cluster.
+  `Resume` starts a fresh broker per cluster. This is surfaced, not silent: the
+  `/park` result carries `"topicDataLost": true` when a real broker was stopped,
+  `deploy.sh --park gcp` warns when `JAISCLOUD_KAFKA_BROKER_MODE` is
+  `k8s`/`docker`/`native`, and the preflight warns (and reports
+  `substrates.gcp.kafkaBrokerMode`). A broker PVC is deferred (the broker is
+  ephemeral by design); topic persistence is not claimed.
 - **Cloud Run** — every service's revision runtimes are removed; the Service and
   Revision records stay. `Resume` recreates the runtime for the service's
   latest-ready revision only.
@@ -131,10 +142,19 @@ predates the park/resume API (rebuild and redeploy it). A failed hook is fatal
 unless `PARK_FORCE=1`, which warns and continues with the scale/teardown.
 
 Both substrate images are tagged `:latest` for now (`imagePullPolicy:
-IfNotPresent`), so the digest a resumed pod runs is whatever the node cached; a
-park/resume across an upgrade can therefore change the binary (and run its store
-migrations), and `--resume` plus `deploy.sh --check` warn about it. Pin a release
-tag when one is available — DSL7 tracks that work.
+IfNotPresent`), so the digest a pod runs is whatever the node cached. A resume
+must not silently swap the binary (and run its store migrations):
+
+- `--resume` compares the Deployment image with the parked one *before* scaling;
+  a different image is refused with `--allow-upgrade` named as the opt-in.
+- Without `--allow-upgrade` it pins the parked `imageID` digest
+  (`kubectl set image deployment/<dep> <dep>=<repo>@sha256:…`) before scaling, so
+  a moving `:latest` cannot slip a new build in behind the tag. With no recorded
+  digest it warns that it cannot pin, and the post-rollout digest comparison
+  stays a warning. `--allow-upgrade` skips the pin and warns that the store may
+  migrate.
+- `deploy.sh --check` still warns about `:latest` images; pin a release tag when
+  one is available — DSL7 tracks that work.
 
 ## Invariants
 
@@ -219,12 +239,22 @@ tag when one is available — DSL7 tracks that work.
     new store pod) into both databases, copies the GCP blob claim when the legacy
     GCP emulator exists and the AWS claim when the legacy namespace differs, and
     **keeps** the legacy workload, Services and PVCs by default — the Postgres is
-    only scaled to 0. `--delete-legacy` removes the workload and the
-    `postgres`/`postgres-external` Services after checking `app=postgres`
-    (`LEGACY_DELETE_FORCE=1` overrides); a PVC is never deleted by the migration.
-    The preflight reports a retained, scaled-to-0 legacy object as
-    `legacy.*Retained` instead of re-recommending the migration. Running the new
-    manifests without the migration silently starts against an empty store.
+    only scaled to 0. **The tooling never touches a workload it cannot identify
+    as JaisCloud's**: the store's objects carry `jaiscloud.io/managed-by=jaiscloud`
+    (Deployment, PVC, Services, Secret), and the migration accepts only that
+    marker, the conventional `app.kubernetes.io/managed-by=jaiscloud`, or
+    `jaiscloud.io/substrate` on the legacy GCP workload. `app=postgres` alone is
+    not evidence. A pre-split object predates the marker, so it needs a one-time
+    `LEGACY_CONFIRM=1`; an unmarked object without it is refused, and a
+    `LEGACY_NAMESPACE` outside `jaiscloud`/`jaiscloud-gcp`/`jaiscloud-data`
+    likewise requires `LEGACY_CONFIRM=1`. `--delete-legacy` requires the marker
+    and additionally `LEGACY_DELETE_FORCE=1` when the object only carries
+    `app=postgres`; a PVC is never deleted by the migration. The preflight
+    reports a marked, scaled-to-0 legacy object as `legacy.*Retained` (a rollback
+    copy, not pending work), a marked one as `legacy.pending`, and an unmarked
+    same-named workload as `legacy.candidate` plus a warning — never a migration
+    recommendation. Running the new manifests without the migration silently
+    starts against an empty store.
 12. **Namespace names are literal in the manifests.** Each Namespace `name`, every
     `namespace:` field, the DSN hostnames and the VAP usernames spell out
     `jaiscloud`, `jaiscloud-gcp` and `jaiscloud-data`. `NS_AWS` / `NS_GCP` /
@@ -257,7 +287,9 @@ tag when one is available — DSL7 tracks that work.
   the `playbook` section of `contract.yaml` (authored in
   [`playbook.yaml`](playbook.yaml)).
 - **Read-only cluster state**: `deploy/deploy.sh --check [--json]`
-  (`scripts/integration-preflight.sh`).
+  (`scripts/integration-preflight.sh`). The leak and legacy predicates are
+  regression-tested offline with a fake `kubectl`:
+  `scripts/integration-preflight-test.sh`.
 - **The same pack without the source tree**: `jaiscloud-gcp agent-guide`
   (brief), `--json` (contract), `--emit DIR` (manifests + scripts + docs); both
   binaries embed it.

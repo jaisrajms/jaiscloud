@@ -353,8 +353,14 @@ namespace-isolation boundary is in place from the first namespace.
   if the old GCP emulator ran in the `jaiscloud` namespace, copies its object
   bytes into `jaiscloud-gcp`. The legacy Postgres is only **scaled to 0** and
   kept with its Services and PVCs as a rollback copy; `--delete-legacy` also
-  removes the workload and Services (never a PVC), and a `StatefulSet` or an
-  out-of-cluster `LEGACY_DSN` source is supported. See
+  removes the workload and Services after checking the JaisCloud marker (never a
+  PVC), and a `StatefulSet` or an out-of-cluster `LEGACY_DSN` source is
+  supported. The migration refuses a source it cannot identify as JaisCloud's:
+  the store's objects carry `jaiscloud.io/managed-by=jaiscloud`, and a pre-split
+  build (which predates the label) needs a one-time `LEGACY_CONFIRM=1`. An
+  unmarked workload named `postgres` in `jaiscloud` therefore shows up in
+  `--check` as `legacy.candidate` with a warning, not as a pending migration.
+  See
   [the Developer Guide](DEVELOPER_GUIDE.md#setup-3--jaiscloud-on-kubernetes).
 - **Bring your own store.** `./deploy/deploy.sh --yes --store-dsn
   'postgres://user:pass@db.example.com:5432/postgres'` (or
@@ -394,17 +400,30 @@ Stopping compute without losing data is a separate mode:
 
 ```bash
 ./deploy/deploy.sh --park gcp               # stop GCP compute; keep its data
-./deploy/deploy.sh --resume gcp             # one rollout; warns on an image change
+./deploy/deploy.sh --resume gcp             # one rollout; keeps the parked binary
 ./deploy/deploy.sh --switch aws --yes       # park GCP (when installed), resume AWS
 ./deploy/deploy.sh --delete gcp             # remove GCP workloads only (aws|gcp|both)
 ```
+
+The park record is kept **per substrate** on the namespace
+(`jaiscloud.io/<cloud>.state`, `.parked-at`, `.parked-image`, `.parked-image-id`,
+`.parked-version`), so both records survive if the two substrates share a
+namespace.
 
 `--park` first calls the emulator's `POST /_jaiscloud/park`, where Dataproc
 cancels non-terminal jobs, Managed Kafka deletes its broker Pods/Services
 (topics are lost — the broker has no PVC — but cluster/topic records survive) and
 Cloud Run removes revision runtimes (records survive), then scales the Deployment
 to 0 and reaps executor Pods/Jobs. The database, blobs/state PVCs (instance ID),
-namespaces, CA and resource records are kept. `GATE_ALLOW_LIFECYCLE=1 make
+namespaces, CA and resource records are kept. The park response reports
+`topicDataLost`, `--park gcp` warns when a real Managed Kafka broker mode is
+configured, and the preflight warns too
+(`substrates.gcp.kafkaBrokerMode`).
+
+`--resume` must not silently change the binary before store migrations: it
+refuses a changed Deployment image (`--allow-upgrade` is the explicit opt-in) and
+otherwise pins the parked image digest with `kubectl set image` before scaling,
+so a moving `:latest` tag cannot swap the build. `GATE_ALLOW_LIFECYCLE=1 make
 test-lifecycle-k8s` proves retention across park/resume and both switch
 directions.
 

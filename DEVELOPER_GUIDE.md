@@ -733,6 +733,19 @@ Migrate once, before (or instead of) a fresh deploy:
 # substrates back.
 ```
 
+The migration refuses a store it cannot identify as JaisCloud's. Every object
+`deploy/k8s/postgres.yaml` owns carries `jaiscloud.io/managed-by=jaiscloud`
+(Deployment, PVC, both Services, Secret), and `--migrate-store` accepts that
+marker, the conventional `app.kubernetes.io/managed-by=jaiscloud`, or
+`jaiscloud.io/substrate` on the legacy GCP workload — but never `app=postgres`
+alone, which every operator-run Postgres has. A pre-split install predates the
+label, so the first migration needs `LEGACY_CONFIRM=1` (`--legacy-confirm`);
+without it `deploy.sh` refuses before dumping anything, and `--check` reports the
+unmarked object as `legacy.candidate` (a warning, not a pending migration). A
+`LEGACY_NAMESPACE` other than `jaiscloud`/`jaiscloud-gcp`/`jaiscloud-data` also
+requires `LEGACY_CONFIRM=1`. `LEGACY_DSN` is an explicit source and needs no
+marker.
+
 If the old install also ran the **GCP emulator in the `jaiscloud` namespace**
 (the pre-split manifest did), the command handles that side as well:
 
@@ -758,10 +771,11 @@ kubectl -n jaiscloud delete pvc postgres-pvc jaiscloud-gcp-blobs-pvc
 ```
 
 `--delete-legacy` (or `DELETE_LEGACY=1`) performs the workload/Service removal
-as part of the migration. It deletes only when the object carries
-`app=postgres`; otherwise it refuses and names `LEGACY_DELETE_FORCE=1`. **No PVC
-is ever deleted by the migration**, and a workload or claim it cannot recognise
-is left alone. Use `LEGACY_POSTGRES_WORKLOAD=statefulset/postgres` for a
+as part of the migration. It deletes only when the object carries the JaisCloud
+marker; an object with a bare `app=postgres` label is refused and names
+`LEGACY_DELETE_FORCE=1`. **No PVC is ever deleted by the migration**, and a
+workload or claim it cannot recognise is left alone. Use
+`LEGACY_POSTGRES_WORKLOAD=statefulset/postgres` for a
 StatefulSet, and `LEGACY_DSN=postgres://…` when the old store is outside the
 cluster: the dump then runs from the *new* store pod (it ships `pg_dump`) after
 that pod is up, and no legacy store workload is scaled or deleted. The AWS blob
@@ -923,20 +937,31 @@ RUNNING), Managed Kafka deletes each broker's Pod/Service but keeps its
 per-cluster namespace and the cluster/topic records (broker topics are lost — the
 broker has no PVC), and Cloud Run removes revision runtimes while keeping
 Service/Revision records. Cloud Functions need no hook. The namespace is then
-annotated `jaiscloud.io/state=parked` with `parked-at`, `parked-image`,
-`parked-image-id` and `parked-version`; the install record becomes
-`<cloud>=parked`.
+annotated with the per-substrate park record —
+`jaiscloud.io/<cloud>.state=parked` plus `.parked-at`, `.parked-image`,
+`.parked-image-id` and `.parked-version` — so two substrates sharing a namespace
+keep both records; the install record becomes `<cloud>=parked`.
+
+The topic loss is surfaced rather than implied: the park result carries
+`"topicDataLost": true` when a real broker was stopped, `--park gcp` warns when
+`JAISCLOUD_KAFKA_BROKER_MODE` is `k8s`/`docker`/`native`, and
+`deploy.sh --check` warns and reports `substrates.gcp.kafkaBrokerMode`. Cluster
+and topic metadata and the namespace survive; the broker's topics do not.
 
 Resume scales the Deployment to 1, waits for the rollout, posts
 `/_jaiscloud/resume` (Kafka brokers and Cloud Run runtimes are recreated;
-Dataproc is a no-op; every hook is idempotent), compares the new pod's imageID
-with `parked-image-id` and warns when the binary changed (store migrations may
-run), then annotates the namespace `state=running` and removes the `parked-*`
-annotations. Neither direction re-applies a manifest or rebuilds an image, so
-there is exactly one rollout. Park deletes executor Pods/Jobs in the substrate
-namespace and in every namespace labelled
-`jaiscloud.io/managed-by=jaiscloud,jaiscloud.io/substrate=<cloud>`, but never a
-namespace or a Service.
+Dataproc is a no-op; every hook is idempotent), then annotates
+`jaiscloud.io/<cloud>.state=running` and removes that cloud's `parked-*` keys.
+Neither direction re-applies a manifest or rebuilds an image, so there is exactly
+one rollout. **Resume never changes the binary silently:** before scaling it
+compares the Deployment image with the parked one and refuses a mismatch, naming
+`--allow-upgrade` (`ALLOW_UPGRADE=1`) as the opt-in; without it, it pins the
+parked `imageID` digest with `kubectl set image`, so a moving `:latest` tag
+cannot swap the build and run its store migrations. With no recorded digest it
+warns that it cannot pin, and the post-rollout digest comparison stays a warning.
+Park deletes executor Pods/Jobs in the substrate namespace and in every namespace
+labelled `jaiscloud.io/managed-by=jaiscloud,jaiscloud.io/substrate=<cloud>`, but
+never a namespace or a Service.
 
 `--delete [aws|gcp|both]` is the workload-only option: it removes the
 Deployment, Service and DSN Secret (and the AWS `jaiscloud-config` ConfigMap) and

@@ -31,13 +31,17 @@
 #                                   # one-time: move the pre-split store from
 #                                   # ns jaiscloud into jaiscloud-data, and the
 #                                   # old GCP object bytes into jaiscloud-gcp.
+#                                   # The source object must carry
+#                                   # jaiscloud.io/managed-by=jaiscloud (or
+#                                   # LEGACY_CONFIRM=1 for a pre-split build).
 #                                   # The legacy workload is SCALED TO 0 and kept
 #                                   # (Deployment/StatefulSet, Services, PVCs);
 #                                   # --delete-legacy removes it too.
 #   ./deploy/deploy.sh --migrate-store --delete-legacy
 #                                   # also delete the legacy postgres workload +
-#                                   # Services (only when it carries app=postgres;
-#                                   # LEGACY_DELETE_FORCE=1 overrides), never a PVC
+#                                   # Services (only when it carries the JaisCloud
+#                                   # marker; LEGACY_DELETE_FORCE=1 overrides a
+#                                   # bare app=postgres), never a PVC
 #   ./deploy/deploy.sh --store-dsn postgres://user:pass@host:5432/db
 #                                   # bring your own store: no postgres.yaml, the
 #                                   # databases are created via a psql pod and the
@@ -54,8 +58,9 @@
 #                                   # database, PVCs, state PVC (instance ID), namespaces,
 #                                   # CA and resource records survive
 #   ./deploy/deploy.sh --resume <aws|gcp>
-#                                   # scale back to 1, recreate the engine runtimes, and warn
-#                                   # when the binary digest changed while parked
+#                                   # scale back to 1, recreate the engine runtimes;
+#                                   # refuses to change the binary while parked
+#                                   # (pins the parked digest) unless --allow-upgrade
 #   ./deploy/deploy.sh --switch <aws|gcp>
 #                                   # park the other substrate (when installed), then resume
 #                                   # this one; `--switch both` is invalid
@@ -121,10 +126,24 @@ DELETE_LEGACY="${DELETE_LEGACY:-0}"
 # LEGACY_POSTGRES_WORKLOAD: auto (deployment/postgres, then statefulset/postgres),
 # or an explicit "<kind>/<name>" such as statefulset/postgres.
 LEGACY_POSTGRES_WORKLOAD="${LEGACY_POSTGRES_WORKLOAD:-auto}"
+# LEGACY_NAMESPACE: where the pre-split store lives. Defaulting to the AWS
+# namespace is the shipped layout; any other namespace must be confirmed with
+# LEGACY_CONFIRM=1 (check_namespace_overrides), so a stray override can never
+# aim the migration at a namespace this install does not own.
+LEGACY_NAMESPACE="${LEGACY_NAMESPACE:-$NAMESPACE_AWS}"
 LEGACY_PG_USER="${LEGACY_PG_USER:-jaiscloud}"
 LEGACY_DSN="${LEGACY_DSN:-}"
 MIGRATE_FORCE="${MIGRATE_FORCE:-0}"
+# LEGACY_CONFIRM=1: this object/namespace really is the pre-split JaisCloud
+# store. Required for an object that does not carry
+# jaiscloud.io/managed-by=jaiscloud (a pre-split build predates the label) and
+# for a LEGACY_NAMESPACE outside the three JaisCloud namespaces.
+LEGACY_CONFIRM="${LEGACY_CONFIRM:-0}"
 LEGACY_DELETE_FORCE="${LEGACY_DELETE_FORCE:-0}"
+# ALLOW_UPGRADE=1 (--allow-upgrade): resume with whatever image the Deployment
+# names, instead of pinning the parked binary's digest. Without it a resume
+# refuses to change the binary and pins the parked digest when it is known.
+ALLOW_UPGRADE="${ALLOW_UPGRADE:-0}"
 # Blob claims: the pre-split claim in the legacy namespace and the claim the new
 # substrate owns. The AWS pair only needs copying when the namespace changes
 # (LEGACY_NAMESPACE != NAMESPACE_AWS); the GCP pair is a namespace move too.
@@ -191,17 +210,23 @@ Usage:
                                   state travels). If the old GCP emulator ran in
                                   the legacy namespace, its object bytes are
                                   copied to jaiscloud-gcp/jaiscloud-gcp-blobs-pvc.
+                                  The source object must be marked
+                                  jaiscloud.io/managed-by=jaiscloud; a pre-split
+                                  build predates that label, so confirm it once
+                                  with LEGACY_CONFIRM=1 (LEGACY_DSN is an explicit
+                                  source and needs no marker).
                                   By default the legacy Postgres is only SCALED
                                   TO 0: its Deployment/StatefulSet, Services and
                                   PVCs are kept, and the command prints how to
                                   remove them later. --delete-legacy (or
                                   DELETE_LEGACY=1) deletes the workload and the
                                   postgres/postgres-external Services after
-                                  checking they carry app=postgres; a PVC is
-                                  never deleted. SKIP_BLOB_MIGRATE=1 copies by
-                                  hand, BLOB_MIGRATE_IMAGE overrides busybox.
-                                  Refuses when the new postgres-pvc already
-                                  exists unless MIGRATE_FORCE=1.
+                                  checking the JaisCloud marker; a bare
+                                  app=postgres object needs LEGACY_DELETE_FORCE=1.
+                                  A PVC is never deleted. SKIP_BLOB_MIGRATE=1
+                                  copies by hand, BLOB_MIGRATE_IMAGE overrides
+                                  busybox. Refuses when the new postgres-pvc
+                                  already exists unless MIGRATE_FORCE=1.
   ./deploy/deploy.sh --migrate-store --delete-legacy
                                   With --migrate-store: opt into removing the
                                   legacy Postgres workload and Services.
@@ -228,14 +253,20 @@ Usage:
                                   Kafka brokers and Cloud Run revisions), scale the
                                   substrate Deployment to 0, delete executor Pods/Jobs
                                   (and the ECR proxy) in the substrate and its labelled
-                                  `gcp-*` namespaces, and annotate the namespace parked.
+                                  `gcp-*` namespaces, and record the park on the
+                                  namespace under jaiscloud.io/<cloud>.* (per substrate,
+                                  so co-located namespaces do not overwrite each other).
                                   Keeps: database, blobs/state PVCs (instance ID), the
                                   namespaces, the CA and every resource record.
+                                  Managed Kafka broker topic data is NOT kept (the
+                                  broker has no PVC); a real broker mode is warned about.
   ./deploy/deploy.sh --resume <aws|gcp>
                                   Scale the substrate back to 1, wait for its rollout,
                                   POST /_jaiscloud/resume (recreate brokers/revisions),
-                                  and warn if the running image digest changed while
-                                  parked (a store migration may run).
+                                  and keep the parked binary: the Deployment image must
+                                  still match the parked one, and the parked digest is
+                                  pinned before scaling. --allow-upgrade opts into the
+                                  new image (the store may migrate).
   ./deploy/deploy.sh --switch <aws|gcp>
                                   Park the other substrate (when installed), then resume
                                   this one. There is no `--switch both`.
@@ -267,7 +298,15 @@ Usage:
   --store-dsn <dsn>               Bring your own store (see above; also
                                   JAISCLOUD_STORE_DSN).
   --delete-legacy                 With --migrate-store: remove the legacy Postgres
-                                  workload and Services (label-checked; never a PVC).
+                                  workload and Services (JaisCloud marker required;
+                                  never a PVC).
+  --legacy-confirm                Same as LEGACY_CONFIRM=1: confirm that the
+                                  LEGACY_NAMESPACE/legacy object really is the
+                                  pre-split JaisCloud store (needed for a pre-split
+                                  build, which predates the managed-by label).
+  --allow-upgrade                 With --resume/--switch: use whatever image the
+                                  Deployment names instead of pinning the parked
+                                  binary's digest (a store migration may run).
   --skip-build                    Do not run `docker build`; deploy the image already
                                   imported into the cluster (SKIP_IMAGE_BUILD=1). Useful
                                   with `k3d image import` and other CI paths.
@@ -291,20 +330,30 @@ Environment:
   STORE_INIT_IMAGE                Image for the external-store psql pod
                                   (default postgres:16-alpine)
   LEGACY_NAMESPACE                Namespace holding the pre-split store
-                                  (default the AWS namespace)
+                                  (default the AWS namespace). Any other value
+                                  must be confirmed with LEGACY_CONFIRM=1.
   LEGACY_POSTGRES_WORKLOAD        auto (default), deployment/postgres or
                                   statefulset/postgres
   LEGACY_DSN                      Dump this server from the NEW store pod instead
                                   of a legacy workload (nothing legacy is scaled or
-                                  deleted); postgres:// or postgresql://
+                                  deleted); postgres:// or postgresql://. It is an
+                                  explicit source, so it needs no managed-by marker.
   LEGACY_PG_USER                  Role for the legacy-workload dump (default jaiscloud)
+  LEGACY_CONFIRM=1                Confirm that the legacy object/namespace is the
+                                  pre-split JaisCloud store when it does not carry
+                                  jaiscloud.io/managed-by=jaiscloud. Same as
+                                  --legacy-confirm.
   LEGACY_GCP_BLOBS_PVC            Legacy GCP claim (default jaiscloud-gcp-blobs-pvc)
   NEW_GCP_BLOBS_PVC               New GCP claim (default jaiscloud-gcp-blobs-pvc)
   LEGACY_AWS_BLOBS_PVC            Legacy AWS claim (default jaiscloud-blobs-pvc)
   NEW_AWS_BLOBS_PVC               New AWS claim (default jaiscloud-blobs-pvc)
   DELETE_LEGACY=1                 Same as --delete-legacy
-  LEGACY_DELETE_FORCE=1           Delete the legacy workload even without
-                                  label app=postgres (DANGEROUS)
+  LEGACY_DELETE_FORCE=1           Delete the legacy workload even when it only
+                                  carries app=postgres and no JaisCloud marker
+                                  (DANGEROUS)
+  ALLOW_UPGRADE=1                 With --resume/--switch: do not pin the parked
+                                  digest; the image may have changed and the store
+                                  may migrate. Same as --allow-upgrade.
   MIGRATE_FORCE=1                 With --migrate-store: proceed when the new
                                   postgres-pvc already exists
   SKIP_BLOB_MIGRATE=1             Do not copy blob claims
@@ -433,12 +482,36 @@ substrate_vars() {
   esac
 }
 
+# park_key <cloud> <field> — the park record is per substrate
+# (jaiscloud.io/<cloud>.state, .parked-at, .parked-image, .parked-image-id,
+# .parked-version), so two substrates sharing one namespace cannot overwrite each
+# other's record. The install record's `desired` is per cloud too.
+park_key() { printf 'jaiscloud.io/%s.%s' "$1" "$2"; }
+
 # Annotation reads use jsonpath bracket notation: annotation keys contain dots
 # and slashes, which the dot-path form cannot express reliably. A missing key
 # reads as empty.
 ns_annotation() { # ns_annotation <namespace> <key>
   kubectl get namespace "$1" \
     -o jsonpath="{.metadata.annotations['$2']}" 2>/dev/null || true
+}
+
+# deployment_env <namespace> <deployment> <name> — the literal env value of one
+# variable in the first container ("" when unset).
+deployment_env() {
+  kubectl -n "$1" get deployment "$2" \
+    -o jsonpath="{.spec.template.spec.containers[0].env[?(@.name==\"$3\")].value}" 2>/dev/null || true
+}
+
+# digest_from_image_id <imageID> — a repo@sha256:… reference, or "" when the
+# value is not a digest (e.g. a bare tag). The container runtime reports it as
+# docker-pullable://<repo>@sha256:<hash> or <repo>@sha256:<hash>.
+digest_from_image_id() {
+  local id=${1#docker-pullable://}
+  case "$id" in
+    *@sha256:*) printf '%s' "$id" ;;
+    *) printf '' ;;
+  esac
 }
 
 # free_local_port — the first unbound port in 18080-18089. The check runs in a
@@ -527,12 +600,12 @@ ensure_park_annotations() {
   local cloud=$1 image=$2 image_id=$3 version=$4
   substrate_vars "$cloud"
   local args=(
-    "jaiscloud.io/state=parked"
-    "jaiscloud.io/parked-at=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    "$(park_key "$cloud" state)=parked"
+    "$(park_key "$cloud" parked-at)=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
   )
-  [[ -n "$image" ]] && args+=("jaiscloud.io/parked-image=$image")
-  [[ -n "$image_id" ]] && args+=("jaiscloud.io/parked-image-id=$image_id")
-  [[ -n "$version" ]] && args+=("jaiscloud.io/parked-version=$version")
+  [[ -n "$image" ]] && args+=("$(park_key "$cloud" parked-image)=$image")
+  [[ -n "$image_id" ]] && args+=("$(park_key "$cloud" parked-image-id)=$image_id")
+  [[ -n "$version" ]] && args+=("$(park_key "$cloud" parked-version)=$version")
   kubectl annotate namespace "$NS" "${args[@]}" --overwrite >/dev/null
 }
 
@@ -556,7 +629,7 @@ delete_executor_workloads() {
 
 # park_substrate <cloud> — quiesce compute, scale to 0, keep everything else.
 park_substrate() {
-  local cloud=$1 other replicas image image_id version
+  local cloud=$1 other replicas image image_id version kafka_mode
   substrate_vars "$cloud"
   if [[ "$cloud" == "aws" ]]; then other=gcp; else other=aws; fi
 
@@ -577,8 +650,8 @@ park_substrate() {
   if [[ "$replicas" == "0" ]]; then
     info "deployment/$DEPLOY is already scaled to 0 — ensuring the park record."
     ensure_park_annotations "$cloud" "$image" \
-      "$(ns_annotation "$NS" "jaiscloud.io/parked-image-id")" \
-      "$(ns_annotation "$NS" "jaiscloud.io/parked-version")"
+      "$(ns_annotation "$NS" "$(park_key "$cloud" parked-image-id)")" \
+      "$(ns_annotation "$NS" "$(park_key "$cloud" parked-version)")"
     record_intent "$cloud" parked
     return 0
   fi
@@ -592,6 +665,18 @@ park_substrate() {
   info "Parking $cloud: cancelling jobs and stopping engine runtimes..."
   admin_post "$PORT_FORWARD_PORT" park
   stop_port_forwards
+
+  # Managed Kafka is the one engine whose data does not survive a park: the
+  # broker has no PVC, so its topics go with the broker Pod while cluster/topic
+  # metadata and the namespace stay. The /park response says so
+  # (topicDataLost), and this warns before the pods disappear.
+  if [[ "$cloud" == "gcp" ]]; then
+    kafka_mode=$(deployment_env "$NS" "$DEPLOY" JAISCLOUD_KAFKA_BROKER_MODE)
+    case "$kafka_mode" in
+      k8s|docker|native)
+        warn "Managed Kafka broker topic data is not persistent (the broker has no PVC); topics are lost on park. Cluster/topic metadata and the namespace survive." ;;
+    esac
+  fi
 
   info "Scaling deployment/$DEPLOY to 0 in $NS..."
   kubectl -n "$NS" scale deployment "$DEPLOY" --replicas=0 --timeout=120s >/dev/null
@@ -613,9 +698,14 @@ park_substrate() {
   echo ""
 }
 
-# resume_substrate <cloud> — scale to 1, recreate compute, warn on image change.
+# resume_substrate <cloud> — scale to 1, recreate compute, keep the parked binary.
+#   The Deployment image must still be the parked one; otherwise the resume could
+#   silently swap the binary (and run the new binary's store migrations) with no
+#   operator intent. Without --allow-upgrade this refuses before scaling, and it
+#   pins the recorded parked digest, so a moving :latest tag cannot slip a new
+#   build in behind the tag. --allow-upgrade is the explicit opt-in.
 resume_substrate() {
-  local cloud=$1 state parked_image parked_id new_id
+  local cloud=$1 state parked_image parked_id deploy_image pin_id new_id
   substrate_vars "$cloud"
 
   if ! kubectl get namespace "$NS" &>/dev/null; then
@@ -625,11 +715,34 @@ resume_substrate() {
     die "deployment/$DEPLOY is missing in $NS — run deploy.sh to install the $cloud substrate"
   fi
 
-  state=$(ns_annotation "$NS" "jaiscloud.io/state")
-  parked_image=$(ns_annotation "$NS" "jaiscloud.io/parked-image")
-  parked_id=$(ns_annotation "$NS" "jaiscloud.io/parked-image-id")
+  state=$(ns_annotation "$NS" "$(park_key "$cloud" state)")
+  parked_image=$(ns_annotation "$NS" "$(park_key "$cloud" parked-image)")
+  parked_id=$(ns_annotation "$NS" "$(park_key "$cloud" parked-image-id)")
   if [[ -z "$state" && -z "$parked_image" && -z "$parked_id" ]]; then
     warn "namespace $NS is not marked parked — resuming anyway"
+  fi
+  deploy_image=$(kubectl -n "$NS" get deployment "$DEPLOY" \
+    -o jsonpath='{.spec.template.spec.containers[0].image}' 2>/dev/null || true)
+
+  # Guard, then pin, strictly BEFORE the scale: a refused resume leaves the
+  # substrate parked and untouched.
+  if [[ -n "$parked_image" && "$deploy_image" != "$parked_image" ]]; then
+    if [[ "$ALLOW_UPGRADE" != "1" ]]; then
+      die "the image changed while parked: parked '$parked_image', deployment '$deploy_image'; pass --allow-upgrade to use the new image, or restore the parked image first"
+    fi
+  fi
+  if [[ "$ALLOW_UPGRADE" == "1" ]]; then
+    warn "--allow-upgrade: not pinning the resumed image to the parked digest; if the image changed, the store may migrate"
+  else
+    pin_id=$(digest_from_image_id "$parked_id")
+    if [[ -z "$pin_id" ]]; then
+      warn "no parked binary digest recorded; cannot pin the resumed image"
+    else
+      if [[ "$deploy_image" != "$pin_id" ]]; then
+        info "Pinning deployment/$DEPLOY to the parked digest (${pin_id##*@})..."
+        kubectl -n "$NS" set image "deployment/$DEPLOY" "$DEPLOY=$pin_id" >/dev/null
+      fi
+    fi
   fi
 
   info "Scaling deployment/$DEPLOY to 1 in $NS..."
@@ -643,16 +756,17 @@ resume_substrate() {
     -o jsonpath='{.items[0].status.containerStatuses[0].imageID}' 2>/dev/null || true)
   stop_port_forwards
 
+  # Still useful when the digest was unknown at park time (nothing to pin).
   if [[ -n "$parked_id" && -n "$new_id" && "$parked_id" != "$new_id" ]]; then
     warn "binary changed while parked: store migrations may run"
     warn "  parked: $parked_id"
     warn "  now:    $new_id"
   fi
 
-  kubectl annotate namespace "$NS" "jaiscloud.io/state=running" --overwrite >/dev/null
+  kubectl annotate namespace "$NS" "$(park_key "$cloud" state)=running" --overwrite >/dev/null
   kubectl annotate namespace "$NS" \
-    jaiscloud.io/parked-at- jaiscloud.io/parked-image- \
-    jaiscloud.io/parked-image-id- jaiscloud.io/parked-version- \
+    "$(park_key "$cloud" parked-at)-" "$(park_key "$cloud" parked-image)-" \
+    "$(park_key "$cloud" parked-image-id)-" "$(park_key "$cloud" parked-version)-" \
     --overwrite >/dev/null
   record_intent "$cloud" running
   ok "$cloud substrate resumed in $NS."
@@ -1014,6 +1128,17 @@ manifest_namespace_fields() {
 # edits instead of operating on a half-renamed install.
 check_namespace_overrides() {
   local problems=() spec file expected got dep
+  # The migration may read a pre-split store from a fourth namespace, but only
+  # deliberately: an unconfirmed LEGACY_NAMESPACE must not point at a namespace
+  # this install does not own (a typo would dump and then scale down a foreign
+  # Postgres).
+  if [[ -n "$LEGACY_NAMESPACE" \
+        && "$LEGACY_NAMESPACE" != "$NAMESPACE_AWS" \
+        && "$LEGACY_NAMESPACE" != "$NAMESPACE_GCP" \
+        && "$LEGACY_NAMESPACE" != "$NAMESPACE_DATA" \
+        && "$LEGACY_CONFIRM" != "1" ]]; then
+    die "LEGACY_NAMESPACE='$LEGACY_NAMESPACE' is not one of the JaisCloud namespaces ($NAMESPACE_AWS, $NAMESPACE_GCP, $NAMESPACE_DATA). The migration only reads a store this install owns; set LEGACY_CONFIRM=1 (--legacy-confirm) to confirm '$LEGACY_NAMESPACE' holds the pre-split JaisCloud store."
+  fi
   for spec in "namespace-aws.yaml:$NAMESPACE_AWS" \
               "namespace-gcp.yaml:$NAMESPACE_GCP" \
               "namespace-data.yaml:$NAMESPACE_DATA"; do
@@ -1328,6 +1453,8 @@ while (($#)); do
     --gcp-reset)     MODE="gcp-reset" ;;
     --migrate-store) MODE="migrate-store" ;;
     --delete-legacy) DELETE_LEGACY=1 ;;
+    --legacy-confirm) LEGACY_CONFIRM=1 ;;
+    --allow-upgrade) ALLOW_UPGRADE=1 ;;
     --store-dsn)     [[ -n "${2:-}" ]] || die "--store-dsn needs a DSN (postgres:// or postgresql://)"
                      STORE_DSN="$2"; shift ;;
     --store-dsn=*)   STORE_DSN="${1#*=}"
@@ -1433,26 +1560,37 @@ plan_lifecycle_park() {
   plan "kubectl -n $NS get deployment $DEPLOY -o jsonpath='{.spec.template.spec.containers[0].image}'"
   plan "kubectl -n $NS get pods -l $SELECTOR -o jsonpath='{.items[0].status.containerStatuses[0].imageID}'"
   plan "kubectl -n $NS port-forward svc/$SVC <free 18080-18089>:$PORT   # wait for /_jaiscloud/health"
-  plan "curl -sS -X POST http://127.0.0.1:<port>/_jaiscloud/park   # jobs cancelled; broker/revision runtimes stopped"
+  plan "curl -sS -X POST http://127.0.0.1:<port>/_jaiscloud/park   # jobs cancelled; broker/revision runtimes stopped; topicDataLost when a real broker stopped"
+  if [[ "$cloud" == "gcp" ]]; then
+    plan "kubectl -n $NS get deployment $DEPLOY -o jsonpath='{.spec.template.spec.containers[0].env[?(@.name==\"JAISCLOUD_KAFKA_BROKER_MODE\")].value}'   # k8s/docker/native -> warn: broker topics are lost (no broker PVC)"
+  fi
   plan "kubectl -n $NS scale deployment $DEPLOY --replicas=0 --timeout=120s"
   plan "kubectl -n $NS wait --for=delete pod -l $SELECTOR --timeout=120s"
   plan "kubectl -n $NS delete jobs --all; delete pods --all; delete deployments -l managed-by=jaiscloud   # ECR proxy"
   plan "for ns in the namespaces labelled jaiscloud.io/managed-by=jaiscloud,jaiscloud.io/substrate=$cloud (other than $NS): kubectl -n \$ns delete jobs,pods,deployments,statefulsets --all"
-  plan "kubectl annotate namespace $NS jaiscloud.io/state=parked jaiscloud.io/parked-at=... jaiscloud.io/parked-image=... jaiscloud.io/parked-image-id=... jaiscloud.io/parked-version=... --overwrite"
+  plan "kubectl annotate namespace $NS $(park_key "$cloud" state)=parked $(park_key "$cloud" parked-at)=... $(park_key "$cloud" parked-image)=... $(park_key "$cloud" parked-image-id)=... $(park_key "$cloud" parked-version)=... --overwrite"
+  plan "# the park record is per substrate ($(park_key "$cloud" state) etc.), so a co-located namespace keeps both substrates' records"
 }
 
 plan_lifecycle_resume() {
   local cloud=$1
   substrate_vars "$cloud"
-  plan "# resume $cloud: one rollout, no manifest re-apply, no image check"
+  plan "# resume $cloud: one rollout, no manifest re-apply, no silent binary change"
   plan "kubectl get namespace $NS   # missing -> die 'install it first'; deployment missing -> die 'run deploy.sh'"
-  plan "kubectl get namespace $NS -o jsonpath=\"{.metadata.annotations['jaiscloud.io/state']}\"   # warn when not parked"
+  plan "kubectl get namespace $NS -o jsonpath=\"{.metadata.annotations['$(park_key "$cloud" state)']}\"   # warn when not parked"
+  plan "kubectl -n $NS get deployment $DEPLOY -o jsonpath='{.spec.template.spec.containers[0].image}'   # compare with $(park_key "$cloud" parked-image)"
+  if [[ "$ALLOW_UPGRADE" == "1" ]]; then
+    plan "# ALLOW_UPGRADE=1: use the current Deployment image (no pin); warn that the store may migrate"
+  else
+    plan "# image differs from the parked one -> die BEFORE scaling ('pass --allow-upgrade ...'); never a silent upgrade"
+    plan "kubectl -n $NS set image deployment/$DEPLOY $DEPLOY=<$(park_key "$cloud" parked-image-id) repo@sha256:...>   # pin the parked digest; skipped with no recorded digest (warn)"
+  fi
   plan "kubectl -n $NS scale deployment $DEPLOY --replicas=1"
   plan "kubectl -n $NS rollout status deployment/$DEPLOY --timeout=120s"
   plan "kubectl -n $NS port-forward svc/$SVC <free 18080-18089>:$PORT   # wait for /_jaiscloud/health"
   plan "curl -sS -X POST http://127.0.0.1:<port>/_jaiscloud/resume   # brokers/revisions recreated"
-  plan "# compare the new pod imageID with jaiscloud.io/parked-image-id; warn when the binary changed"
-  plan "kubectl annotate namespace $NS jaiscloud.io/state=running --overwrite; kubectl annotate namespace $NS jaiscloud.io/parked-at- jaiscloud.io/parked-image- jaiscloud.io/parked-image-id- jaiscloud.io/parked-version-"
+  plan "# compare the new pod imageID with $(park_key "$cloud" parked-image-id); warn when the binary changed"
+  plan "kubectl annotate namespace $NS $(park_key "$cloud" state)=running --overwrite; kubectl annotate namespace $NS $(park_key "$cloud" parked-at)- $(park_key "$cloud" parked-image)- $(park_key "$cloud" parked-image-id)- $(park_key "$cloud" parked-version)-"
 }
 
 print_plan() {
@@ -1497,12 +1635,20 @@ print_plan() {
       plan_install_record "gcp" "gcp=running"
       ;;
     migrate-store)
-      local OLD_NS="${LEGACY_NAMESPACE:-$NAMESPACE_AWS}" legacy_workload
+      local OLD_NS="$LEGACY_NAMESPACE" legacy_workload confirm_state
       legacy_workload="$LEGACY_POSTGRES_WORKLOAD"
       [[ "$legacy_workload" == "auto" ]] && legacy_workload="<deployment|statefulset>/postgres"
+      if [[ "$LEGACY_CONFIRM" == "1" ]]; then
+        confirm_state="LEGACY_CONFIRM=1: an unmarked legacy object is accepted as the pre-split JaisCloud store"
+      else
+        confirm_state="LEGACY_CONFIRM=0: an unmarked legacy object is refused (--legacy-confirm confirms a pre-split build)"
+      fi
+      plan "# legacy namespace: $OLD_NS (default $NAMESPACE_AWS; any other value needs LEGACY_CONFIRM=1)"
+      plan "# $confirm_state"
       plan "kubectl -n $NAMESPACE_AWS scale deployment jaiscloud --replicas=0   # when present (stops a writer)"
-      plan "kubectl -n $OLD_NS scale deployment jaiscloud-gcp --replicas=0       # legacy GCP too, when present"
+      plan "kubectl -n $OLD_NS scale deployment jaiscloud-gcp --replicas=0       # legacy GCP too, when marked (or LEGACY_CONFIRM=1)"
       plan "# legacy store source: $legacy_workload (auto = deployment/postgres, then statefulset/postgres)"
+      plan "kubectl -n $OLD_NS get <kind>/<name> -o jsonpath=\"{.metadata.labels['jaiscloud.io/managed-by']}\"   # must be jaiscloud, else die (LEGACY_CONFIRM=1 overrides)"
       plan "# blob claims: legacy aws=$LEGACY_AWS_BLOBS_PVC gcp=$LEGACY_GCP_BLOBS_PVC -> new aws=$NEW_AWS_BLOBS_PVC gcp=$NEW_GCP_BLOBS_PVC"
       if [[ -n "$LEGACY_DSN" ]]; then
         plan "kubectl apply -f $K8S_DIR/namespace-data.yaml; kubectl apply -f $K8S_DIR/postgres.yaml; rollout status"
@@ -1516,7 +1662,7 @@ print_plan() {
       plan "kubectl -n $NAMESPACE_DATA exec -i deploy/postgres -- pg_restore ... -d jaiscloud < <tmp>"
       plan "kubectl -n $NAMESPACE_DATA exec -i deploy/postgres -- pg_restore ... -d jaiscloud_gcp < <tmp>"
       if [[ "$DELETE_LEGACY" == "1" ]]; then
-        plan "kubectl -n $OLD_NS get <deployment|statefulset>/postgres -o jsonpath='{.metadata.labels.app}'   # must be postgres (LEGACY_DELETE_FORCE=1 overrides)"
+        plan "kubectl -n $OLD_NS get <deployment|statefulset>/postgres -o jsonpath=\"{.metadata.labels}\"   # needs jaiscloud.io/managed-by=jaiscloud; a bare app=postgres needs LEGACY_DELETE_FORCE=1"
         plan "kubectl -n $OLD_NS delete <deployment|statefulset>/postgres; delete service postgres postgres-external   # PVCs kept"
       else
         plan "# legacy workload kept: scaled to 0; Deployment/StatefulSet, Services and PVCs stay (pass --delete-legacy to remove the workload)"
@@ -1773,13 +1919,36 @@ fi
 # The migration is a data move, not a teardown. By default the legacy Postgres
 # is only scaled to 0: its Deployment/StatefulSet, Services and PVCs stay as
 # rollback copies. --delete-legacy opts into removing the workload and Services,
-# and only after the object proves it is the store (label app=postgres); a PVC is
-# never deleted by this command.
+# and only after the object proves it is JaisCloud's (the managed-by marker or an
+# explicit LEGACY_DELETE_FORCE=1 consent); a PVC is never deleted by this command.
+
+# object_label <namespace> <kind> <name> <key> — one metadata label ("" when
+# absent). Bracket notation: the label keys contain dots and a slash.
+object_label() {
+  kubectl -n "$1" get "$2" "$3" -o jsonpath="{.metadata.labels['$4']}" 2>/dev/null || true
+}
+
+# legacy_workload_marked <namespace> <kind> <name> — 0 when the object carries a
+# JaisCloud marker, 1 otherwise. Accepted markers:
+#   jaiscloud.io/managed-by=jaiscloud       the store's own marker (postgres.yaml)
+#   app.kubernetes.io/managed-by=jaiscloud  the conventional equivalent
+#   jaiscloud.io/substrate=<any>            what the pre-split GCP emulator carried
+# `app=postgres` is NOT proof: any operator-supplied Postgres has it.
+legacy_workload_marked() {
+  local ns=$1 kind=$2 name=$3
+  [[ "$(object_label "$ns" "$kind" "$name" jaiscloud.io/managed-by)" == "jaiscloud" ]] && return 0
+  [[ "$(object_label "$ns" "$kind" "$name" app.kubernetes.io/managed-by)" == "jaiscloud" ]] && return 0
+  [[ -n "$(object_label "$ns" "$kind" "$name" jaiscloud.io/substrate)" ]] && return 0
+  return 1
+}
 
 # migrate_source_workload — resolve LEGACY_POSTGRES_WORKLOAD (auto: Deployment,
 # then StatefulSet) into LEGACY_KIND/LEGACY_NAME and validate the object exists.
-# With DELETE_LEGACY=1 it also validates the app=postgres label up front, so a
-# refused deletion cannot leave a half-migrated cluster.
+# The object must prove it is the JaisCloud store (legacy_workload_marked) or the
+# operator must confirm it with LEGACY_CONFIRM=1: the tooling will not dump from,
+# scale down or delete a workload it has no evidence it created. With
+# DELETE_LEGACY=1 the deletion consent is validated up front too, so a refused
+# deletion cannot leave a half-migrated cluster.
 migrate_source_workload() {
   local old_ns=$1 label
   case "$LEGACY_POSTGRES_WORKLOAD" in
@@ -1800,15 +1969,25 @@ migrate_source_workload() {
       die "LEGACY_POSTGRES_WORKLOAD must be 'auto' or '<deployment|statefulset>/<name>' (got '$LEGACY_POSTGRES_WORKLOAD')" ;;
   esac
   LEGACY_WORKLOAD="$LEGACY_KIND/$LEGACY_NAME"
+  label=$(object_label "$old_ns" "$LEGACY_KIND" "$LEGACY_NAME" app)
+  if legacy_workload_marked "$old_ns" "$LEGACY_KIND" "$LEGACY_NAME"; then
+    LEGACY_MARKED=1
+    info "$old_ns/$LEGACY_WORKLOAD carries the JaisCloud managed-by marker"
+  elif [[ "$LEGACY_CONFIRM" == "1" ]]; then
+    LEGACY_MARKED=0
+    warn "LEGACY_CONFIRM=1 — migrating $old_ns/$LEGACY_WORKLOAD although it is not marked jaiscloud.io/managed-by=jaiscloud (app='${label:-<none>}'); this is the operator's explicit confirmation that it is the pre-split JaisCloud store"
+  else
+    die "refusing to migrate $old_ns/$LEGACY_WORKLOAD: it is not marked jaiscloud.io/managed-by=jaiscloud (app='${label:-<none>}'); set LEGACY_CONFIRM=1 only if this is the pre-split JaisCloud store"
+  fi
   if [[ "$DELETE_LEGACY" == "1" ]]; then
-    label=$(kubectl -n "$old_ns" get "$LEGACY_KIND" "$LEGACY_NAME" \
-      -o jsonpath='{.metadata.labels.app}' 2>/dev/null || true)
-    if [[ "$label" != "postgres" ]]; then
-      if [[ "$LEGACY_DELETE_FORCE" == "1" ]]; then
-        warn "LEGACY_DELETE_FORCE=1 — deleting $old_ns/$LEGACY_WORKLOAD although its label is app='${label:-<none>}'"
-      else
-        die "refusing to delete $old_ns/$LEGACY_WORKLOAD: it does not carry label app=postgres (found '${label:-<none>}'), so this tooling cannot prove it created it. Set LEGACY_DELETE_FORCE=1 to delete it anyway; its PVC is never deleted."
-      fi
+    if [[ "$LEGACY_MARKED" == "1" ]]; then
+      :
+    elif [[ "$label" == "postgres" && "$LEGACY_DELETE_FORCE" != "1" ]]; then
+      die "refusing to delete $old_ns/$LEGACY_WORKLOAD: it carries app=postgres but not the JaisCloud managed-by marker, so this tooling cannot prove it created it. Set LEGACY_DELETE_FORCE=1 to delete it anyway; its PVC is never deleted."
+    elif [[ "$label" != "postgres" && "$LEGACY_DELETE_FORCE" != "1" ]]; then
+      die "refusing to delete $old_ns/$LEGACY_WORKLOAD: it carries neither jaiscloud.io/managed-by=jaiscloud nor label app=postgres (app='${label:-<none>}'), so this tooling cannot prove it created it. Set LEGACY_DELETE_FORCE=1 to delete it anyway; its PVC is never deleted."
+    else
+      warn "LEGACY_DELETE_FORCE=1 — deleting $old_ns/$LEGACY_WORKLOAD without the JaisCloud marker (app='${label:-<none>}')"
     fi
   fi
 }
@@ -1819,9 +1998,9 @@ if [[ "$MODE" == "migrate-store" ]]; then
   apply_isolation_policy
   # Before the namespace split, Postgres ran as deployment/postgres in the AWS
   # namespace and held both clouds' schemas in database `jaiscloud`.
-  OLD_NS="${LEGACY_NAMESPACE:-$NAMESPACE_AWS}"
+  OLD_NS="$LEGACY_NAMESPACE"
   require kubectl
-  LEGACY_KIND="" LEGACY_NAME="" LEGACY_WORKLOAD=""
+  LEGACY_KIND="" LEGACY_NAME="" LEGACY_WORKLOAD="" LEGACY_MARKED=0
 
   if kubectl -n "$NAMESPACE_DATA" get pvc "$POSTGRES_PVC" &>/dev/null; then
     if [[ "$MIGRATE_FORCE" == "1" ]]; then
@@ -1837,7 +2016,7 @@ if [[ "$MODE" == "migrate-store" ]]; then
       postgres://*|postgresql://*) ;;
       *) die "LEGACY_DSN must start with postgres:// or postgresql://" ;;
     esac
-    info "Legacy store source: LEGACY_DSN (dumped from the NEW store pod; no legacy store workload is scaled or deleted)"
+    info "Legacy store source: LEGACY_DSN (dumped from the NEW store pod; no legacy store workload is scaled or deleted; an explicit source, so no managed-by marker applies)"
   else
     migrate_source_workload "$OLD_NS"
     info "Legacy store source: $OLD_NS/$LEGACY_WORKLOAD"
@@ -1845,11 +2024,24 @@ if [[ "$MODE" == "migrate-store" ]]; then
 
   # A pre-split install ran the GCP emulator in the AWS namespace too, with its
   # object bytes on jaiscloud-gcp-blobs-pvc there. Detect it so the bytes are
-  # migrated (a PVC cannot move namespaces).
+  # migrated (a PVC cannot move namespaces). The workload must show it is ours:
+  # a Deployment that merely happens to be named jaiscloud-gcp is not evidence.
   legacy_gcp=0
+  legacy_gcp_marked=0
   if kubectl -n "$OLD_NS" get deployment jaiscloud-gcp &>/dev/null; then
-    legacy_gcp=1
-    info "Legacy GCP emulator found in $OLD_NS; its object bytes will be migrated."
+    if legacy_workload_marked "$OLD_NS" deployment jaiscloud-gcp; then
+      legacy_gcp=1 legacy_gcp_marked=1
+      info "Legacy GCP emulator found in $OLD_NS (marked); its object bytes will be migrated."
+    elif [[ "$LEGACY_CONFIRM" == "1" ]]; then
+      legacy_gcp=1
+      warn "LEGACY_CONFIRM=1 — treating $OLD_NS/deployment/jaiscloud-gcp as the pre-split GCP emulator although it is not marked jaiscloud.io/managed-by=jaiscloud"
+    else
+      die "refusing to migrate $OLD_NS/deployment/jaiscloud-gcp: it is not marked jaiscloud.io/managed-by=jaiscloud; set LEGACY_CONFIRM=1 only if this is the pre-split JaisCloud GCP emulator"
+    fi
+    if [[ "$legacy_gcp" -eq 1 && "$legacy_gcp_marked" -eq 0 \
+          && "$DELETE_LEGACY" == "1" && "$LEGACY_DELETE_FORCE" != "1" ]]; then
+      die "refusing to delete $OLD_NS/deployment/jaiscloud-gcp: it is not marked jaiscloud.io/managed-by=jaiscloud, so this tooling cannot prove it created it. Set LEGACY_DELETE_FORCE=1 to delete it anyway (the migration still copies its bytes), or omit --delete-legacy."
+    fi
   fi
 
   # Stop the writers BEFORE the dump: anything they write after the snapshot

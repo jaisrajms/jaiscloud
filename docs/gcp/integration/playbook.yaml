@@ -176,18 +176,20 @@ scenarios:
   upgrade-legacy:
     summary: "Pre-split single-namespace install (postgres and the GCP emulator both in jaiscloud) -> three namespaces."
     detect:
-      - check: "kubectl -n jaiscloud get deployment postgres"
-        means: "legacy store still in the AWS namespace"
+      - check: "kubectl -n jaiscloud get deployment postgres -o jsonpath=\"{.metadata.labels['jaiscloud.io/managed-by']}\""
+        means: "marked legacy store in the AWS namespace (jaiscloud.io/managed-by=jaiscloud): a pending migration (legacy.pending)"
       - check: "kubectl -n jaiscloud get statefulset postgres"
         means: "legacy store as a StatefulSet (--migrate-store supports it too)"
+      - check: "kubectl -n jaiscloud get deployment postgres   # without the managed-by marker"
+        means: "legacy.candidate: a workload named postgres that the tooling cannot prove it created; confirm with LEGACY_CONFIRM=1 only if it is the pre-split store, otherwise ignore it"
       - check: "kubectl -n jaiscloud-data get pvc postgres-pvc"
         means: "new store already exists; --migrate-store refuses (drop the new PVC only if it is disposable)"
       - check: "kubectl -n jaiscloud get deployment jaiscloud-gcp"
-        means: "legacy GCP substrate; its object bytes must be copied"
+        means: "legacy GCP substrate; its object bytes must be copied (marker required, or LEGACY_CONFIRM=1)"
     steps:
       - id: preflight
         run: "deploy/deploy.sh --check --json"
-        note: "legacy.pending and recommended[] say whether the migration applies; a scaled-to-0 legacy object with the new store ready is legacy.*Retained (a rollback copy), not pending work."
+        note: "legacy.pending and recommended[] say whether the migration applies; a scaled-to-0 marked legacy object with the new store ready is legacy.*Retained (a rollback copy), not pending work; an unmarked same-named workload is legacy.candidate with a warning and no recommendation."
       - id: stop
         run: "Ask the operator before running --migrate-store: it stops both emulators and rewrites the store."
         destructive: false
@@ -198,12 +200,12 @@ scenarios:
           - "nothing by default: the legacy Postgres is scaled to 0 and kept (Deployment/StatefulSet, Services, PVCs)"
         keeps:
           - "the legacy workload, jaiscloud/postgres-pvc and jaiscloud/jaiscloud-gcp-blobs-pvc as rollback copies"
-        note: "LEGACY_DSN=postgres://… dumps an out-of-cluster store from the new store pod (no legacy workload touched); LEGACY_POSTGRES_WORKLOAD=statefulset/postgres names a StatefulSet. Needs a pullable busybox for the byte copy; preload it or set SKIP_BLOB_MIGRATE=1 and copy the PVC yourself."
+        note: "The source must be marked jaiscloud.io/managed-by=jaiscloud (or app.kubernetes.io/managed-by=jaiscloud, or jaiscloud.io/substrate on the legacy GCP workload); a pre-split build predates the label, so confirm it once with LEGACY_CONFIRM=1 / --legacy-confirm. LEGACY_DSN=postgres://… is an explicit source (no marker) and dumps from the new store pod; LEGACY_POSTGRES_WORKLOAD=statefulset/postgres names a StatefulSet. A LEGACY_NAMESPACE outside the three JaisCloud namespaces needs LEGACY_CONFIRM=1. Needs a pullable busybox for the byte copy; preload it or set SKIP_BLOB_MIGRATE=1 and copy the PVC yourself."
         expect: "exit 0; both databases restored, GCP bytes copied, both substrates rolled out, legacy Postgres scaled to 0"
       - id: delete-legacy
         optional: true
         run: "SKIP_IMAGE_BUILD=1 deploy/deploy.sh --migrate-store --yes --delete-legacy"
-        note: "Only with --delete-legacy: removes the legacy workload and the postgres/postgres-external Services after verifying label app=postgres (LEGACY_DELETE_FORCE=1 overrides). Never deletes a PVC."
+        note: "Only with --delete-legacy: removes the legacy workload and the postgres/postgres-external Services after verifying the JaisCloud marker; an object with only app=postgres needs LEGACY_DELETE_FORCE=1. Never deletes a PVC."
       - id: verify-store
         run: "kubectl -n jaiscloud-data exec deploy/postgres -- psql -U jaiscloud -d jaiscloud -tAc \"select count(*) from aws.migration_probe\""
         note: "Substitute a table/row you know should have survived."
@@ -264,16 +266,17 @@ scenarios:
         expect: "lifecycle steps printed; no manifest is applied"
       - id: park
         run: "deploy/deploy.sh --park aws"
-        expect: "POST /_jaiscloud/park (jobs cancelled, broker/revision runtimes stopped); Deployment scaled to 0; executor Pods/Jobs and the ECR proxy reaped; namespace annotated jaiscloud.io/state=parked"
+        expect: "POST /_jaiscloud/park (jobs cancelled, broker/revision runtimes stopped, topicDataLost reported when a real broker stopped); Deployment scaled to 0; executor Pods/Jobs and the ECR proxy reaped; namespace annotated jaiscloud.io/<cloud>.state=parked (per substrate: .parked-at/.parked-image/.parked-image-id/.parked-version)"
         keeps: ["database jaiscloud", "pvc jaiscloud-blobs-pvc", "pvc jaiscloud-state-pvc (instance ID)", "namespace jaiscloud and its Service", "resource records"]
         destructive: true
+        note: "Managed Kafka broker topics are the one thing a park does not keep (the broker has no PVC): the /park result sets topicDataLost and --park gcp warns when JAISCLOUD_KAFKA_BROKER_MODE is k8s/docker/native. Cluster/topic metadata and the namespace survive."
       - id: use-other
         run: "Read/write the GCP substrate (port-forward 8080, or --switch gcp)"
         expect: "GCP state unaffected by the AWS park"
       - id: resume
         run: "deploy/deploy.sh --resume aws"
-        expect: "scale to 1, rollout, POST /_jaiscloud/resume, state=running and parked-* annotations cleared"
-        note: "A changed image digest is a warning: store migrations may run."
+        expect: "image compared with the parked one BEFORE scaling (mismatch refused, names --allow-upgrade), parked digest pinned with kubectl set image, scale to 1, rollout, POST /_jaiscloud/resume, <cloud>.state=running and the <cloud>.parked-* keys cleared"
+        note: "A resume never changes the binary silently: --allow-upgrade / ALLOW_UPGRADE=1 is the explicit opt-in for a new image (the store may migrate). With no recorded digest it warns that it cannot pin, and the post-rollout digest comparison stays a warning."
       - id: switch
         run: "deploy/deploy.sh --switch gcp --yes"
         expect: "AWS parked, GCP resumed; --switch both is invalid"

@@ -36,6 +36,11 @@ func TestParkStopsBrokersAndKeepsMetadata(t *testing.T) {
 	if got := res["brokersStopped"]; got != 2 {
 		t.Fatalf("brokersStopped = %v, want 2", got)
 	}
+	// A real broker has no PVC, so its topics go with the broker workloads; the
+	// result must say so rather than implying a lossless park.
+	if got, ok := res["topicDataLost"]; !ok || got != true {
+		t.Fatalf("topicDataLost = %v (present=%v), want true with a real broker", got, ok)
+	}
 	if len(fb.parked) != 2 || fb.parked[0] != "proj/europe-west1/c2" || fb.parked[1] != "proj/us-central1/c1" {
 		t.Fatalf("ParkCluster calls = %v", fb.parked)
 	}
@@ -76,6 +81,11 @@ func TestParkWithoutBrokerIsMetadataOnly(t *testing.T) {
 	}
 	if got := res["brokersStopped"]; got != 0 {
 		t.Fatalf("brokersStopped = %v, want 0 (no broker manager in mock mode)", got)
+	}
+	// Mock mode has no broker and therefore no topic data to lose: the field is
+	// omitted rather than claimed as false.
+	if got, ok := res["topicDataLost"]; ok {
+		t.Fatalf("topicDataLost = %v in mock mode, want the field omitted (no broker, no topic data)", got)
 	}
 	if err := s.Resume(ctx, "proj"); err != nil {
 		t.Fatalf("Resume: %v", err)

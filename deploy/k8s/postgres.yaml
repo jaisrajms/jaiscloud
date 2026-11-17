@@ -6,6 +6,13 @@ kind: PersistentVolumeClaim
 metadata:
   name: postgres-pvc
   namespace: jaiscloud-data
+  # jaiscloud.io/managed-by marks every object this manifest owns as JaisCloud's,
+  # so the migration tooling can tell this store from a foreign workload that
+  # merely shares the name `postgres` (deploy.sh --migrate-store refuses an
+  # unmarked object unless LEGACY_CONFIRM=1).
+  labels:
+    app: postgres
+    jaiscloud.io/managed-by: jaiscloud
 spec:
   accessModes: [ReadWriteOnce]
   resources:
@@ -28,6 +35,9 @@ kind: Secret
 metadata:
   name: postgres-secret
   namespace: jaiscloud-data
+  labels:
+    app: postgres
+    jaiscloud.io/managed-by: jaiscloud
 type: Opaque
 stringData:
   POSTGRES_USER: jaiscloud
@@ -41,6 +51,12 @@ kind: Deployment
 metadata:
   name: postgres
   namespace: jaiscloud-data
+  # The store marker the legacy detection reads (preflight legacy.marked, and
+  # deploy.sh --migrate-store / --delete-legacy). app=postgres alone is not
+  # proof: any operator-supplied Postgres carries it.
+  labels:
+    app: postgres
+    jaiscloud.io/managed-by: jaiscloud
 spec:
   replicas: 1
   # Single writer to a ReadWriteOnce data dir: never run two Postgres servers on
@@ -92,6 +108,9 @@ kind: Service
 metadata:
   name: postgres
   namespace: jaiscloud-data
+  labels:
+    app: postgres
+    jaiscloud.io/managed-by: jaiscloud
 spec:
   selector:
     app: postgres
@@ -105,6 +124,9 @@ kind: Service
 metadata:
   name: postgres-external
   namespace: jaiscloud-data
+  labels:
+    app: postgres
+    jaiscloud.io/managed-by: jaiscloud
 spec:
   type: NodePort
   selector:

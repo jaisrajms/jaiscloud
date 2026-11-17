@@ -307,9 +307,9 @@ kube get namespace "$NS_AWS" >/dev/null 2>&1 \
 [[ "$(replicas "$NS_AWS" jaiscloud)" == "0" ]] \
   && pass "deployment/$NS_AWS/jaiscloud is scaled to 0" \
   || fail "the AWS Deployment is not parked (replicas=$(replicas "$NS_AWS" jaiscloud))"
-[[ "$(ns_annotation "$NS_AWS" jaiscloud.io/state)" == "parked" ]] \
-  && pass "namespace $NS_AWS is annotated state=parked" \
-  || fail "namespace $NS_AWS is not annotated state=parked"
+[[ "$(ns_annotation "$NS_AWS" jaiscloud.io/aws.state)" == "parked" ]] \
+  && pass "namespace $NS_AWS is annotated aws.state=parked" \
+  || fail "namespace $NS_AWS is not annotated aws.state=parked"
 if [[ "$(pods_in_labelled_namespaces aws)" == "0" ]]; then
   pass "no Pods run in any AWS-labelled namespace"
 else
@@ -334,12 +334,12 @@ fi
 [[ "$(replicas "$NS_AWS" jaiscloud)" == "1" ]] \
   && pass "deployment/$NS_AWS/jaiscloud is running again" \
   || fail "the AWS Deployment did not resume"
-[[ "$(ns_annotation "$NS_AWS" jaiscloud.io/state)" == "running" ]] \
-  && pass "namespace $NS_AWS is annotated state=running" \
-  || fail "namespace $NS_AWS is not annotated state=running"
-[[ -z "$(ns_annotation "$NS_AWS" jaiscloud.io/parked-image-id)" ]] \
-  && pass "the parked-* annotations were cleared on resume" \
-  || fail "the parked-* annotations were left behind"
+[[ "$(ns_annotation "$NS_AWS" jaiscloud.io/aws.state)" == "running" ]] \
+  && pass "namespace $NS_AWS is annotated aws.state=running" \
+  || fail "namespace $NS_AWS is not annotated aws.state=running"
+[[ -z "$(ns_annotation "$NS_AWS" jaiscloud.io/aws.parked-image-id)" ]] \
+  && pass "the aws.parked-* annotations were cleared on resume" \
+  || fail "the aws.parked-* annotations were left behind"
 
 # ── 4. switch to GCP (park AWS, resume GCP) ─────────────────────────────────
 head_ "4. deploy.sh --switch gcp"
@@ -401,6 +401,14 @@ kube -n "$NS_GCP" get pvc jaiscloud-gcp-state-pvc >/dev/null 2>&1 \
   || fail "the GCP state PVC disappeared while parked"
 [[ "$(db_exists jaiscloud_gcp)" == "1" ]] && pass "database jaiscloud_gcp survived" \
   || fail "database jaiscloud_gcp disappeared"
+# The park record is per substrate, so the AWS direction's record (aws.state) and
+# this GCP park coexist in separate namespaces without overwriting each other.
+[[ "$(ns_annotation "$NS_GCP" jaiscloud.io/gcp.state)" == "parked" ]] \
+  && pass "namespace $NS_GCP is annotated gcp.state=parked" \
+  || fail "namespace $NS_GCP is not annotated gcp.state=parked"
+[[ "$(ns_annotation "$NS_AWS" jaiscloud.io/aws.state)" == "running" ]] \
+  && pass "the AWS park record stayed aws.state=running (per-substrate keys)" \
+  || fail "the AWS park record changed while GCP was parked"
 kube -n "$NS_GCP" get pvc jaiscloud-gcp-blobs-pvc >/dev/null 2>&1 \
   && pass "pvc/$NS_GCP/jaiscloud-gcp-blobs-pvc survived" \
   || fail "the GCP blobs PVC disappeared"
