@@ -600,7 +600,9 @@ playbook:
       databases: 'tri-state: store.databases.jaiscloud / .jaiscloud_gcp are true|false|null. true/false only when the resolved bundled store workload is ready and psql answered; null (unknown, NOT missing) for an external store, a workload that is absent or not ready, or a failed exec.'
       databasesProbe: exec when both psql probes answered; unavailable otherwise
       env: substrates.<cloud> env probes (sparkImage, kafkaBrokerMode) resolve an explicit env literal/valueFrom first, then envFrom in order (later source wins); Secret data is base64-decoded and an unreadable/missing ref is empty, not an error
+      probeDatabase: STORE_PG_DB (default postgres) — the maintenance database psql connects to
       probeReason: ok | external | no-workload | not-ready | exec-failed — why the databases are null
+      probeRole: STORE_PG_USER when set, otherwise the user in that database's substrate DSN Secret (jaiscloud-dsn / jaiscloud-gcp-dsn, key dsn), then the other substrate's role, then jaiscloud. It connects over the pod's local socket (no password in argv); a non-timeout failure is retried once with the full DSN for a store that requires a password even locally
       recommendations: only false means a database is missing (create-gcp-db); null never does — verify an external store with your own psql instead of creating anything (the read-only probe never creates a pod; external-store probing is DSL9)
       workload: 'resolved like --migrate-store: STORE_WORKLOAD=<deployment|statefulset>/<name> when set, otherwise deployment/postgres, then statefulset/postgres'
   platform:

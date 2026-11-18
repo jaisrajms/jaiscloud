@@ -372,6 +372,11 @@ Environment:
   STORE_WORKLOAD=<kind>/<name>    With --check: the bundled store workload the
                                   preflight probes (default: deployment/postgres,
                                   then statefulset/postgres)
+  STORE_PG_USER                   With --check: the role the database probe
+                                  connects as (default: the user in the substrate
+                                  DSN Secret, else jaiscloud)
+  STORE_PG_DB                     With --check: the maintenance database the
+                                  probe connects to (default postgres)
   PREFLIGHT_TIMEOUT_IMPL          With --check: auto (default), timeout,
                                   gtimeout, watchdog or none — the wall-clock
                                   helper used for the psql exec (macOS has no

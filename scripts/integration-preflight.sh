@@ -86,6 +86,13 @@
 #   was unavailable (external|no-workload|not-ready|exec-failed). The probe never
 #   creates a pod (that would mutate the cluster), so an external server is
 #   reported as unprobeable (DSL9); verify it with your own psql.
+#   The probe role is not hardcoded: STORE_PG_USER when set, otherwise the user
+#   in the database's own substrate DSN Secret (jaiscloud-dsn / jaiscloud-gcp-dsn,
+#   key dsn), then the other substrate's, then the shipped `jaiscloud`. It
+#   connects over the pod's local socket (no password in argv) with
+#   STORE_PG_DB (default postgres); a non-timeout failure is retried once with
+#   the full DSN the emulator uses, for a host store that requires a password
+#   even locally.
 #   Recommendations only treat `false` as a missing database.
 #
 # Images / env:
@@ -146,6 +153,9 @@
 #   STORE_WORKLOAD=<deployment|statefulset>/<name>
 #                 the bundled store workload to probe (default: resolve
 #                 deployment/postgres, then statefulset/postgres)
+#   STORE_PG_USER the role the database probe connects as (default: the user in
+#                 the substrate DSN Secret, else jaiscloud)
+#   STORE_PG_DB   the maintenance database the probe connects to (default postgres)
 #   PREFLIGHT_TIMEOUT_IMPL  auto (default: timeout -> gtimeout -> bash watchdog),
 #                 timeout|gtimeout|watchdog|none. macOS has no GNU `timeout`, so
 #                 no bare `timeout` call exists in this script; the offline
@@ -167,6 +177,12 @@ JSON=0
 STRICT=0
 SUBSTRATE_FLAG=""
 DESIRED_FLAG=""
+# Role and maintenance database for the store probe. A host-owned Postgres may
+# use `postgres` instead of the shipped `jaiscloud` role; when STORE_PG_USER is
+# unset the role is read from the substrate DSN Secret (see store_pg_user).
+STORE_PG_USER_ENV="${STORE_PG_USER:-}"
+STORE_PG_DB="${STORE_PG_DB:-postgres}"
+[[ -n "$STORE_PG_DB" ]] || { echo "$PROG: STORE_PG_DB must not be empty (try --help)" >&2; exit 2; }
 
 usage_error() { echo "$PROG: $* (try --help)" >&2; exit 2; }
 
@@ -564,20 +580,86 @@ private_registry() {
 pvc_status() { field "$1" pvc "$2" '{{.status.phase}}'; }
 pvc_capacity() { field "$1" pvc "$2" '{{index .status.capacity "storage"}}'; }
 
+# dsn_user <postgres://user[:pass]@host/db> — the role component ("" when the
+# string is not a conninfo URL or has no user). Percent-encoding is left as-is:
+# roles with characters that need it are not a shape the probe can name anyway.
+dsn_user() {
+  local rest authority user
+  rest=${1#*://}
+  [[ "$rest" != "$1" ]] || return 0
+  authority=${rest%%/*}
+  [[ "$authority" == *@* ]] || return 0
+  user=${authority%@*}
+  user=${user%%:*}
+  printf '%s' "$user"
+}
+
+# store_probe_dsn <aws|gcp> — the DSN the substrate uses, from its own Secret
+# (jaiscloud-dsn in NS_AWS / jaiscloud-gcp-dsn in NS_GCP, key dsn).
+store_probe_dsn() {
+  case "$1" in
+    aws) secret_key "$NS_AWS" jaiscloud-dsn dsn ;;
+    gcp) secret_key "$NS_GCP" jaiscloud-gcp-dsn dsn ;;
+  esac
+}
+
+# store_probe_owner <database> — the substrate whose Secret owns that database
+# (the bundled store is one server, so the other substrate's role is a fallback
+# for the localized name only).
+store_probe_owner() {
+  case "$1" in
+    jaiscloud)     printf aws ;;
+    jaiscloud_gcp) printf gcp ;;
+  esac
+}
+
+# store_pg_user <database> — the role the probe connects as:
+#   1. STORE_PG_USER when set (an explicit escape hatch);
+#   2. the user component of that database's substrate DSN Secret, then the
+#      other substrate's (a bundled store is one server, so both are the same
+#      role; a per-substrate override always wins for its own database);
+#   3. the shipped role, jaiscloud.
+# The role is used over the pod's local socket, so the password never enters the
+# exec argv; db_state retries with the full DSN only when that socket refuses the
+# role (a host store that requires a password even locally).
+store_pg_user() {
+  local db=$1 own other user=""
+  [[ -n "$STORE_PG_USER_ENV" ]] && { printf '%s' "$STORE_PG_USER_ENV"; return; }
+  own=$(store_probe_owner "$db")
+  [[ "$own" == "aws" ]] && other=gcp || other=aws
+  [[ -n "$own" ]] && user=$(dsn_user "$(store_probe_dsn "$own")")
+  [[ -z "$user" ]] && user=$(dsn_user "$(store_probe_dsn "$other")")
+  [[ -n "$user" ]] || user=jaiscloud
+  printf '%s' "$user"
+}
+
 # db_state <name> — TRI-STATE: true|false|null.
 #   true|false  the resolved bundled store workload is ready and psql answered
 #               (psql exits 0; an empty row set means the database is absent)
 #   null        the store is external, the workload is absent/not ready, or the
 #               psql exec failed/timed out — "unknown", never "missing"
 # The exec is wall-clock bounded through `bounded` (never a bare GNU `timeout`).
+# It connects as store_pg_user (never a hardcoded role) over the pod's local
+# socket; a non-timeout failure is retried once with the full DSN, which is what
+# the emulator itself uses, for a store whose local auth requires a password.
 db_state() {
-  local out rc=0
+  local db=$1 out rc=0 user dsn
   [[ "$STORE_MODE" == "external" ]] && { echo null; return; }
   [[ "$STORE_PRESENT" == "1" && -n "$STORE_WORKLOAD" ]] || { echo null; return; }
   [[ "$STORE_READY" == "1" ]] || { echo null; return; }
+  user=$(store_pg_user "$db")
   out=$(bounded 15 "${KUBECTL[@]}" --request-timeout=10s -n "$NS_DATA" exec "$STORE_WORKLOAD" -- \
-        psql -U jaiscloud -d postgres -tAc "SELECT 1 FROM pg_database WHERE datname='$1'" 2>/dev/null) || rc=$?
+        psql -U "$user" -d "$STORE_PG_DB" -tAc "SELECT 1 FROM pg_database WHERE datname='$db'" 2>/dev/null) || rc=$?
   out=$(printf '%s' "$out" | tr -d '[:space:]')
+  if [[ "$rc" -ne 0 && "$rc" -ne 124 && "$rc" -ne 143 ]]; then
+    dsn=$(store_probe_dsn "$(store_probe_owner "$db")")
+    if [[ -n "$dsn" ]]; then
+      rc=0
+      out=$(bounded 15 "${KUBECTL[@]}" --request-timeout=10s -n "$NS_DATA" exec "$STORE_WORKLOAD" -- \
+            psql "$dsn" -tAc "SELECT 1 FROM pg_database WHERE datname='$db'" 2>/dev/null) || rc=$?
+      out=$(printf '%s' "$out" | tr -d '[:space:]')
+    fi
+  fi
   [[ "$rc" -eq 0 ]] || { echo null; return; }
   case "$out" in
     1) echo true ;;

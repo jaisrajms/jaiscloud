@@ -128,7 +128,11 @@ exists":
   set, otherwise `deployment/postgres`, then `statefulset/postgres`.
   `store.databasesProbe` is `exec` when both probes answered and `unavailable`
   otherwise, and `store.probeReason` says why (`external`, `no-workload`,
-  `not-ready`, `exec-failed`). Only `false` is a missing database, so `null`
+  `not-ready`, `exec-failed`). The probe connects as the role in that database's
+  substrate DSN Secret (`jaiscloud-dsn` / `jaiscloud-gcp-dsn`), overridable with
+  `STORE_PG_USER` and `STORE_PG_DB` (default `postgres`), so a host store with a
+  different superuser role is probed too; a local-socket auth failure is retried
+  once with the full DSN. Only `false` is a missing database, so `null`
   never produces a "create the database" recommendation. The probe never creates
   a pod, so an external server stays unprobeable by design — verify it with your
   own `psql`.

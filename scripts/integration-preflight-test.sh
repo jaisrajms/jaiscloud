@@ -32,8 +32,11 @@
 #           store.databasesProbe = exec|unavailable and store.probeReason saying
 #           why. The bundled workload is resolved (STORE_WORKLOAD, then
 #           deployment/postgres, then statefulset/postgres), so a StatefulSet
-#           store is probed too. A null never produces a "create the database"
-#           recommendation.
+#           store is probed too. The role is read from the substrate DSN Secret
+#           (STORE_PG_USER overrides; STORE_PG_DB picks the maintenance database)
+#           and a local-socket refusal retries with the full DSN, so a
+#           host-owned role/password is probed too. A null never produces a
+#           "create the database" recommendation.
 #
 #   rbac    effective permissions come from `kubectl auth can-i --as=<the
 #           Deployment's ServiceAccount>` (yes/no/unknown), and the isolation
@@ -250,10 +253,17 @@ case "$verb" in
     printf '{"serverVersion":{"major":"1","minor":"31","gitVersion":"v1.31.0"}}\n'
     exit 0 ;;
   exec)
-    # db_state: `exec deploy/postgres -- psql ... datname='<db>'`; the fake
-    # store has a record per database. $fixture/psql-fail makes the exec fail
-    # (a broken store pod) so the tri-state falls back to null.
+    # db_state: `exec <workload> -- psql ... datname='<db>'`; the fake store has a
+    # record per database. $fixture/psql-fail makes every exec fail (a broken
+    # store pod); $fixture/psql-user-fail fails only the role form
+    # (`psql -U …`), so the preflight's DSN retry is exercised. Every argv is
+    # recorded in $fixture/exec-args.txt for the assertions.
+    printf '%s\n' "$*" >> "$fixture/exec-args.txt"
     [[ -f "$fixture/psql-fail" ]] && { echo "error: unable to upgrade connection: container not found" >&2; exit 1; }
+    if [[ -f "$fixture/psql-user-fail" && "$*" == *" -U "* ]]; then
+      echo "psql: error: password authentication failed for user" >&2
+      exit 2
+    fi
     all="$*"
     db=$(printf '%s' "$all" | sed -n "s/.*datname='\([^']*\)'.*/\1/p")
     if [[ -n "$db" ]]; then
@@ -392,6 +402,8 @@ run_preflight() { # run_preflight <fixture> <args...>; sets RUN_STATUS and RUN_O
   RUN_OUT=$(PATH="$TMP/bin:$PATH" FIXTURE="$fixture" KUBE_CONTEXT= \
     PREFLIGHT_TIMEOUT_IMPL="${PREFLIGHT_TIMEOUT_IMPL:-watchdog}" \
     STORE_WORKLOAD="${STORE_WORKLOAD:-}" \
+    STORE_PG_USER="${STORE_PG_USER:-}" \
+    STORE_PG_DB="${STORE_PG_DB:-}" \
     NS_AWS=jaiscloud NS_GCP=jaiscloud-gcp NS_DATA=jaiscloud-data \
     "$PREFLIGHT" "$@" 2>&1)
   RUN_STATUS=$?
@@ -433,6 +445,14 @@ expect_no_out() { # expect_no_out <label> <extended regex>
     printf '%s\n' "$RUN_OUT" | sed 's/^/        /' >&2
   else
     pass "$1"
+  fi
+}
+
+expect_exec() { # expect_exec <label> <extended regex over the recorded exec argv>
+  if grep -Eq -- "$2" "${F:-/nonexistent}/exec-args.txt" 2>/dev/null; then
+    pass "$1"
+  else
+    fail "$1 (no exec argv matching /$2/; recorded: $(tr '\n' '|' < "${F:-/dev/null}/exec-args.txt" 2>/dev/null))"
   fi
 }
 
@@ -936,6 +956,40 @@ PREFLIGHT_TIMEOUT_IMPL=auto run_preflight "$F" --json --strict --substrate aws
 expect_status "store-bundled-auto" 0
 expect_json "store-bundled-auto" '.store.databases.jaiscloud' true
 expect_json "store-bundled-auto" '.store.databasesProbe' "exec"
+
+# ── 19. the probe role comes from the substrate DSN, not a constant ────────
+dsn_b64=$(printf '%s' 'postgres://storeowner:s3cret@postgres.jaiscloud-data.svc.cluster.local:5432/jaiscloud' | base64 | tr -d '\n')
+gcp_dsn_b64=$(printf '%s' 'postgres://storeowner:s3cret@postgres.jaiscloud-data.svc.cluster.local:5432/jaiscloud_gcp' | base64 | tr -d '\n')
+
+head_ "19. the database probe uses the role in the substrate DSN Secret"
+F=$(new_fixture "store-probe-user")
+{ base_fixture; echo "secret|jaiscloud|jaiscloud-dsn|data.dsn=$dsn_b64"; } > "$F/resources.txt"
+run_preflight "$F" --json --strict --substrate aws
+expect_status "store-probe-user" 0
+expect_json "store-probe-user" '.store.databases.jaiscloud' true
+expect_exec "store-probe-user" 'psql -U storeowner -d postgres'
+
+head_ "19b. STORE_PG_USER overrides the DSN role and STORE_PG_DB the database"
+F=$(new_fixture "store-probe-user-override")
+{ base_fixture; echo "secret|jaiscloud|jaiscloud-dsn|data.dsn=$dsn_b64"; } > "$F/resources.txt"
+STORE_PG_USER=probe_role STORE_PG_DB=template1 run_preflight "$F" --json --strict --substrate aws
+expect_status "store-probe-user-override" 0
+expect_json "store-probe-user-override" '.store.databases.jaiscloud' true
+expect_exec "store-probe-user-override" 'psql -U probe_role -d template1'
+
+head_ "19c. a local-socket refusal retries with the full DSN (password auth)"
+F=$(new_fixture "store-probe-dsn-retry")
+{
+  base_fixture
+  echo "secret|jaiscloud|jaiscloud-dsn|data.dsn=$dsn_b64"
+  echo "secret|jaiscloud-gcp|jaiscloud-gcp-dsn|data.dsn=$gcp_dsn_b64"
+} > "$F/resources.txt"
+: > "$F/psql-user-fail"
+run_preflight "$F" --json --strict --substrate aws
+expect_status "store-probe-dsn-retry" 0
+expect_json "store-probe-dsn-retry" '.store.databases.jaiscloud' true
+expect_json "store-probe-dsn-retry" '.store.probeReason' "ok"
+expect_exec "store-probe-dsn-retry" 'psql postgres://storeowner:s3cret@'
 
 # ── summary ─────────────────────────────────────────────────────────────────
 head_ "summary"
