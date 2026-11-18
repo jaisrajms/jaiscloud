@@ -1,0 +1,23 @@
+# JaisCloud
+
+> Multi-cloud local emulator for AWS and GCP with real wire protocols (REST and gRPC). This file points agents and automation at the canonical documentation.
+
+## Integrating JaisCloud into a Kubernetes cluster
+
+- [Agent runbook](docs/gcp/integration/AGENTS.md): task-oriented sequence for new installs, the optional Istio front door, pre-split upgrades and custom images, with hard rules and failure handling.
+- [Integration contract](docs/gcp/integration/contract.yaml): generated, machine-readable facts (namespaces, objects, images, env, ports, PVCs, RBAC) plus the embedded playbook (scenarios, detection predicates, failure taxonomy, destructive commands, tooling).
+- [Topology invariants](docs/gcp/integration/topology.md): what the layout must preserve and why.
+- [Read-only preflight](scripts/integration-preflight.sh): `deploy/deploy.sh --check --json` reports cluster state and the next safe step without mutating anything.
+- [Binary self-description](agentguide.go): `jaiscloud-gcp agent-guide` prints the brief, `--json` the contract, and `--emit DIR` the whole kit — the supported path when you only have the container image or a release binary.
+
+## Running the emulator in CI (without Kubernetes)
+
+- [docs/gcp/ci.md](docs/gcp/ci.md): service containers (GitHub Actions, GitLab, Compose), Postgres-backed runs, executor tests that need pods, and clients that insist on `https://`.
+- [deploy/ci/](deploy/ci/): compose file, TLS proxy, cert generator, Postgres bootstrap.
+
+## Human documentation
+
+- [README-GCP.md](README-GCP.md): the emulator guide and SDK endpoints.
+- [DEVELOPER_GUIDE.md](DEVELOPER_GUIDE.md): setup paths, including Kubernetes Setup 3.
+- [docs/gcp/README.md](docs/gcp/README.md): the GCP documentation index.
+- [deploy/k8s/istio/README.md](deploy/k8s/istio/README.md): the optional front door in detail.

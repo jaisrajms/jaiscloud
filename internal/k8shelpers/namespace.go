@@ -5,7 +5,9 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"log/slog"
 	"strings"
+	"sync"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
@@ -24,6 +26,17 @@ import (
 //
 // The process-wide namespace (cfg.K8sNamespace) remains the default for engines
 // that have not been migrated; these helpers are additive.
+//
+// Executor identity: the RoleBinding created in a managed namespace must bind
+// the ServiceAccount the emulator *itself* runs as, which is not necessarily
+// DefaultExecutorServiceAccount/DefaultExecutorServiceAccountNamespace (the AWS
+// substrate's `jaiscloud`/`jaiscloud`). ResolveOwnServiceAccount resolves it once
+// per process with the precedence JAISCLOUD_K8S_SA / JAISCLOUD_K8S_SA_NAMESPACE
+// env, then the pod's projected .../serviceaccount/namespace file, then the
+// constants (see own_identity.go). Callers that provision a per-resource
+// namespace pass the resolved pair to EnsureNamespaceRBAC/ForSubjects; the
+// empty-argument form keeps the historical constant default for out-of-cluster
+// runs and existing callers.
 
 const (
 	// managedByLabel marks a namespace as emulator-created so delete/sweep never
@@ -33,6 +46,16 @@ const (
 	// serviceLabel names the owning service (e.g. "dataproc"), so one service's
 	// sweep cannot touch another's namespaces.
 	serviceLabel = "jaiscloud.io/service"
+	// substrateLabel names the substrate ("aws" or "gcp") that created the
+	// namespace. Both substrates hold cluster-scoped namespace-admin RBAC, so
+	// this label (together with instanceLabel and the ValidatingAdmissionPolicy
+	// in deploy/k8s/rbac-admission-policy.yaml) is what proves a namespace is
+	// ours: sweep, delete and the admission policy all key off it.
+	substrateLabel = "jaiscloud.io/substrate"
+	// instanceLabel pins the emulator instance (JAISCLOUD_INSTANCE_ID) that owns
+	// the namespace, so parallel instances of the same substrate cannot reap
+	// each other's namespaces.
+	instanceLabel = "jaiscloud.io/instance-id"
 	// ManagedByValue is the value stamped on managedByLabel.
 	ManagedByValue = "jaiscloud"
 
@@ -40,15 +63,23 @@ const (
 	// prefix-based sweep is also possible.
 	NamespacePrefix = "gcp-"
 
-	// ExecutorClusterRoleName is the ClusterRole (deploy/k8s/rbac.yaml) a
-	// per-namespace RoleBinding points at so the executor ServiceAccount can run
+	// maxLabelValueLength is the Kubernetes label-value limit (63 chars).
+	maxLabelValueLength = 63
+
+	// ExecutorClusterRoleName is the ClusterRole (deploy/k8s/rbac-shared.yaml,
+	// bound to each substrate by rbac-aws.yaml/rbac-gcp.yaml) a per-namespace
+	// RoleBinding points at so the executor ServiceAccount can run
 	// pods/services/configmaps/jobs in the new namespace.
 	ExecutorClusterRoleName = "jaiscloud-executor"
 	// ExecutorRoleBindingName is the RoleBinding created in each new namespace.
 	ExecutorRoleBindingName = "jaiscloud-executor"
-	// DefaultExecutorServiceAccount / ...Namespace identify the ServiceAccount
-	// the emulator itself runs as (deploy/k8s/rbac.yaml). A per-namespace
-	// RoleBinding must bind this identity, not a Spark pod's service account.
+	// DefaultExecutorServiceAccount / ...Namespace are the fallback identity the
+	// emulator runs as (the AWS substrate's ServiceAccount, declared in
+	// deploy/k8s/rbac-aws.yaml) when nothing else identifies it —
+	// an out-of-cluster dev binary, or a pod that projects no namespace file. A
+	// per-namespace RoleBinding must bind the emulator's own ServiceAccount, not
+	// a Spark pod's; resolve it with ResolveOwnServiceAccount (own_identity.go)
+	// rather than reading these constants directly.
 	DefaultExecutorServiceAccount          = "jaiscloud"
 	DefaultExecutorServiceAccountNamespace = "jaiscloud"
 
@@ -68,13 +99,69 @@ const (
 	namespaceTerminatePoll = 200 * time.Millisecond
 )
 
-// OwnerNamespaceLabels returns the ownership labels stamped on a service's
-// managed namespaces.
-func OwnerNamespaceLabels(service string) map[string]string {
-	return map[string]string{
-		managedByLabel: ManagedByValue,
-		serviceLabel:   service,
+// Process identity stamped on every namespace the emulator creates. Both
+// substrates hold cluster-scoped namespace admin, so without this the sweep and
+// delete paths cannot prove a namespace is theirs; SetIdentity is called once at
+// startup by each binary (after the instance ID is resolved) and the labels are
+// also what the admission policy requires.
+var (
+	identityMu         sync.RWMutex
+	identitySubstrate  string
+	identityInstanceID string
+)
+
+// SetIdentity records which substrate ("aws" or "gcp") and which instance
+// (JAISCLOUD_INSTANCE_ID) this process is. It is safe to call once before any
+// namespace operation; SetIdentity("", "") restores the legacy behaviour
+// (ownership-only labels, no identity filtering), which tests and out-of-cluster
+// callers rely on.
+//
+// The instance ID is sanitized and truncated to a valid label value: an ID with
+// uppercase letters, dots or an over-long value would otherwise make every
+// namespace create fail validation.
+func SetIdentity(substrate, instanceID string) {
+	identityMu.Lock()
+	defer identityMu.Unlock()
+	identitySubstrate = labelValue(substrate)
+	identityInstanceID = labelValue(instanceID)
+}
+
+// identity returns the configured substrate and instance ID (both empty when no
+// identity is set).
+func identity() (substrate, instanceID string) {
+	identityMu.RLock()
+	defer identityMu.RUnlock()
+	return identitySubstrate, identityInstanceID
+}
+
+// labelValue sanitizes s into a valid Kubernetes label value: lowercase
+// alphanumerics and '-', at most 63 chars, no leading/trailing '-' (a truncation
+// can leave one).
+func labelValue(s string) string {
+	v := sanitizeLabelValue(s)
+	if len(v) > maxLabelValueLength {
+		v = strings.Trim(v[:maxLabelValueLength], "-")
 	}
+	return v
+}
+
+// OwnerNamespaceLabels returns the ownership labels stamped on a service's
+// managed namespaces: managed-by always, service only when non-empty (an empty
+// label value is invalid-ish and would make the service selector useless), and
+// the substrate/instance identity when SetIdentity configured one.
+func OwnerNamespaceLabels(service string) map[string]string {
+	labels := map[string]string{managedByLabel: ManagedByValue}
+	if service != "" {
+		labels[serviceLabel] = service
+	}
+	substrate, instanceID := identity()
+	if substrate != "" {
+		labels[substrateLabel] = substrate
+	}
+	if instanceID != "" {
+		labels[instanceLabel] = instanceID
+	}
+	return labels
 }
 
 // NamespaceName derives a deterministic, RFC-1123, <=63-char namespace name for
@@ -119,7 +206,9 @@ func sanitizeLabelValue(s string) string {
 }
 
 // IsManagedNamespace reports whether ns carries the emulator ownership label
-// (and, when service is non-empty, belongs to that service).
+// (and, when service is non-empty, belongs to that service). When a process
+// identity is configured it must also match: a namespace without the labels
+// cannot be proven to be ours, so sweep/delete leave it alone.
 func IsManagedNamespace(ns *corev1.Namespace, service string) bool {
 	if ns == nil || ns.Labels == nil {
 		return false
@@ -127,7 +216,17 @@ func IsManagedNamespace(ns *corev1.Namespace, service string) bool {
 	if ns.Labels[managedByLabel] != ManagedByValue {
 		return false
 	}
-	return service == "" || ns.Labels[serviceLabel] == service
+	if service != "" && ns.Labels[serviceLabel] != service {
+		return false
+	}
+	substrate, instanceID := identity()
+	if substrate != "" && ns.Labels[substrateLabel] != substrate {
+		return false
+	}
+	if instanceID != "" && ns.Labels[instanceLabel] != instanceID {
+		return false
+	}
+	return true
 }
 
 // EnsureManagedNamespace creates namespace when it is missing and returns
@@ -150,7 +249,11 @@ func ensureNamespaceRaw(ctx context.Context, client kubernetes.Interface, namesp
 	switch {
 	case err == nil:
 		if ns.DeletionTimestamp == nil {
-			return false, nil // already present; adopted, not created by us
+			// Already present; adopted, not created by us. A namespace an older
+			// emulator created before identity labels existed is scoped in place
+			// (best-effort) so sweep/delete and the admission policy see it.
+			backfillIdentityLabels(ctx, client, ns, labels)
+			return false, nil
 		}
 		// The namespace exists but is Terminating — its prior owner (a Dataproc
 		// cluster or Kafka broker with the same derived name) was just deleted,
@@ -181,6 +284,64 @@ func ensureNamespaceRaw(ctx context.Context, client kubernetes.Interface, namesp
 		return false, err
 	}
 	return true, nil
+}
+
+// backfillIdentityLabels stamps the process identity onto an existing namespace
+// that an older emulator created before substrate/instance labels existed, so it
+// becomes visible to this process's sweep/delete filter (and satisfies the
+// admission policy on later updates). It only fills gaps and is deliberately
+// conservative:
+//
+//   - the namespace must already be emulator-owned (managedByLabel) — an adopted
+//     or foreign namespace is never relabelled;
+//   - a per-service caller's namespace must carry the same service label;
+//   - an existing, different substrate/instance label means the namespace
+//     belongs to another substrate or instance, so it is left untouched.
+//
+// It is best-effort: a failure (for example a ServiceAccount that may get but
+// not update cluster-scoped namespaces) is logged, not returned, because the
+// namespace is still usable and the caller only asked to ensure it exists.
+func backfillIdentityLabels(ctx context.Context, client kubernetes.Interface, ns *corev1.Namespace, labels map[string]string) {
+	substrate, instanceID := identity()
+	if substrate == "" || len(labels) == 0 {
+		return
+	}
+	if ns.Labels[managedByLabel] != ManagedByValue || labels[managedByLabel] != ManagedByValue {
+		return
+	}
+	if want := labels[serviceLabel]; want != "" && ns.Labels[serviceLabel] != want {
+		return
+	}
+	if got := ns.Labels[substrateLabel]; got != "" && got != substrate {
+		return
+	}
+	if got := ns.Labels[instanceLabel]; instanceID != "" && got != "" && got != instanceID {
+		return
+	}
+	missing := make(map[string]string, 2)
+	if ns.Labels[substrateLabel] == "" {
+		missing[substrateLabel] = substrate
+	}
+	if instanceID != "" && ns.Labels[instanceLabel] == "" {
+		missing[instanceLabel] = instanceID
+	}
+	if len(missing) == 0 {
+		return
+	}
+	patched := ns.DeepCopy()
+	if patched.Labels == nil {
+		patched.Labels = make(map[string]string, len(missing))
+	}
+	for k, v := range missing {
+		patched.Labels[k] = v
+	}
+	if _, err := client.CoreV1().Namespaces().Update(ctx, patched, metav1.UpdateOptions{}); err != nil {
+		slog.Warn("k8shelpers: cannot backfill identity labels on managed namespace",
+			"namespace", ns.Name, "substrate", substrate, "err", err)
+		return
+	}
+	slog.Info("k8shelpers: backfilled identity labels on managed namespace",
+		"namespace", ns.Name, "substrate", substrate, "instance", instanceID)
 }
 
 // waitNamespaceGone polls until a Terminating namespace is fully removed, so
@@ -243,11 +404,21 @@ func deleteNamespace(ctx context.Context, client kubernetes.Interface, namespace
 }
 
 // namespaceSelector builds the label selector for a service's managed
-// namespaces. An empty service matches every emulator-managed namespace.
+// namespaces. An empty service matches every emulator-managed namespace. When a
+// process identity is configured the selector also pins the substrate and
+// instance, so neither ListManagedNamespaces nor a sweep can see the other
+// substrate's namespaces at all.
 func namespaceSelector(service string) string {
 	sel := managedByLabel + "=" + ManagedByValue
 	if service != "" {
 		sel += "," + serviceLabel + "=" + service
+	}
+	substrate, instanceID := identity()
+	if substrate != "" {
+		sel += "," + substrateLabel + "=" + substrate
+	}
+	if instanceID != "" {
+		sel += "," + instanceLabel + "=" + instanceID
 	}
 	return sel
 }
@@ -310,10 +481,14 @@ type RBACSubject struct {
 }
 
 // EnsureNamespaceRBAC creates the executor RoleBinding in namespace for the
-// emulator's own ServiceAccount (deploy/k8s/rbac.yaml); pass empty
-// serviceAccount/serviceAccountNamespace to use the defaults. It is idempotent
-// and best-effort against AlreadyExists; a Forbidden create returns
-// ErrNamespaceForbidden so the caller can fall back.
+// emulator's own ServiceAccount (the jaiscloud-executor ClusterRole lives in
+// deploy/k8s/rbac-shared.yaml; the ServiceAccount is declared by the substrate's
+// rbac-aws.yaml/rbac-gcp.yaml); pass empty
+// serviceAccount/serviceAccountNamespace to use the constants. Callers that can
+// resolve the running pod's identity should pass ResolveOwnServiceAccount's
+// result instead, so a substrate that does not run in `jaiscloud` binds its own
+// ServiceAccount. It is idempotent and best-effort against AlreadyExists; a
+// Forbidden create returns ErrNamespaceForbidden so the caller can fall back.
 func EnsureNamespaceRBAC(ctx context.Context, client kubernetes.Interface, namespace, serviceAccount, serviceAccountNamespace string) error {
 	if serviceAccount == "" {
 		serviceAccount = DefaultExecutorServiceAccount
@@ -356,7 +531,14 @@ func EnsureNamespaceRBACForSubjects(ctx context.Context, client kubernetes.Inter
 		return nil
 	}
 	_, err := client.RbacV1().RoleBindings(namespace).Create(ctx, &rbacv1.RoleBinding{
-		ObjectMeta: metav1.ObjectMeta{Name: ExecutorRoleBindingName, Namespace: namespace},
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      ExecutorRoleBindingName,
+			Namespace: namespace,
+			// Same ownership/identity labels as the namespace: the admission
+			// policy requires a RoleBinding created by a substrate identity to
+			// carry its substrate label.
+			Labels: OwnerNamespaceLabels(""),
+		},
 		RoleRef: rbacv1.RoleRef{
 			APIGroup: rbacv1.GroupName,
 			Kind:     "ClusterRole",

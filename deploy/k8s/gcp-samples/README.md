@@ -2,8 +2,8 @@
 
 An **application-level** end-to-end for `jaiscloud-gcp`: the official
 [Spring Cloud GCP](https://github.com/GoogleCloudPlatform/spring-cloud-gcp) sample
-applications, deployed into the `jaiscloud` k3d namespace and pointed at the
-in-cluster emulator. They exercise the emulator through the real Google Java
+applications, deployed into the `jaiscloud-gcp` k3d namespace (the GCP
+substrate) and pointed at the in-cluster emulator. They exercise the emulator through the real Google Java
 client libraries — not raw HTTP — and are the counterpart to the per-service
 SDK suites under `tests/integration/gcp/`.
 
@@ -18,7 +18,7 @@ Three samples, chosen because their starters document emulator support and need
 | `gcp-sample-firestore` | `spring-cloud-gcp-data-firestore-sample` | Firestore (Native) | 33/33 `ga`, Full data plane |
 | `gcp-sample-datastore` | `spring-cloud-gcp-data-datastore-basic-sample` | Datastore mode | 8/8 `ga`, Full data plane |
 
-Each runs as a Deployment + ClusterIP Service in `namespace: jaiscloud` (see
+Each runs as a Deployment + ClusterIP Service in `namespace: jaiscloud-gcp` (see
 [`samples.yaml`](samples.yaml)). They are stateless web apps; the test drives
 their HTTP endpoints and asserts the data round-trips through the emulator.
 
@@ -38,6 +38,15 @@ so no credentials and no source edits are required.
 make docker-gcp-samples
 
 # 2. Deploy the emulator (if not already) and run the suite
+#    (the manifests install the default names: rbac-admission-policy.yaml,
+#    namespace-data.yaml + postgres.yaml, then namespace-gcp.yaml,
+#    rbac-shared.yaml, rbac-gcp.yaml and jaiscloud-gcp.yaml; jaiscloud-gcp.yaml
+#    itself has no Namespace/ServiceAccount. For custom names:
+#    NS_AWS=… NS_GCP=… NS_DATA=… SA_AWS=… SA_GCP=… deploy/deploy.sh --gcp)
+kubectl apply -f deploy/k8s/rbac-admission-policy.yaml
+kubectl apply -f deploy/k8s/namespace-data.yaml -f deploy/k8s/postgres.yaml
+kubectl apply -f deploy/k8s/namespace-gcp.yaml
+kubectl apply -f deploy/k8s/rbac-shared.yaml -f deploy/k8s/rbac-gcp.yaml
 kubectl apply -f deploy/k8s/jaiscloud-gcp.yaml
 make test-e2e-gcp-samples-k3d
 
@@ -45,8 +54,8 @@ make test-e2e-gcp-samples-k3d
 make test-e2e-gcp-samples-k3d SKIP_GCP_IMAGE_REBUILD=1
 ```
 
-The suite skips cleanly when `kubectl` or `svc/jaiscloud-gcp` is absent, so it
-is inert in plain `go test ./...`.
+The suite skips cleanly when `kubectl` or the `jaiscloud-gcp` Service (in the
+`jaiscloud-gcp` namespace) is absent, so it is inert in plain `go test ./...`.
 
 `make docker-gcp-samples` builds one image per sample from
 [`deploy/docker/gcp-samples/Dockerfile`](../../docker/gcp-samples/Dockerfile),
@@ -69,15 +78,15 @@ few per-deployment variables):
 | `SPRING_CLOUD_GCP_DATASTORE_NAMESPACE` | `""` | **Required override.** The sample's `application.properties` hardcodes `spring-demo`; the emulator rejects namespaced keys (see below). |
 | `SPRING_CLOUD_GCP_METRICS_ENABLED` | `false` | Monitoring has no endpoint property in the starter, so the export is disabled. |
 
-Emulator endpoints: REST `http://jaiscloud-gcp.jaiscloud.svc.cluster.local:8080`,
-gRPC (h2c) `jaiscloud-gcp.jaiscloud.svc.cluster.local:8081`.
+Emulator endpoints: REST `http://jaiscloud-gcp.jaiscloud-gcp.svc.cluster.local:8080`,
+gRPC (h2c) `jaiscloud-gcp.jaiscloud-gcp.svc.cluster.local:8081`.
 
 ## Emulator gaps surfaced by this suite
 
 1. **Datastore namespaces are not supported.** Any non-empty namespace makes the
    gRPC Datastore service fail with
    `INVALID_ARGUMENT: namespaced keys are not supported`
-   ([`internal/gcp/grpc/datastore/service.go:927`](../../../internal/gcp/grpc/datastore/service.go)).
+   (namespace handling lives in [`internal/gcp/service/datastore`](../../../internal/gcp/service/datastore)).
    The Datastore sample hardcodes `namespace=spring-demo`, so the manifest
    overrides it to empty. Supporting namespaces (a per-namespace partition of
    the entity space) would let the sample run unmodified.

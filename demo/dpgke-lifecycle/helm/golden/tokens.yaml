@@ -75,8 +75,8 @@ data:
 
   # Where the emulator is. gRPC is split into host and port because the app
   # joins them; the REST value is a URL the Storage client takes whole.
-  DGD3_REST_ENDPOINT: "http://jaiscloud-gcp.jaiscloud.svc.cluster.local:8080"
-  DGD3_GRPC_ENDPOINT: "jaiscloud-gcp.jaiscloud.svc.cluster.local"
+  DGD3_REST_ENDPOINT: "http://jaiscloud-gcp.jaiscloud-gcp.svc.cluster.local:8080"
+  DGD3_GRPC_ENDPOINT: "jaiscloud-gcp.jaiscloud-gcp.svc.cluster.local"
   DGD3_GRPC_PORT: "8081"
 
   # What the app asserts about the cluster it adopts, so these must match the

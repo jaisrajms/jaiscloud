@@ -20,7 +20,7 @@ import urllib.parse
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-EMULATOR = os.environ.get("EMULATOR", "http://jaiscloud-gcp.jaiscloud.svc.cluster.local:8080")
+EMULATOR = os.environ.get("EMULATOR", "http://jaiscloud-gcp.jaiscloud-gcp.svc.cluster.local:8080")
 PROJECT = os.environ.get("PROJECT", "crypto-medallion")
 BQ_DATASET = os.environ.get("BQ_DATASET", "crypto_medallion")
 BQ_TABLE = os.environ.get("BQ_TABLE", "trades_rollup")

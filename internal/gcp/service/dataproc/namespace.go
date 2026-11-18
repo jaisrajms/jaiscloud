@@ -31,6 +31,13 @@ func (s *Service) defaultNamespace() string {
 	return "jaiscloud"
 }
 
+// resolveOwnServiceAccount returns the ServiceAccount (name, namespace) this
+// emulator process runs as — the identity a per-cluster namespace's executor
+// RoleBinding must bind. It is a package variable so a test can pin the identity
+// without priming k8shelpers' once-per-process cache; production always uses
+// k8shelpers.ResolveOwnServiceAccount.
+var resolveOwnServiceAccount = k8shelpers.ResolveOwnServiceAccount
+
 // KubernetesNamespaceFromVirtualClusterConfig extracts the effective
 // kubernetesClusterConfig.kubernetesNamespace from a Dataproc-on-GKE
 // VirtualClusterConfig ("" for a GCE-shaped or malformed config, and for a
@@ -83,13 +90,18 @@ func (s *Service) resolveClusterNamespace(ctx context.Context, project, region, 
 	}
 	// Bind the identities that must act in the new namespace: the emulator's own
 	// ServiceAccount (creates the driver Job/pod) and the Spark driver's
-	// ServiceAccount (creates executor pods; "default" when unset).
+	// ServiceAccount (creates executor pods; "default" when unset). The emulator
+	// identity is resolved, not the historical `jaiscloud/jaiscloud` constant: a
+	// GCP substrate pod runs as e.g. `jaiscloud-gcp` in namespace `jaiscloud-gcp`,
+	// and binding the AWS identity would pass at RoleBinding-create time and then
+	// fail Forbidden when the driver pod is created.
 	driverSA := s.serviceAccountName
 	if driverSA == "" {
 		driverSA = "default"
 	}
+	emulatorSA, emulatorSANamespace := resolveOwnServiceAccount()
 	subjects := []k8shelpers.RBACSubject{
-		{Name: k8shelpers.DefaultExecutorServiceAccount, Namespace: k8shelpers.DefaultExecutorServiceAccountNamespace},
+		{Name: emulatorSA, Namespace: emulatorSANamespace},
 		{Name: driverSA, Namespace: candidate},
 	}
 	if rbacErr := k8shelpers.EnsureNamespaceRBACForSubjects(ctx, s.k8sClient, candidate, subjects...); rbacErr != nil {

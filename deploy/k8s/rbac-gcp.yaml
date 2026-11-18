@@ -1,0 +1,49 @@
+---
+# Execution identity and permissions of the GCP substrate (namespace
+# `jaiscloud-gcp`). Requires namespace-gcp.yaml and rbac-shared.yaml; the AWS
+# identity lives in rbac-aws.yaml and is never created by a GCP-only install.
+---
+# Execution identity of the GCP substrate (namespace `jaiscloud-gcp`). Kept
+# separate from the AWS ServiceAccount so the two substrates never share an
+# identity: deleting one substrate namespace cannot revoke the other's executor
+# permissions.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: jaiscloud-gcp
+  namespace: jaiscloud-gcp
+automountServiceAccountToken: true
+---
+# Executor permissions for the GCP substrate's own namespace. Kept as a
+# namespaced RoleBinding onto the shared ClusterRole so a substrate never needs
+# a per-namespace Role copy, and so the shared ClusterRoles stay single-instance.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: jaiscloud-executor
+  namespace: jaiscloud-gcp
+subjects:
+  - kind: ServiceAccount
+    name: jaiscloud-gcp
+    namespace: jaiscloud-gcp
+roleRef:
+  kind: ClusterRole
+  name: jaiscloud-executor
+  apiGroup: rbac.authorization.k8s.io
+---
+# Cluster-wide namespace lifecycle for the GCP substrate only: Dataproc
+# per-cluster namespaces and Managed Kafka broker namespaces created from within
+# `jaiscloud-gcp`. The AWS substrate binds jaiscloud-namespace-admin-aws
+# (rbac-aws.yaml) instead, so neither substrate's install grants the other.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: jaiscloud-namespace-admin-gcp
+subjects:
+  - kind: ServiceAccount
+    name: jaiscloud-gcp
+    namespace: jaiscloud-gcp
+roleRef:
+  kind: ClusterRole
+  name: jaiscloud-namespace-admin
+  apiGroup: rbac.authorization.k8s.io

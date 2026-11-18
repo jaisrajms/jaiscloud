@@ -176,6 +176,16 @@ Ports: `8080` REST/admin, `8081` gRPC (h2c), `4567` console with `--ui`. The ima
 `8080`; publish `8081`/`4567` explicitly as above. Pin a version instead of `latest` in CI
 (`jaisraj/jaiscloud-gcp:0.1.1`); `jaiscloud-gcp version` prints the tag the image was built from.
 
+### Running in CI
+
+The emulator needs no Kubernetes cluster and no mesh: start the container, wait
+on `GET /_jaiscloud/health` from the host (the image is distroless and has no
+shell), and point clients at it with the `*_EMULATOR_HOST` variables above.
+[`docs/gcp/ci.md`](docs/gcp/ci.md) has the recipes for GitHub Actions, GitLab,
+Compose, Postgres-backed runs, executor tests that **do** need pods, and clients
+that insist on `https://` (native TLS, a thin proxy, or the Istio front door).
+Ready-made files: [`deploy/ci/`](deploy/ci/).
+
 ### Homebrew (macOS) and Scoop (Windows)
 
 ```bash
@@ -238,6 +248,216 @@ export STORAGE_EMULATOR_HOST=http://localhost:8080      # GCS REST client
 ```
 
 **Service-account credentials.** The emulator serves an OAuth2 token endpoint at the root (`POST /token`, also `/v1/token`) so `google-auth-library` service-account credentials can mint an access token instead of calling Google. Point `ServiceAccountCredentials`'s token server URI at `<endpoint>/token`; the JWT-bearer grant is implemented (`grant_type=urn:ietf:params:oauth:grant-type:jwt-bearer`), and the response is the standard `{access_token, token_type, expires_in}`. This is independent of the opt-in metadata server (`--gcp-metadata`); it is available whenever the REST transport is selected.
+
+---
+
+## Kubernetes and the Istio front door
+
+The GCP emulator runs as its own **substrate** in a cluster, next to the AWS one,
+each in its own namespace so neither reset can destroy the other's state
+(`deploy/k8s/namespace-aws.yaml`, `namespace-gcp.yaml`, `namespace-data.yaml`):
+
+| namespace | contents |
+|---|---|
+| `jaiscloud-gcp` | Deployment `jaiscloud-gcp` (REST `:8080`, gRPC `:8081`, Hive Metastore `:9083` + per-Service catalogs `:9084–9093`), PVCs `jaiscloud-gcp-blobs-pvc` + `jaiscloud-gcp-state-pvc`, Secret `jaiscloud-gcp-dsn`, Service `jaiscloud-gcp` |
+| `jaiscloud` | the AWS substrate (`:4566`) — untouched by a GCP reset |
+| `jaiscloud-data` | PostgreSQL, `postgres-pvc`, database `jaiscloud_gcp` (schema `gcp`) |
+
+```bash
+make up-k8s-gcp           # apply namespace-data/postgres/namespace-gcp/rbac-shared/rbac-gcp/jaiscloud-gcp.yaml, wait for rollout
+./deploy/deploy.sh --gcp  # same from the deploy script (no image build)
+kubectl port-forward -n jaiscloud-gcp svc/jaiscloud-gcp 8080:8080
+```
+
+**Kubernetes 1.30 or newer is required.** Both substrate ServiceAccounts hold
+cluster-wide namespace delete (Dataproc owns a namespace per cluster, Managed
+Kafka one per broker) and RBAC cannot scope a delete by label, so the boundary
+between the two substrates is a `ValidatingAdmissionPolicy`:
+`deploy/k8s/rbac-admission-policy.yaml` (matched only to the two emulator
+ServiceAccounts, `failurePolicy: Fail`, `Deny`) requires every namespace a
+substrate creates, updates or deletes to carry
+`jaiscloud.io/managed-by=jaiscloud` and its own `jaiscloud.io/substrate`, so one
+substrate cannot delete or relabel the other's namespaces. The emulator stamps
+those labels plus `jaiscloud.io/instance-id` on every namespace it creates, and
+its sweeps filter on them. `./deploy/deploy.sh` applies the policy on every
+install/reset path and refuses a cluster older than 1.30 before creating
+anything; `./deploy/deploy.sh --check --json` reports it as
+`rbac.admissionPolicy` + `rbac.serverVersion`, checks that the policy's
+`matchConditions` name the identity each Deployment actually runs
+(`rbac.policyMatchesSA`) and probes what that identity may do
+(`rbac.effective.<cloud>`, via `kubectl auth can-i --as`), and
+`GATE_ALLOW_RBAC=1 make test-rbac-isolation-k8s` proves the allow/deny matrix
+with server-side dry runs. A plain `kubectl` (and `deploy.sh --reset`) is not
+matched by the policy, so the documented operator paths are unchanged.
+
+**Automating this?** [`docs/gcp/integration/AGENTS.md`](docs/gcp/integration/AGENTS.md)
+is a runbook for an LLM agent or script; its generated
+[`contract.yaml`](docs/gcp/integration/contract.yaml) carries the facts
+(namespaces, objects, images, env, ports) plus the upgrade/detection playbook;
+`./deploy/deploy.sh --check --json` reports the cluster's state read-only and
+prints the next safe step (it also detects a pre-split install). If you only have
+the container image or a release binary, the binary carries the same pack:
+`jaiscloud-gcp agent-guide` (brief), `--json` (contract), `--emit DIR` (the
+deployment kit: manifests, `deploy.sh`, preflight, Istio/CI assets, docs).
+
+`deploy/k8s/jaiscloud-gcp.yaml` declares the GCP workload objects only — PVCs,
+DSN Secret, Deployment and Service. It no longer carries a Namespace or a
+ServiceAccount (those are `namespace-gcp.yaml` and `rbac-gcp.yaml`), so applying
+it alone to a bare cluster fails; the install is the namespace and RBAC first,
+then the workload. Bulk-applying the default manifests installs the shipped names
+(`jaiscloud-gcp` / `jaiscloud` / `jaiscloud-data`):
+
+```bash
+kubectl apply -f deploy/k8s/namespace-data.yaml -f deploy/k8s/postgres.yaml \
+              -f deploy/k8s/namespace-gcp.yaml \
+              -f deploy/k8s/rbac-shared.yaml -f deploy/k8s/rbac-gcp.yaml \
+              -f deploy/k8s/jaiscloud-gcp.yaml
+```
+
+The shared store comes first (`namespace-data.yaml` + `postgres.yaml`), then the
+GCP namespace and its RBAC, then the substrate. `deploy/deploy.sh --gcp` also
+applies `deploy/k8s/rbac-admission-policy.yaml` before any of these, so the
+namespace-isolation boundary is in place from the first namespace.
+
+**Custom namespaces or ServiceAccount names.** Do not edit the manifests: set
+`NS_AWS` / `NS_GCP` / `NS_DATA` / `SA_AWS` / `SA_GCP` and let `deploy.sh` render
+the layout. It copies the same base manifests into a temporary kustomize overlay,
+patches the Namespace names, the ServiceAccount and every reference to it, the
+identity env (`JAISCLOUD_K8S_*`), the DSN hostnames and the usernames in the
+`ValidatingAdmissionPolicy`, then applies it with `kubectl apply -k`:
+
+```bash
+NS_AWS=team-aws NS_GCP=team-gcp NS_DATA=team-data \
+SA_AWS=team-sa-aws SA_GCP=team-sa-gcp deploy/deploy.sh --gcp --yes
+deploy/deploy.sh --render-only /tmp/jaiscloud-render   # inspect first, no cluster
+```
+
+The checked-in manifests stay on the default names, so a direct `kubectl apply`
+(and `make up-k8s` / `make up-k8s-gcp`) always installs those.
+
+- **Image.** The manifest defaults to the published multi-arch image
+  (`jaisraj/jaiscloud-gcp:latest`), so the commands above work without a private
+  registry. To run your own build, tag/import it and point the Deployment at it:
+  `JAISCLOUD_GCP_IMAGE=<image> ./deploy/deploy.sh --gcp`, or
+  `kubectl -n jaiscloud-gcp set image deploy/jaiscloud-gcp jaiscloud-gcp=<image>`.
+- **Dataproc jobs need a Spark image with the GCS connector.** The manifest
+  defaults `JAISCLOUD_K8S_SPARK_IMAGE` to `apache/spark:3.5.0`: a public image
+  that pulls anywhere but carries **no** GCS connector, so a Dataproc job that
+  reads/writes `gs://` fails at runtime (`No FileSystem for scheme "gs"`). Build
+  a connector image from `tests/persistent_mode/gcp/iceberg/spark-iceberg` +
+  `download-jars.sh` (or point at your own), push/import it, then
+  `kubectl -n jaiscloud-gcp set env deploy/jaiscloud-gcp JAISCLOUD_K8S_SPARK_IMAGE=<image>`.
+  `deploy.sh --check --json` reports `substrates.gcp.sparkImage` /
+  `sparkImageGCS` and warns when the image is private, is the plain default, or
+  is unset — warnings only, never a `--strict` failure.
+- `postgres.yaml` creates only the AWS database (`POSTGRES_DB=jaiscloud`) on a
+  fresh `postgres-pvc`; there is no initdb script. Create `jaiscloud_gcp` once
+  with `make postgres-gcp-db`; `deploy.sh --gcp` and `make up-k8s-gcp` do it for
+  you before the GCP pod starts.
+- **Reaching it.** The GCP Service is a ClusterIP (it also carries the Thrift
+  HMS ports), so port-forward `8080`/`8081` as above, or use the front door for
+  external HTTP(S). The AWS Service is a LoadBalancer for localhost convenience;
+  on clusters without one (kind) both need the port-forward. In-cluster callers
+  use Service DNS, and a sidecar-injected client reaches both directly (no
+  `PeerAuthentication`/`DestinationRule`/`ServiceEntry`); literal-IP dialers,
+  `hostAliases`, pinned `clusterIP` and the emulator-host variables are covered
+  in [`deploy/k8s/istio/README.md`](deploy/k8s/istio/README.md#addressing-the-substrates).
+- The pod runs with `JAISCLOUD_K8S_NAMESPACE=jaiscloud-gcp` and
+  `JAISCLOUD_STATE_DIR=/data/state` (a small state PVC, kept out of the blob PVC
+  so snapshots cannot capture the TLS key), so Dataproc / Managed Kafka / Cloud
+  Run workloads land in its own namespace and its instance ID (`gcp-substrate-1`)
+  is stable across pod rolls.
+- Upgrading an install from the single-namespace layout: the Postgres PVC is
+  namespace-scoped, so run `./deploy/deploy.sh --migrate-store` once. It moves
+  the existing store into `jaiscloud-data` (restoring into both databases) and,
+  if the old GCP emulator ran in the `jaiscloud` namespace, copies its object
+  bytes into `jaiscloud-gcp`. The legacy Postgres is only **scaled to 0** and
+  kept with its Services and PVCs as a rollback copy; `--delete-legacy` also
+  removes the workload and Services after checking the JaisCloud marker (never a
+  PVC), and a `StatefulSet` or an out-of-cluster `LEGACY_DSN` source is
+  supported. The migration refuses a source it cannot identify as JaisCloud's:
+  the store's objects carry `jaiscloud.io/managed-by=jaiscloud`, and a pre-split
+  build (which predates the label) needs a one-time `LEGACY_CONFIRM=1`. An
+  unmarked workload named `postgres` in `jaiscloud` therefore shows up in
+  `--check` as `legacy.candidate` with a warning, not as a pending migration.
+  See
+  [the Developer Guide](DEVELOPER_GUIDE.md#setup-3--jaiscloud-on-kubernetes).
+- **Bring your own store.** `./deploy/deploy.sh --yes --store-dsn
+  'postgres://user:pass@db.example.com:5432/postgres'` (or
+  `JAISCLOUD_STORE_DSN=…`) skips `postgres.yaml`, creates `jaiscloud` /
+  `jaiscloud_gcp` through a short-lived `psql` pod in `jaiscloud-data`, and
+  points each substrate's DSN Secret at your server. The base DSN's database
+  component is replaced with `jaiscloud` / `jaiscloud_gcp` for those Secrets
+  (one database per cloud); `JAISCLOUD_AWS_DSN` / `JAISCLOUD_GCP_DSN` are used
+  verbatim for an exact per-substrate DSN. The install record stores
+  `store=external`, which `deploy.sh --check --json` reports as `store.mode`;
+  database probes are skipped (`false` = not probeable). The pre-split
+  migration into an external store is not supported yet.
+
+### Istio front door (optional)
+
+The mesh is a **client-facing front door only** — no mesh component sits inside a
+substrate, so executors, function invocation and Cloud Run proxying keep talking
+to the emulator directly. Install order, CA generation, DNS and the host routes
+live in [`deploy/k8s/istio/README.md`](deploy/k8s/istio/README.md); the rule to
+keep in mind is that `:authority` is **never rewritten**, because GKE vs Managed
+Kafka, the Cloud Run/Cloud Functions hosts and S3 virtual-hosted requests all
+route on it. `scripts/istio-smoke.sh` asserts the gateway paths. On a cluster
+that already runs istiod, add only the gateway with
+`deploy/k8s/istio/istiooperator-gateway-only.yaml` — do not re-run
+`istioctl install --set profile=minimal`, which can replace the existing IOP.
+
+Park keeps the CA but stops the backend, so the front door's two supporting
+pieces need a decision: a cluster-wide CoreDNS rewrite survives a park and leaves
+clients resolving a dead route (remove that suffix's rewrite while parked,
+re-add it on resume; `deploy.sh --check --json` reports `dns.rewrites` /
+`dns.suffixes` / `dns.stale`), while the CA ConfigMap stays on purpose and is only
+stale when its issuer is gone (`ca.{aws,gcp}` / `ca.issuerPresent`). The three
+override kinds (CoreDNS, pod `hostAliases`, pinned `clusterIP`) are compared in
+[`deploy/k8s/istio/README.md`](deploy/k8s/istio/README.md#park-switch-and-dnsca).
+
+Resets are database-scoped: `./deploy/deploy.sh --gcp-reset` drops only
+`jaiscloud_gcp` and the GCP blobs PVC, while `--reset` drops only the AWS
+`jaiscloud` database and the `jaiscloud` namespace. Neither touches
+`jaiscloud-data`, so the other substrate's state always survives —
+`make test-dual-substrate-k8s ALLOW_RESET=1` proves it by writing a GCS object,
+running the AWS reset and asserting the object, the database and the GCP PVCs
+are intact. (The gate is destructive by design, so it refuses without
+`ALLOW_RESET=1`.)
+
+Stopping compute without losing data is a separate mode:
+
+```bash
+./deploy/deploy.sh --park gcp               # stop GCP compute; keep its data
+./deploy/deploy.sh --resume gcp             # one rollout; keeps the parked binary
+./deploy/deploy.sh --switch aws --yes       # park GCP (when installed), resume AWS
+./deploy/deploy.sh --delete gcp             # remove GCP workloads only (aws|gcp|both)
+```
+
+The park record is kept **per substrate** on the namespace
+(`jaiscloud.io/<cloud>.state`, `.parked-at`, `.parked-image`, `.parked-image-id`,
+`.parked-version`), so both records survive if the two substrates share a
+namespace.
+
+`--park` first calls the emulator's `POST /_jaiscloud/park`, where Dataproc
+cancels non-terminal jobs, Managed Kafka deletes its broker Pods/Services
+(topics are lost — the broker has no PVC — but cluster/topic records survive) and
+Cloud Run removes revision runtimes (records survive), then scales the Deployment
+to 0 and reaps executor Pods/Jobs. The database, blobs/state PVCs (instance ID),
+namespaces, CA and resource records are kept. The park response reports
+`topicDataLost`, `--park gcp` warns when a real Managed Kafka broker mode is
+configured, and the preflight warns too
+(`substrates.gcp.kafkaBrokerMode`).
+
+`--resume` must not silently change the binary before store migrations: it
+refuses a changed Deployment image (`--allow-upgrade` is the explicit opt-in) and
+otherwise pins the parked image digest with `kubectl set image` before scaling,
+so a moving `:latest` tag cannot swap the build. `GATE_ALLOW_LIFECYCLE=1 make
+test-lifecycle-k8s` proves retention across park/resume and both switch
+directions.
+
+The standalone binary remains the default path — no cluster, no mesh, no
+Postgres; see [Quick Start](#quick-start).
 
 ---
 
@@ -689,7 +909,28 @@ persisted across restarts; the engine polls once per second, so sustained throug
 
 ### Managed Kafka: metadata control plane, optional real broker
 
-A cluster is a logical record; the emulator is metadata-only by default and returns the documented synthesized `bootstrap.{cluster}.{location}.managedkafka.{project}.cloud.goog` address, at which nothing listens. With `JAISCLOUD_KAFKA_BROKER_MODE=docker|k8s|native` (or a global `JAISCLOUD_EXECUTOR_MODE`), creating a cluster starts a single-node Redpanda broker — the Redpanda image as a container on the local Docker daemon for `docker` (publishing a chosen loopback port and advertising `127.0.0.1:<port>` to clients; needs only the Docker daemon, no cluster and no host `rpk` toolchain), a Pod plus a ClusterIP Service in a per-cluster namespace for `k8s` (provisioned with the cluster via the shared namespace seam, reused when it already exists, and deleted with the cluster or `/_jaiscloud/reset` only when the emulator created it; falls back to the process-wide `JAISCLOUD_K8S_NAMESPACE` when namespace RBAC is unavailable), or an `rpk redpanda start` subprocess on loopback ports for `native` — and `bootstrapAddress` becomes the broker's live endpoint; deleting the cluster reaps it. The broker is a real Kafka-wire endpoint: topic create/update/delete is mirrored onto it, topic `configs` are applied as Kafka property overrides (create sets them; update applies an incremental set/delete, and a broker-rejected key or value is returned as `InvalidArgument` with the metadata rolled back), and consumer groups are read from (and reset through) its group coordinator — `ListConsumerGroups` lists the broker's groups with their committed offsets, and get/update/delete operate on them (an offset reset while members are joined is rejected, matching real GCP). ACL create/update/add-entry/remove-entry/delete are mirrored onto the broker's Kafka ACL table too (the `aclId` resource pattern maps to a Kafka resource binding): any mutation replaces the broker's bindings for that pattern, and with no broker the ACL metadata is metadata-only. Enforcement is deliberately left to the broker: ACLs are installed but, matching the emulator's non-enforcing IAM posture, Redpanda only acts on them when its own `kafka_enable_authorization` is turned on, which stays off by default. With no broker (the default) the topic metadata remains authoritative while the consumer-group list is empty and get/update/delete return `NOT_FOUND`. Broker liveness and broker bytes are runtime state, not persisted: `/_jaiscloud/reset` stops and reaps every broker, a startup sweep removes broker Pods/Services, containers, or data dirs left by a previous instance, and `--dsn` snapshots carry only control-plane metadata — so a restarted or imported emulator never advertises a dead address. A cluster persisted across a restart (or restored from an import) re-ensures its broker lazily on the first `GetCluster` or data-plane call, and broker data is ephemeral (a k8s `emptyDir`, a native scratch dir, or a Docker container's writable layer, all removed on stop/reset). The data plane is proven end to end by the k3d gate `make test-managedkafka-broker-k8s` (`tests/persistent_mode/gcp/managedkafka-broker`): a real franz-go client runs inside the cluster, produces and consumes records across the topic's partitions at `bootstrapAddress`, joins a consumer group, commits offsets with zero lag, and the group's committed offsets are read back through the Managed Kafka API. The docker backend is proven by the local-daemon gate `make test-managedkafka-broker-docker`, which runs the same franz-go probe from the host against the broker's advertised `127.0.0.1:<port>`.
+A cluster is a logical record; the emulator is metadata-only by default and returns the documented synthesized `bootstrap.{cluster}.{location}.managedkafka.{project}.cloud.goog` address, at which nothing listens. With `JAISCLOUD_KAFKA_BROKER_MODE=docker|k8s|native` (or a global `JAISCLOUD_EXECUTOR_MODE`), creating a cluster starts a single-node Redpanda broker — the Redpanda image as a container on the local Docker daemon for `docker` (publishing a chosen loopback port and advertising `127.0.0.1:<port>` to clients; needs only the Docker daemon, no cluster and no host `rpk` toolchain), a Pod plus a ClusterIP Service in a per-cluster namespace for `k8s` (provisioned with the cluster via the shared namespace seam, reused when it already exists, and deleted with the cluster or `/_jaiscloud/reset` only when the emulator created it; falls back to the process-wide `JAISCLOUD_K8S_NAMESPACE` when namespace RBAC is unavailable), or an `rpk redpanda start` subprocess on loopback ports for `native` — and `bootstrapAddress` becomes the broker's live endpoint; deleting the cluster reaps it. The broker is a real Kafka-wire endpoint: topic create/update/delete is mirrored onto it, topic `configs` are applied as Kafka property overrides (create sets them; update applies an incremental set/delete, and a broker-rejected key or value is returned as `InvalidArgument` with the metadata rolled back), and consumer groups are read from (and reset through) its group coordinator — `ListConsumerGroups` lists the broker's groups with their committed offsets, and get/update/delete operate on them (an offset reset while members are joined is rejected, matching real GCP). ACL create/update/add-entry/remove-entry/delete are mirrored onto the broker's Kafka ACL table too (the `aclId` resource pattern maps to a Kafka resource binding): any mutation replaces the broker's bindings for that pattern, and with no broker the ACL metadata is metadata-only. Enforcement is deliberately left to the broker: ACLs are installed but, matching the emulator's non-enforcing IAM posture, Redpanda only acts on them when its own `kafka_enable_authorization` is turned on, which stays off by default. With no broker (the default) the topic metadata remains authoritative while the consumer-group list is empty and get/update/delete return `NOT_FOUND`. Broker liveness and broker bytes are runtime state, not persisted: `/_jaiscloud/reset` stops and reaps every broker, a startup sweep removes broker Pods/Services, containers, or data dirs left by a previous instance, and `--dsn` snapshots carry only control-plane metadata — so a restarted or imported emulator never advertises a dead address. A cluster persisted across a restart (or restored from an import) re-ensures its broker lazily on the first `GetCluster` or data-plane call, and broker data is ephemeral (a k8s `emptyDir`, a native scratch dir, or a Docker container's writable layer, all removed on stop/reset). **Where the client runs.** A Kafka client follows the broker's advertised
+listener, not just `bootstrap.servers`, so use the backend whose advertised
+address your client can resolve:
+
+| your client runs… | backend | `bootstrapAddress` |
+|---|---|---|
+| in the cluster (your test Pod/Job, Spark driver, Cloud Run/function Pod, sample apps) | `k8s` | `<svc>.<ns>.svc.cluster.local:9092` — cluster DNS, intentionally |
+| on the emulator host (emulator binary, or Docker with `JAISCLOUD_DOCKER_MODE=host`) | `docker` or `native` | `127.0.0.1:<port>` |
+| in another container on the emulator's Docker network | `docker` (`container` mode) | `<broker-container>:9092` |
+| outside the cluster while the emulator is deployed in the cluster | — | not supported by design: run the client as a Pod, or use the docker/native backends |
+
+The `k8s` backend deliberately advertises the in-cluster Service: the Kubernetes
+deployment exists for **in-cluster** workloads, and the Istio front door routes
+HTTP(S) hostnames only — Kafka is a TCP protocol, and its clients reconnect to
+the advertised listener, so the mesh neither carries it nor could fix it. An
+externally reachable Kafka endpoint would be a new feature, not a mesh setting.
+Note that the repo's `docker-compose.yml` runs the emulator **containerized**
+(`JAISCLOUD_DOCKER_MODE=container`), which advertises the broker by container
+name — for a Kafka client on the host, run the emulator binary with the default
+`host` mode, or `native` mode.
+
+The data plane is proven end to end by the k3d gate `make test-managedkafka-broker-k8s` (`tests/persistent_mode/gcp/managedkafka-broker`): a real franz-go client runs inside the cluster, produces and consumes records across the topic's partitions at `bootstrapAddress`, joins a consumer group, commits offsets with zero lag, and the group's committed offsets are read back through the Managed Kafka API. The docker backend is proven by the local-daemon gate `make test-managedkafka-broker-docker`, which runs the same franz-go probe from the host against the broker's advertised `127.0.0.1:<port>`.
 
 Cluster create/update/delete return a proper `google.longrunning.Operation` (`name`, `metadata` with `@type=type.googleapis.com/google.cloud.managedkafka.v1.OperationMetadata`, `done: true`, `response`) inline; the operation is also persisted under `projects/{project}/locations/{location}/operations/{id}` and served by the registered `GetOperation`/`ListOperations` handlers. That operations path is shared with Cloud Workflows' LRO surface on the single emulator host: the default host keeps it on Workflows, while the service's canonical host (`managedkafka.localhost` / `managedkafka.googleapis.com`, first DNS label `managedkafka`) serves Managed Kafka's own `GetOperation`/`ListOperations`. By default every Managed Kafka operation is returned already done, so no client needs to poll it, while in the opt-in async mode (`JAISCLOUD_LRO_MODE=async`) a poll is resolved against the Managed Kafka store.
 
@@ -702,9 +943,9 @@ Cloud Run Admin v2 (`run.googleapis.com`) is implemented as the service/revision
 
 The runtime is behind a `RuntimeManager` seam. By default it is a **mock**: nothing is scheduled and a request addressed to a generated `*.run.app` host resolves `503` (no ready runtime), so a service is a stored metadata record. Set `JAISCLOUD_CLOUDRUN_EXECUTOR_MODE=k8s` (or `JAISCLOUD_EXECUTOR_MODE=k8s`) to run the **k8s executor**: each revision's template image is launched as a Pod + ClusterIP Service (via the shared `internal/k8shelpers` workload lifecycle, also used by Managed Kafka), with `PORT`/`K_SERVICE`/`K_REVISION`/`K_CONFIGURATION` injected; the executor waits for the container port and reverse-proxies data-plane requests to it. Set `JAISCLOUD_CLOUDRUN_EXECUTOR_MODE=docker` to run the **docker executor** instead: each revision's image is launched as one container on the local Docker daemon (dialled over `/var/run/docker.sock`; a `DOCKER_HOST` override is ignored, matching the Lambda/ECS executors) with an ephemeral published loopback port and the same injected environment, and the proxy dials `127.0.0.1:<port>`. When the emulator itself runs as a container (`JAISCLOUD_DOCKER_MODE=container`, as `docker-compose.yml` sets), nothing is published: the revision joins `JAISCLOUD_DOCKER_NETWORK` and the proxy dials the container name, since a host-published port is unreachable from the emulator's own network namespace (CDE1). Both executors tear down the same way and share the routing/proxy code, so they cannot drift. In docker/k8s mode the synthesized `uri` becomes `http://{service}-{token}.{location}.{suffix}[:port]` (suffix from `JAISCLOUD_CLOUDRUN_URL_SUFFIX`, external port from `JAISCLOUD_CLOUDRUN_URL_PORT`) so a client can send the authority back as a `Host` header. Revisions are always-on: a runtime is torn down only on service delete, a template-changing update, `/_jaiscloud/reset`, or the startup orphan sweep (there is no idle reaper). The proxy maps a missing service to `404`, no ready runtime to `503`, a connection failure to `502`, and a timeout to `504`. Cloud Run shares the `/v2/projects/{p}/locations/{l}` namespace with Cloud Functions and Cloud Tasks on the single emulator origin, so it is claimed by resource segment (`services`/`revisions`) and by run-prefixed operation ids (`operation-run-<uuid>`); the bare `.../operations` list path is path-ambiguous and stays with Cloud Functions by design (run operations remain reachable by their prefixed id), and Terraform/gcloud reach the same surface under a `/run` path prefix; the gRPC surface is the same core, so the transports cannot drift, and the stock `run/apiv2` client is gated by the gRPC conformance suite. Jobs, WorkerPools, traffic splitting, autoscaling/scale-to-zero, sidecars, secrets/Cloud SQL/emptyDir volumes, custom domains, probes and IAM invocation enforcement are not modelled. The execution paths are verified end to end by `make test-e2e-cloudrun-k8s` (k3d, `tests/persistent_mode/gcp/cloudrun/`) and `make test-e2e-cloudrun-docker` (local Docker, same suite); the optional floci-gcp Java interop smoke suite (`make test-e2e-cloudrun-java`) is corroborating evidence only, not a compliance gate.
 
-**Browser reachability (SPK4).** A browser cannot set an arbitrary `Host` header, so it cannot address a synthesized data-plane authority while the default suffix (`*.run.app`) does not resolve. To open a deployed service's page (the demo's leaderboard) from a browser, set `JAISCLOUD_CLOUDRUN_URL_SUFFIX=run.localhost` and `JAISCLOUD_CLOUDRUN_URL_PORT` to a host-forwarded port, then forward that port to the emulator's REST port (`kubectl -n jaiscloud port-forward svc/jaiscloud-gcp 18080:8080`); every `*.localhost` name resolves to loopback, so `http://{service}-{token}.{location}.run.localhost:18080/` loads the service at the authority the API reports. If an on-camera `.run.app`-shaped host is wanted instead, add a hosts entry (`{service}-{token}.{location}.run.app 127.0.0.1` — per host, no wildcard) or put a `Host`-preserving reverse proxy in front of the emulator. Gated by `make test-e2e-cloudrun-browser` (`tests/persistent_mode/gcp/cloudrun/`, tag `cloudrun_e2e`), which dials the synthesized `*.localhost` authority with no `Host` override.
+**Browser reachability (SPK4).** A browser cannot set an arbitrary `Host` header, so it cannot address a synthesized data-plane authority while the default suffix (`*.run.app`) does not resolve. To open a deployed service's page (the demo's leaderboard) from a browser, set `JAISCLOUD_CLOUDRUN_URL_SUFFIX=run.localhost` and `JAISCLOUD_CLOUDRUN_URL_PORT` to a host-forwarded port, then forward that port to the emulator's REST port (`kubectl -n jaiscloud-gcp port-forward svc/jaiscloud-gcp 18080:8080`); every `*.localhost` name resolves to loopback, so `http://{service}-{token}.{location}.run.localhost:18080/` loads the service at the authority the API reports. If an on-camera `.run.app`-shaped host is wanted instead, add a hosts entry (`{service}-{token}.{location}.run.app 127.0.0.1` — per host, no wildcard) or put a `Host`-preserving reverse proxy in front of the emulator. Gated by `make test-e2e-cloudrun-browser` (`tests/persistent_mode/gcp/cloudrun/`, tag `cloudrun_e2e`), which dials the synthesized `*.localhost` authority with no `Host` override.
 
-**Browser reachability from a remote recording machine (SPK7).** The `*.localhost` recipe only works on the emulator host — anywhere else it resolves to the *viewer's* loopback, so it cannot reach a remote emulator's data plane. To record the demo from a browser on another machine, serve the data plane on the emulator host's LAN address under a **nip.io wildcard authority**: set `JAISCLOUD_CLOUDRUN_URL_SUFFIX=run.<lan-ip>.nip.io` and `JAISCLOUD_CLOUDRUN_URL_PORT=<rest-port>`, then forward the REST port on every interface (`kubectl -n jaiscloud port-forward --address 0.0.0.0 svc/jaiscloud-gcp 8080:8080`). Any name under `run.<lan-ip>.nip.io` resolves (public wildcard DNS) to the emulator host's LAN IP, so `http://{service}-{token}.{location}.run.<lan-ip>.nip.io:8080/` loads the service and the browser sends the `Host` the data plane routes on — no `/etc/hosts` edit, no proxy. `make demo-browser-lan` applies the config, checks the LAN address, and keeps the `0.0.0.0` forward up for the recording; gated by `make test-e2e-cloudrun-browser-lan`, which dials the nip.io authority with no `Host` override. Fallbacks: a per-host hosts entry or a `Host`-preserving reverse proxy in front of the emulator.
+**Browser reachability from a remote recording machine (SPK7).** The `*.localhost` recipe only works on the emulator host — anywhere else it resolves to the *viewer's* loopback, so it cannot reach a remote emulator's data plane. To record the demo from a browser on another machine, serve the data plane on the emulator host's LAN address under a **nip.io wildcard authority**: set `JAISCLOUD_CLOUDRUN_URL_SUFFIX=run.<lan-ip>.nip.io` and `JAISCLOUD_CLOUDRUN_URL_PORT=<rest-port>`, then forward the REST port on every interface (`kubectl -n jaiscloud-gcp port-forward --address 0.0.0.0 svc/jaiscloud-gcp 8080:8080`). Any name under `run.<lan-ip>.nip.io` resolves (public wildcard DNS) to the emulator host's LAN IP, so `http://{service}-{token}.{location}.run.<lan-ip>.nip.io:8080/` loads the service and the browser sends the `Host` the data plane routes on — no `/etc/hosts` edit, no proxy. `make demo-browser-lan` applies the config, checks the LAN address, and keeps the `0.0.0.0` forward up for the recording; gated by `make test-e2e-cloudrun-browser-lan`, which dials the nip.io authority with no `Host` override. Fallbacks: a per-host hosts entry or a `Host`-preserving reverse proxy in front of the emulator.
 
 **Recording take (SPK7).** `make record-gcp-demo` (`scripts/demo-record.sh`) captures the take from an isolated `Xvfb :99` display with real OS cursor/clicks: it starts Xvfb, opens the page in Chrome (`--kiosk --app`), records with `ffmpeg -f x11grab -draw_mouse 1` and verifies the result with `ffprobe`. Pass `DEMO_RECORD_URL=<leaderboard url>` (the nip.io URL above) for the real page; with no URL it records a local stand-in page, so the pipeline self-tests without the cluster. `--display :1` reuses an existing X display; narration (Google Cloud TTS) is a separate step (design §8). The isolated display needs `xvfb`/`x11-utils`/`xdotool` installed once (operator, `sudo apt-get install -y xvfb x11-utils xdotool fonts-dejavu-core`).
 
@@ -784,7 +1025,7 @@ A cluster may be created with a `virtualClusterConfig` (Dataproc-on-GKE) instead
 
 A virtual cluster is **recreate-only**: `clusters.patch` may update labels and the worker-instance counts of a GCE cluster, but a patch whose `updateMask` applies `virtualClusterConfig` or `config` is `InvalidArgument` — the release-note rule real GCP follows, and it is why the documented recipe drops `kubernetesNamespace` and re-creates. The mask decides, as it does for the persisted fields: an empty mask means "everything supplied applies", so an unmasked patch carrying either placement field is rejected, while a full resource sent under a `labels`-only mask is applied for labels and leaves the placement alone. The effective namespace defaults to the cluster name, and a second live virtual cluster claiming a namespace already owned on the same GKE cluster is `FailedPrecondition` ("`kubernetesNamespace … is already used by Dataproc virtual cluster …`"); dropping the namespace (so it defaults to the new cluster's name) is what makes delete-then-recreate work. `kubernetesSoftwareConfig` is optional, and a present one must carry a non-empty `componentVersion` whose only supported entry is `SPARK` (an absent software config is accepted; a present-but-empty one is `InvalidArgument`); `latest`, `<major>`, `<major.minor>` and the image-line alias `dataproc-<major.minor>` are dereferenced at create to a concrete `<major.minor>-dataproc-<n>` release (an unknown alias or release is `InvalidArgument`). Of the image-line aliases, real GCP accepts exactly `dataproc-2.2` (the Dataproc image line the GKE engine releases are built on, resolving to `3.5-dataproc-28` like `latest`); every other line (`dataproc-2.1`, `dataproc-2.3`, `dataproc-3.0`, …) is rejected there too, so it is `InvalidArgument` here rather than inferred — [real-GCP capture](docs/gcp/dataproc-gke-version-aliases.md). `stagingBucket` must be a bare bucket name.
 
-Jobs, however, get a real placement/isolation boundary in K8s executor mode: each cluster runs in its own Kubernetes namespace — the caller's `kubernetesClusterConfig.kubernetesNamespace` when supplied, else a deterministic derived name (`gcp-dataproc-<project>-<cluster>-<hash8>`) — provisioned on cluster create and removed on cluster delete or `/_jaiscloud/reset` **only when the emulator created it** (a pre-existing namespace is adopted and left in place; its jobs are still reaped on cluster delete, while reset reclaims only emulator-owned namespaces). When the emulator's ServiceAccount cannot manage cluster-scoped namespaces, or in mock execution mode, the cluster falls back to the process-wide `JAISCLOUD_K8S_NAMESPACE`. The effective namespace and its ownership are recorded on the cluster record (`namespace`/`namespaceOwned`). The required RBAC — the `jaiscloud-executor` ClusterRole and a per-namespace RoleBinding, plus the `jaiscloud-namespace-admin` ClusterRole for namespace create/delete — is in `deploy/k8s/rbac.yaml`.
+Jobs, however, get a real placement/isolation boundary in K8s executor mode: each cluster runs in its own Kubernetes namespace — the caller's `kubernetesClusterConfig.kubernetesNamespace` when supplied, else a deterministic derived name (`gcp-dataproc-<project>-<cluster>-<hash8>`) — provisioned on cluster create and removed on cluster delete or `/_jaiscloud/reset` **only when the emulator created it** (a pre-existing namespace is adopted and left in place; its jobs are still reaped on cluster delete, while reset reclaims only emulator-owned namespaces). When the emulator's ServiceAccount cannot manage cluster-scoped namespaces, or in mock execution mode, the cluster falls back to the process-wide `JAISCLOUD_K8S_NAMESPACE`. The effective namespace and its ownership are recorded on the cluster record (`namespace`/`namespaceOwned`). The required RBAC — the `jaiscloud-executor` ClusterRole and a per-namespace RoleBinding, plus the `jaiscloud-namespace-admin` ClusterRole for namespace create/delete — is in `deploy/k8s/rbac-shared.yaml` (`rbac-aws.yaml`/`rbac-gcp.yaml` bind it to each substrate's ServiceAccount). Because that ClusterRole is cluster-wide, the per-resource namespaces carry `jaiscloud.io/substrate` and `jaiscloud.io/instance-id` alongside their ownership labels and are filtered on them, and the `jaiscloud-namespace-isolation` ValidatingAdmissionPolicy (Kubernetes >= 1.30) refuses a namespace request from one substrate that does not carry its own identity (see [Kubernetes and the Istio front door](#kubernetes-and-the-istio-front-door)).
 
 The **docker executor** is the k8s-free path (`JAISCLOUD_SPARK_EXECUTOR_MODE=docker`, or `JAISCLOUD_EXECUTOR_MODE=docker`): each job runs as a one-shot container on the local Docker daemon, where the configured Spark image (`JAISCLOUD_K8S_SPARK_IMAGE`) executes `spark-submit --master local[*]` in client mode with the same GCS-connector env/`--conf`s the k8s driver pods receive. The emulator host is reachable from the container as `host.docker.internal` (a loopback `STORAGE_EMULATOR_HOST` is rewritten for the container), or, when the emulator itself is containerized (`JAISCLOUD_DOCKER_MODE=container`), by its name on `JAISCLOUD_DOCKER_NETWORK`, which the driver joins (CDE1). The driver's stdout/stderr is streamed from the container log into the job's `driverOutputResourceUri`, and cancel, cluster delete and `/_jaiscloud/reset` reap the container. Like the Cloud Run/Lambda/ECS executors it dials `/var/run/docker.sock` (ignoring `DOCKER_HOST`) and falls back to mock when no daemon is reachable. Docker and k8s are interchangeable implementations of one executor seam and change no wire surface — the executor choice never affects a fidelity tier (`docs/gcp/testability.md` §8). Verified by `make test-e2e-dataproc-docker` (`tests/persistent_mode/gcp/dataproc/`, local Docker).
 
@@ -844,7 +1085,8 @@ raw-media fallback. `locations/{location}/operations` is **not** claimed — it 
 the LRO path the emulator shares with Workflows.
 
 Scheduled as GKP9 in
-[`plan_docs/gcp-gke-dataproc-conformance-wave-plan.md`](plan_docs/gcp-gke-dataproc-conformance-wave-plan.md).
+the local `plan_docs/gcp-gke-dataproc-conformance-wave-plan.md` (gitignored
+planning scratch, not shipped with the repo).
 
 ### Dataproc WorkflowTemplates: only the latest version is retained
 
@@ -869,7 +1111,7 @@ A cluster may attach an existing Dataproc Metastore service through `config.meta
 
 ### Dataproc: Iceberg on the Hive Metastore catalog
 
-A Dataproc-submitted Spark job can use the emulator's Hive Metastore as an **Iceberg** catalog. The deployed `spark-gcs` image ships only the GCS connector, so the self-contained `iceberg-spark-runtime` jar is staged on the emulator's GCS and passed through the job's `jarFileUris` (→ `spark-submit --jars`, the documented Dataproc mechanism — no image change needed). The job's `properties` then point Iceberg's `SparkCatalog` at the Thrift metastore with the connector-backed `HadoopFileIO` data path (the emulator's protected `fs.gs.*` wiring is injected and cannot be stripped):
+A Dataproc-submitted Spark job can use the emulator's Hive Metastore as an **Iceberg** catalog. A connector-only Spark image (for example the repo's `spark-gcs` build) ships only the GCS connector, so the self-contained `iceberg-spark-runtime` jar is staged on the emulator's GCS and passed through the job's `jarFileUris` (→ `spark-submit --jars`, the documented Dataproc mechanism — no image change needed). The job's `properties` then point Iceberg's `SparkCatalog` at the Thrift metastore with the connector-backed `HadoopFileIO` data path (the emulator's protected `fs.gs.*` wiring is injected and cannot be stripped):
 
 ```
 "spark.sql.catalog.hms":              "org.apache.iceberg.spark.SparkCatalog",
@@ -879,7 +1121,7 @@ A Dataproc-submitted Spark job can use the emulator's Hive Metastore as an **Ice
 "spark.sql.catalog.hms.io-impl":      "org.apache.iceberg.hadoop.HadoopFileIO"
 ```
 
-`CREATE TABLE hms.<db>.<table> (...) USING iceberg LOCATION 'gs://…'` then commits metadata JSON and Parquet data files to GCS and registers the table in the Thrift catalog (`CREATE DATABASE IF NOT EXISTS hms.<db>` first — HiveCatalog does not auto-create the namespace). Point `spark.sql.catalog.hms.uri` (and `spark.hadoop.hive.metastore.uris`) at the attached Service's `endpointUri` host/port pair — its host replaced with a pod-reachable one — to use that Service's catalog; the base port `9083` addresses the legacy shared catalog instead. Verified end-to-end by `make test-e2e-iceberg-k3d` (`tests/persistent_mode/gcp/iceberg-k3d/`, tag `iceberg_k3d_e2e`): a GKE-`virtualClusterConfig` cluster attached to a Metastore service has a `pysparkJob` write the table, a second job reads back the row count and snapshot list, and the test asserts real `metadata/*.json` + `data/*.parquet` objects in GCS. The k3d deployment (`deploy/k8s/jaiscloud-gcp.yaml`) exposes the HMS Thrift base port `9083` plus the per-Service catalog port block `9084-9093` on the emulator Service and sets `JAISCLOUD_DATAPROC_HMS_ENDPOINT=jaiscloud-gcp.jaiscloud.svc.cluster.local:9083` so pods can reach a catalog (the port in that value is ignored; the Service's own port is used). A deployment with more than ten Services must widen that port block (and keep `--hms-port` at 9083 so the numbering matches).
+`CREATE TABLE hms.<db>.<table> (...) USING iceberg LOCATION 'gs://…'` then commits metadata JSON and Parquet data files to GCS and registers the table in the Thrift catalog (`CREATE DATABASE IF NOT EXISTS hms.<db>` first — HiveCatalog does not auto-create the namespace). Point `spark.sql.catalog.hms.uri` (and `spark.hadoop.hive.metastore.uris`) at the attached Service's `endpointUri` host/port pair — its host replaced with a pod-reachable one — to use that Service's catalog; the base port `9083` addresses the legacy shared catalog instead. Verified end-to-end by `make test-e2e-iceberg-k3d` (`tests/persistent_mode/gcp/iceberg-k3d/`, tag `iceberg_k3d_e2e`): a GKE-`virtualClusterConfig` cluster attached to a Metastore service has a `pysparkJob` write the table, a second job reads back the row count and snapshot list, and the test asserts real `metadata/*.json` + `data/*.parquet` objects in GCS. The k3d deployment (`deploy/k8s/jaiscloud-gcp.yaml`) exposes the HMS Thrift base port `9083` plus the per-Service catalog port block `9084-9093` on the emulator Service and sets `JAISCLOUD_DATAPROC_HMS_ENDPOINT=jaiscloud-gcp.jaiscloud-gcp.svc.cluster.local:9083` so pods can reach a catalog (the port in that value is ignored; the Service's own port is used). A deployment with more than ten Services must widen that port block (and keep `--hms-port` at 9083 so the numbering matches).
 
 ### Dataproc: Iceberg Structured Streaming sink
 

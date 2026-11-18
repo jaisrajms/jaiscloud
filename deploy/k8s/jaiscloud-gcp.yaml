@@ -1,32 +1,81 @@
 ---
+# The GCP substrate's workload objects: PVCs, DSN Secret, Deployment and Service.
+# This file declares NO Namespace and NO ServiceAccount — those are
+# namespace-gcp.yaml and rbac-gcp.yaml, so the objects have exactly one owner and
+# a rendered overlay can rename them cleanly. The full install is
+#   kubectl apply -f deploy/k8s/rbac-admission-policy.yaml \
+#                 -f deploy/k8s/namespace-data.yaml -f deploy/k8s/postgres.yaml \
+#                 -f deploy/k8s/namespace-gcp.yaml \
+#                 -f deploy/k8s/rbac-shared.yaml -f deploy/k8s/rbac-gcp.yaml \
+#                 -f deploy/k8s/jaiscloud-gcp.yaml
+# (deploy/deploy.sh --gcp does exactly this, including creating the
+# `jaiscloud_gcp` database first). For custom namespace/ServiceAccount names use
+# `deploy/deploy.sh --gcp`, which renders an overlay instead of editing this file.
+#
 # PersistentVolumeClaim — object bytes survive pod restarts. Metadata lives in
 # Postgres, so an ephemeral blob dir lets a rolled pod leave behind objects
 # whose metadata outlives their bytes (a media read then 404s). The k3d test's
 # preflight rolls this Deployment every run, so persistence is required.
+# The PVC root IS the S3 base dir (`/data/blobs`) and is owned by the GCP
+# substrate namespace, so this PVC survives an AWS reset.
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
   name: jaiscloud-gcp-blobs-pvc
-  namespace: jaiscloud
+  namespace: jaiscloud-gcp
 spec:
   accessModes: [ReadWriteOnce]
   resources:
     requests:
       storage: 5Gi
 ---
+# PersistentVolumeClaim — the emulator's state dir (`/data/state`: instance-ID
+# file, platform TLS cert/key). Deliberately NOT the blob PVC: the blob store
+# snapshots its base dir recursively, so a state file under `/data/blobs` would
+# be captured as an S3 object (a TLS private key as a bucket entry).
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: jaiscloud-gcp-state-pvc
+  namespace: jaiscloud-gcp
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: 64Mi
+---
+# Secret — the GCP substrate's DSN. Secrets cannot be referenced across
+# namespaces (`env.valueFrom.secretKeyRef`), so every substrate namespace owns
+# one; the postgres server itself runs in `jaiscloud-data`.
+#
+# The GCP instance uses its own database (schema `gcp`), so an
+# AWS reset that drops/recreates the `jaiscloud` database cannot touch it.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: jaiscloud-gcp-dsn
+  namespace: jaiscloud-gcp
+type: Opaque
+stringData:
+  dsn: "postgres://jaiscloud:jaiscloud@postgres.jaiscloud-data.svc.cluster.local:5432/jaiscloud_gcp"
+---
 # Deployment — the GCP emulator (REST :8080, gRPC :8081) with the Dataproc
 # Spark-on-Kubernetes executor wired to the in-cluster GCS endpoint.
 #
 # The image is the same multi-cloud binary as the AWS deployment, built with
-# CLOUD=gcp:  make docker-gcp  (or  REGISTRY=10.0.100.21:5050 make docker-gcp).
-# Spark drivers/executors are launched as pods in this namespace using
-# JAISCLOUD_K8S_SPARK_IMAGE, so the pod's ServiceAccount needs the
-# jaiscloud-executor Role from rbac.yaml.
+# CLOUD=gcp. The default below is the published multi-arch image, so the
+# manifests work on your cluster without a private registry. To run your own
+# build: `make docker-gcp`, push/import it, then
+#   kubectl -n jaiscloud-gcp set image deploy/jaiscloud-gcp jaiscloud-gcp=<image>
+# (or `JAISCLOUD_GCP_IMAGE=<image> deploy/deploy.sh --gcp`).
+# Spark drivers/executors are launched as pods in the GCP substrate namespace
+# using JAISCLOUD_K8S_SPARK_IMAGE, so the pod's ServiceAccount needs the
+# jaiscloud-executor ClusterRole binding from rbac-shared.yaml + rbac-gcp.yaml.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: jaiscloud-gcp
-  namespace: jaiscloud
+  namespace: jaiscloud-gcp
   labels:
     app: jaiscloud-gcp
 spec:
@@ -43,20 +92,18 @@ spec:
       labels:
         app: jaiscloud-gcp
     spec:
-      serviceAccountName: jaiscloud
+      serviceAccountName: jaiscloud-gcp
       terminationGracePeriodSeconds: 30
       containers:
         - name: jaiscloud-gcp
-          image: 10.0.100.21:5050/jaiscloud-gcp:compat
-          imagePullPolicy: Always
+          image: jaisraj/jaiscloud-gcp:latest
+          imagePullPolicy: IfNotPresent
           args:
             - start
             - --port
             - "8080"
             - --grpc-port
             - "8081"
-            - --dsn
-            - postgres://jaiscloud:jaiscloud@postgres.jaiscloud.svc.cluster.local:5432/jaiscloud
             - --blob-dir
             - /data/blobs
           ports:
@@ -95,43 +142,90 @@ spec:
             - name: hms-catalog-9
               containerPort: 9093
           volumeMounts:
+            # The blob PVC root is the S3 base dir (unchanged layout); state
+            # lives on its own small claim so snapshotting the blob store cannot
+            # capture the instance-ID file or the platform TLS key.
             - name: blobs
               mountPath: /data/blobs
+            - name: state
+              mountPath: /data/state
           env:
+            # The DSN is a Secret (secrets cannot cross namespaces): the GCP
+            # database is the GCP one, so an AWS reset of `jaiscloud`
+            # leaves this substrate's state intact.
+            - name: JAISCLOUD_DSN
+              valueFrom:
+                secretKeyRef:
+                  name: jaiscloud-gcp-dsn
+                  key: dsn
+            # Workloads this emulator creates (Spark drivers/executors, Kafka
+            # brokers, Cloud Run revisions) land in its own namespace, never in
+            # the AWS one — the Dataproc startup sweep only ever sees its own
+            # substrate.
+            - name: JAISCLOUD_K8S_NAMESPACE
+              value: jaiscloud-gcp
+            # The emulator's own ServiceAccount, which the per-cluster Dataproc
+            # and Managed Kafka namespaces must bind in their executor
+            # RoleBinding. The name cannot be read from the projected token dir
+            # (only the namespace can), so it is pinned here; the namespace is
+            # pinned too so the binding is correct even if the token file is
+            # ever disabled. k8shelpers.ResolveOwnServiceAccount reads both.
+            - name: JAISCLOUD_K8S_SA
+              value: jaiscloud-gcp
+            - name: JAISCLOUD_K8S_SA_NAMESPACE
+              value: jaiscloud-gcp
+            # Pinned identity and its state directory: the instance-ID file and
+            # the platform TLS cert live on a small state PVC (outside the blob
+            # base dir), so the identity is stable across pod rolls instead of a
+            # fresh random UUID.
+            - name: JAISCLOUD_INSTANCE_ID
+              value: gcp-substrate-1
+            - name: JAISCLOUD_STATE_DIR
+              value: /data/state
             # Dataproc submits Spark jobs as client-mode pods in this namespace.
             - name: JAISCLOUD_SPARK_EXECUTOR_MODE
               value: k8s
+            # Dataproc drivers/executors run this image. The default is the
+            # public apache/spark image: pullable anywhere, but it does NOT carry
+            # the GCS connector, so a Dataproc job that reads/writes gs:// fails
+            # at runtime (No FileSystem for scheme "gs"). Build a connector
+            # image from tests/persistent_mode/gcp/iceberg/spark-iceberg +
+            # download-jars.sh (or point at your own) and set it here. A private
+            # registry value also has to be reachable from every cluster node,
+            # or the driver Pods ImagePullBackOff.
             - name: JAISCLOUD_K8S_SPARK_IMAGE
-              value: 10.0.100.21:5050/spark-gcs:3.5.0
+              value: apache/spark:3.5.0
             - name: JAISCLOUD_K8S_SPARK_SUBMIT_PATH
               value: /opt/spark/bin/spark-submit
             # Spark reads/writes GCS through the emulator's own in-cluster Service.
             - name: JAISCLOUD_GCS_EMULATOR_ENDPOINT
-              value: http://jaiscloud-gcp.jaiscloud.svc.cluster.local:8080
+              value: http://jaiscloud-gcp.jaiscloud-gcp.svc.cluster.local:8080
             # The per-service Metastore endpoint is synthesized (not resolvable
             # from pods), so a Dataproc job attached to a Metastore service is
             # injected this pod-reachable thrift address as
             # spark.hadoop.hive.metastore.uris. Iceberg's HiveCatalog is also
             # pointed here by the job's properties.
             - name: JAISCLOUD_DATAPROC_HMS_ENDPOINT
-              value: jaiscloud-gcp.jaiscloud.svc.cluster.local:9083
+              value: jaiscloud-gcp.jaiscloud-gcp.svc.cluster.local:9083
             - name: JAISCLOUD_PLATFORM_TLS_ENABLED
               value: "false"
             # Managed Kafka broker topology: k8s starts a single-node Redpanda
-            # (rpk) Pod + Service per cluster (namespace jaiscloud) and renders
-            # its in-cluster endpoint as bootstrapAddress. The jaiscloud
-            # ServiceAccount already has pod/service create+delete from
-            # rbac.yaml, and the emulator's in-cluster config supplies the
-            # client. Set to mock to disable (no broker; synthesized cloud.goog
-            # address).
+            # (rpk) Pod + Service per cluster (namespace jaiscloud-gcp) and
+            # renders its in-cluster endpoint as bootstrapAddress. The
+            # jaiscloud-gcp ServiceAccount already has pod/service
+            # create+delete from rbac-shared.yaml + rbac-gcp.yaml, and the
+            # emulator's in-cluster
+            # config supplies the client. Set to mock to disable (no broker;
+            # synthesized cloud.goog address).
             - name: JAISCLOUD_KAFKA_BROKER_MODE
               value: k8s
             # Cloud Run k8s execution: each revision's template image runs as a
-            # Pod + ClusterIP Service (namespace jaiscloud) and data-plane
+            # Pod + ClusterIP Service (namespace jaiscloud-gcp) and data-plane
             # requests addressed to the synthesized *.run.app authority are
-            # reverse-proxied to it. The jaiscloud ServiceAccount already has
-            # pod/service create+delete from rbac.yaml. The URI suffix/port are
-            # left at the real-GCP default; the optional floci interop smoke
+            # reverse-proxied to it. The jaiscloud-gcp ServiceAccount already
+            # has pod/service create+delete from rbac-shared.yaml +
+            # rbac-gcp.yaml. The URI suffix/port
+            # are left at the real-GCP default; the optional floci interop smoke
             # run overrides them per-target (see the Makefile).
             - name: JAISCLOUD_CLOUDRUN_EXECUTOR_MODE
               value: k8s
@@ -153,17 +247,20 @@ spec:
         - name: blobs
           persistentVolumeClaim:
             claimName: jaiscloud-gcp-blobs-pvc
+        - name: state
+          persistentVolumeClaim:
+            claimName: jaiscloud-gcp-state-pvc
 ---
 # Service — REST + gRPC entry point. Spark drivers/executors and the Lakehouse
 # pipeline Job address the emulator through this DNS name:
-#   http://jaiscloud-gcp.jaiscloud.svc.cluster.local:8080
+#   http://jaiscloud-gcp.jaiscloud-gcp.svc.cluster.local:8080
 # From the host:
-#   kubectl port-forward -n jaiscloud svc/jaiscloud-gcp 8080:8080
+#   kubectl port-forward -n jaiscloud-gcp svc/jaiscloud-gcp 8080:8080
 apiVersion: v1
 kind: Service
 metadata:
   name: jaiscloud-gcp
-  namespace: jaiscloud
+  namespace: jaiscloud-gcp
   labels:
     app: jaiscloud-gcp
 spec:

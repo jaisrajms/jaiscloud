@@ -10,7 +10,7 @@ apiVersion: v1
 kind: ConfigMap
 metadata:
   name: lakehouse-pipeline-script
-  namespace: jaiscloud
+  namespace: jaiscloud-gcp
   labels:
     app: jaiscloud-lakehouse-pipeline
 data:
@@ -41,7 +41,7 @@ data:
     import urllib.request
 
     BASE = os.environ.get(
-        "EMULATOR_URL", "http://jaiscloud-gcp.jaiscloud.svc.cluster.local:8080"
+        "EMULATOR_URL", "http://jaiscloud-gcp.jaiscloud-gcp.svc.cluster.local:8080"
     ).rstrip("/")
     PROJECT = os.environ.get("PROJECT", "jaiscloud-project")
     REGION = os.environ.get("REGION", "us-central1")
@@ -489,7 +489,7 @@ apiVersion: batch/v1
 kind: Job
 metadata:
   name: lakehouse-pipeline
-  namespace: jaiscloud
+  namespace: jaiscloud-gcp
   labels:
     app: jaiscloud-lakehouse-pipeline
 spec:
@@ -507,7 +507,7 @@ spec:
           command: ["python", "/scripts/pipeline.py"]
           env:
             - name: EMULATOR_URL
-              value: http://jaiscloud-gcp.jaiscloud.svc.cluster.local:8080
+              value: http://jaiscloud-gcp.jaiscloud-gcp.svc.cluster.local:8080
             - name: PROJECT
               value: jaiscloud-project
             - name: REGION

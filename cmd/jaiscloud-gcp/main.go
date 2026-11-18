@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"jaiscloud"
 	"jaiscloud/internal/admin"
 	"jaiscloud/internal/blobfs"
 	"jaiscloud/internal/certstore"
@@ -206,10 +207,20 @@ var (
 const defaultHost = "http://localhost:8080"
 
 func main() {
+	var helpAgent bool
 	root := &cobra.Command{
 		Use:   "jaiscloud-gcp",
 		Short: "JaisCloud GCP - local GCP emulator",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if helpAgent {
+				fmt.Print(jaiscloud.AgentGuideText("gcp", version, commit, date))
+				return nil
+			}
+			return cmd.Help()
+		},
 	}
+	root.Flags().BoolVar(&helpAgent, "help-agent", false, "print integration instructions for an LLM agent and exit")
+	root.AddCommand(jaiscloud.AgentGuideCommand("gcp", version, commit, date))
 	root.AddCommand(startCmd())
 	root.AddCommand(versionCmd())
 	root.AddCommand(envCmd())
@@ -302,6 +313,11 @@ func startCmd() *cobra.Command {
 
 			stateDir, _ := config.ResolveStateDir(os.Getenv("JAISCLOUD_STATE_DIR"))
 			instanceID, _ := config.LoadOrCreateInstanceID(stateDir)
+			// Stamp every namespace this substrate creates with its identity, so
+			// the sweep/delete paths (and the dual-substrate admission policy)
+			// can prove ownership and never touch the other substrate's
+			// namespaces on a shared cluster.
+			k8shelpers.SetIdentity("gcp", instanceID)
 
 			stores, err := initStores(ctx, cfg, instanceID)
 			if err != nil {
@@ -1375,6 +1391,20 @@ func startCmd() *cobra.Command {
 			adminHandler.RegisterResetter(stores.resources)
 			adminHandler.RegisterResetter(containerCore)
 			adminHandler.RegisterResetter(runCore)
+			// Lifecycle hooks (POST /_jaiscloud/park|resume): the emulator
+			// quiesces its own compute before deploy.sh scales it down, and
+			// recreates it on resume. Only compute is touched — records,
+			// PVCs and namespaces stay, so no store migration can run.
+			if dataprocCore != nil {
+				adminHandler.RegisterParker(dataprocCore)
+				adminHandler.RegisterResumer(dataprocCore)
+			}
+			adminHandler.RegisterParker(managedKafkaCore)
+			adminHandler.RegisterResumer(managedKafkaCore)
+			if runCore != nil {
+				adminHandler.RegisterParker(runCore)
+				adminHandler.RegisterResumer(runCore)
+			}
 			adminHandler.RegisterResetter(stores.blobs)
 			adminHandler.RegisterResetter(storageP)
 			adminHandler.RegisterResetter(storageGRPC)
@@ -1460,6 +1490,8 @@ func startCmd() *cobra.Command {
 				Cloud:     "gcp",
 				Region:    cfg.Region,
 				AccountID: cfg.ProjectID,
+				ProjectID: cfg.ProjectID,
+				Version:   version,
 				StateDir:  stateDir,
 			})
 			if cfg.KMSMasterKey != "" {

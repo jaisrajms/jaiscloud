@@ -64,10 +64,23 @@ COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
 # The binary is the only thing in the image
 COPY --from=builder /jaiscloud /jaiscloud
 
+# OCI metadata. The custom label is the discovery channel for an agent that only
+# has the image: `docker inspect -f '{{index .Config.Labels "dev.jaiscloud.agent-guide"}}'`.
+ARG VERSION=dev
+ARG CLOUD=aws
+LABEL org.opencontainers.image.title="jaiscloud-${CLOUD}"
+LABEL org.opencontainers.image.description="JaisCloud emulator for ${CLOUD} — local, real wire protocols"
+LABEL org.opencontainers.image.version="${VERSION}"
+LABEL org.opencontainers.image.documentation="https://github.com/jaisrajms/jaiscloud/blob/main/docs/gcp/integration/AGENTS.md"
+LABEL dev.jaiscloud.agent-guide="jaiscloud-${CLOUD} agent-guide (--json | --emit DIR)"
+
 # Listen port of the cloud in this image: 4566 (aws/azure) or 8080 (gcp).
 # Callers pass PORT explicitly (make docker-%, docker-publish.yml).
 ARG PORT=4566
 EXPOSE ${PORT}
+# gRPC (h2c) for the GCP binary. Declared so service-container runners that only
+# expose EXPOSE'd ports (e.g. GitLab services) can reach it; unused by AWS.
+EXPOSE 8081
 
 # Prometheus metrics port (same port, /metrics path — no second port needed)
 

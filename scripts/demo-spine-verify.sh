@@ -47,7 +47,7 @@
 # needs `/_jaiscloud/reset` between cases and does not need a cluster.
 #
 # Env:
-#   K8S_NAMESPACE            (default: jaiscloud)
+#   K8S_NAMESPACE            (default: jaiscloud-gcp)
 #   CLOUDRUN_BROWSER_SUFFIX  (default: run.localhost)
 #   CLOUDRUN_BROWSER_PORT    (default: 18080)
 #   SPINE_HEALTH_PORT        (default: 18099)  local port for the health forward
@@ -66,7 +66,7 @@ if ! command -v go >/dev/null 2>&1 && [ -x /tmp/opencode/go/bin/go ]; then
   export PATH=/tmp/opencode/go/bin:$PATH
 fi
 
-NS="${K8S_NAMESPACE:-jaiscloud}"
+NS="${K8S_NAMESPACE:-jaiscloud-gcp}"
 SUFFIX="${CLOUDRUN_BROWSER_SUFFIX:-run.localhost}"
 BROWSER_PORT="${CLOUDRUN_BROWSER_PORT:-18080}"
 # Health-check forward only. It must NOT use BROWSER_PORT: the browser gate binds

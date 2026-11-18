@@ -144,6 +144,34 @@ func decodeExportEnvelope(t *testing.T, body []byte) version.Envelope {
 
 // --- Handler.Export ---
 
+// TestDoctorReportsAgentGuide pins the discovery field: an agent that can only
+// reach the HTTP API learns how to get the integration guide from doctor.
+func TestDoctorReportsAgentGuide(t *testing.T) {
+	for _, cloud := range []string{"aws", "gcp"} {
+		h := NewHandler()
+		h.SetMeta(HandlerMeta{Cloud: cloud, Version: "v9.9.9"})
+		rec := httptest.NewRecorder()
+		h.Doctor(rec, httptest.NewRequest(http.MethodGet, "/_jaiscloud/doctor", nil))
+
+		var got map[string]any
+		if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+			t.Fatalf("%s: doctor is not JSON: %v", cloud, err)
+		}
+		want := "jaiscloud-" + cloud + " agent-guide"
+		if got["agent_guide"] != want {
+			t.Fatalf("%s: agent_guide = %v, want %q", cloud, got["agent_guide"], want)
+		}
+		if got["cloud"] != cloud {
+			t.Fatalf("%s: cloud = %v", cloud, got["cloud"])
+		}
+		// The running binary version lets a client tell a parked substrate that
+		// resumes after an upgrade which build it is actually talking to.
+		if got["version"] != "v9.9.9" {
+			t.Fatalf("%s: version = %v, want %q", cloud, got["version"], "v9.9.9")
+		}
+	}
+}
+
 func TestHandler_Export_IncludesAllRegisteredStores(t *testing.T) {
 	h := NewHandler()
 	for _, name := range []string{"resources", "keys", "secrets", "parameters"} {

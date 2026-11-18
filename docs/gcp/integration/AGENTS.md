@@ -1,0 +1,490 @@
+# Agent runbook: integrating JaisCloud into a Kubernetes cluster
+
+This file is written for an **LLM agent or automation** driving an integration.
+It is short on prose and long on decisions, exact commands, and checks.
+
+**No source tree?** The binary carries this pack. `jaiscloud-gcp agent-guide`
+prints a short brief, `--json` prints the full contract, and `--emit DIR` writes
+the deployment kit (manifests, `deploy/deploy.sh`, the preflight script, the
+Istio and CI assets, and these docs) so the commands below work from that
+directory. Inside a cluster:
+`kubectl -n jaiscloud-gcp exec deploy/jaiscloud-gcp -- /jaiscloud agent-guide`.
+The kit carries these integration docs and the top-level guides; links inside the
+guides to the repository's deeper references (wire contract, fidelity matrix)
+point at the source repository.
+
+## Finding this guide
+
+- **Repo checkout**: this file, [`../../gcp/README.md`](../README.md),
+  [`llms.txt`](../../../llms.txt), or the root `AGENTS.md` pointer.
+- **Binary or image**: `jaiscloud-<cloud> --help` lists `agent-guide`;
+  `jaiscloud-<cloud> --help-agent` prints the brief; the image carries
+  `docker inspect -f '{{index .Config.Labels "dev.jaiscloud.agent-guide"}}'`.
+- **Running emulator**: `GET /_jaiscloud/doctor` returns `agent_guide`, and
+  startup logs a one-line hint.
+
+Read, in this order:
+
+1. [`contract.yaml`](contract.yaml) — generated facts: namespaces, objects,
+   images, env, ports, PVCs, RBAC subjects, plus a `playbook` section with
+   scenarios, failure taxonomy, destructive operations and tooling.
+2. [`topology.md`](topology.md) — the invariants the layout must keep.
+3. This runbook — how to sequence the work.
+
+Do not infer facts from prose when the contract has them. If the contract and a
+manifest disagree, the manifest wins — regenerate with
+`make gen-integration-contract` and report the drift.
+
+## Hard rules
+
+- **Inspect before you act**: `deploy/deploy.sh --check --json` is read-only and
+  returns the cluster state, the install intent and `recommended[]`. Start there
+  on every run. Pass `--substrate aws|gcp|both` (and optionally
+  `--desired aws=running,gcp=parked`) when you know the intended shape: the
+  advice then covers only installed clouds, and anything else is a leak.
+- **The install record is intent, not a manifest**: `jaiscloud-data/jaiscloud-install`
+  (`schema`, `installed`, `desired`) is written by `deploy.sh` and survives
+  substrate resets. Read it through the preflight; do not hand-edit it and do
+  not add it to a manifest.
+- **Use the tools, not ad-hoc YAML**: apply the repository manifests via
+  `deploy/deploy.sh`/`make`. Hand-editing a live Deployment creates drift that
+  neither the contract check nor the preflight will see.
+- **Ask before anything in `contract.playbook.destructive`.** The emulator's
+  `--reset` drops a database; the isolation gate needs `ALLOW_RESET=1`; the
+  migration rewrites the store.
+- **Never rewrite `:authority`/`Host`** in the mesh. Never apply
+  `deploy/k8s/istio/*.yaml` (the glob includes object-less `dns.yaml`).
+- **Do not delete `jaiscloud-data`** or its PVC. It is both substrates' store.
+- **Do not remove or weaken `jaiscloud-namespace-isolation`.** Both substrate
+  ServiceAccounts hold cluster-wide namespace delete; that ValidatingAdmissionPolicy
+  (K8s >= 1.30) is the only thing keeping one substrate out of the other's
+  per-cluster namespaces. If it is missing, apply
+  `deploy/k8s/rbac-admission-policy.yaml` instead of proceeding.
+- **Keep the standalone path true**: no step may make the mesh, RBAC or Postgres
+  required to start the emulator.
+
+## Inputs to collect first
+
+| Input | How |
+|---|---|
+| kubectl context / cluster kind | `kubectl config current-context`; `kubectl cluster-info` |
+| does the cluster already run JaisCloud? | `deploy/deploy.sh --check --json` |
+| what is installed, and what is wanted? | preflight `intent.source` / `intent.installed` / `intent.desired`, or `kubectl -n jaiscloud-data get configmap jaiscloud-install -o yaml` |
+| legacy pre-split layout? | preflight `legacy.pending` (marked, migrate) vs `legacy.candidate` (unmarked same-named workload — confirm with `LEGACY_CONFIRM=1` or ignore) |
+| is the store already at the new layout? | preflight `store.present` / `store.workload` / `store.databases` (tri-state: `null` = unknown, not missing; see `store.databasesProbe` and `store.probeReason`) |
+| is the mesh installed? | preflight `mesh.installed` |
+| is the cluster new enough to enforce the namespace boundary? | preflight `rbac.serverVersion` (needs >= 1.30) |
+| is namespace isolation enforced? | preflight `rbac.admissionPolicy` (the ValidatingAdmissionPolicy), `rbac.policyMatchesSA` (does it name the running ServiceAccount?) and `rbac.namespaceAdmin` (the intended substrate's effective namespace delete) |
+| what may the running identities actually do? | preflight `rbac.effective.<cloud>` (`kubectl auth can-i --as`; `yes`/`no`/`unknown`) |
+| do cloud hostnames still resolve to a backend? | preflight `dns.rewrites` / `dns.suffixes` / `dns.target(s)` / `dns.stale` (a rewrite is judged by the target it names: the mesh gateway or a Service's ready endpoints; unknown is not stale) |
+| is the front door's CA still valid? | preflight `ca.aws` / `ca.gcp` / `ca.issuerPresent` / `ca.issuers.<cloud>` (only a `mesh`-labelled copy without `istio-system/jaiscloud-wildcard` is stale; an unlabelled copy is host-issued) |
+| image strategy | published image (default) or your own (`custom-images`) |
+| executors needed? | only if tests submit Dataproc/Kafka/Cloud Run/function work |
+
+The preflight is read-only but it does read more than Deployments: the bundled
+store's Deployment *or* StatefulSet, Services and their Endpoints (to resolve a
+CoreDNS rewrite target), the install record, the isolation
+ValidatingAdmissionPolicy, `kube-system/coredns` (Corefile),
+`jaiscloud-ca-cert` in each substrate namespace, the Istio TLS secret, and the
+ConfigMaps/Secrets a Deployment's `envFrom`/`valueFrom` points at (to resolve
+`JAISCLOUD_K8S_SPARK_IMAGE`, `JAISCLOUD_KAFKA_BROKER_MODE`). It also
+*impersonates* each substrate ServiceAccount with `kubectl auth can-i --as` for
+the effective-RBAC view, so the kubeconfig needs `impersonate` on
+`serviceaccounts`; without it that view is `unknown` (with a warning) and nothing
+is claimed about the grant.
+
+**Executor modes resolve per engine, then globally, then by default**:
+`JAISCLOUD_<SUBSYSTEM>_EXECUTOR_MODE` (`SPARK`, `FUNCTIONS`, `CLOUDRUN`, `LAMBDA`,
+`ECS`; `JAISCLOUD_KAFKA_BROKER_MODE` for Managed Kafka) wins over the global
+`JAISCLOUD_EXECUTOR_MODE`, and an unset per-engine variable falls back to the
+global, then to the engine default (`mock`) — so a global `docker`/`k8s` covers
+every engine, and one engine opts out by naming its own variable.
+`contract.playbook.executor_modes` carries the list.
+
+## Decision tree
+
+```
+deploy/deploy.sh --check --json
+├─ legacy.pending .................................. upgrade-legacy (migration; ask first)
+├─ legacy.candidate only ........................... read the warning: an unmarked
+│                                                    same-named workload; confirm
+│                                                    or ignore, never migrate blindly
+├─ no namespaces / no store ........................ new install
+│   ├─ only GCP tests? ............................. new-install-gcp
+│   └─ both substrates? ............................ new-install-both
+├─ store ready, substrate missing .................. deploy that substrate
+├─ store.databases null ............................ unknown, not missing: an
+│                                                    external store, a workload
+│                                                    that is absent/not ready, or
+│                                                    a psql failure (see
+│                                                    store.probeReason); verify
+│                                                    by hand, do not "create the
+│                                                    database"
+├─ rbac.admissionPolicy=false (a substrate exists) . install-rbac-policy (K8s >= 1.30; non-optional)
+├─ rbac.policyMatchesSA=false (a substrate runs) ... edit the VAP matchConditions: it names
+│                                                    another identity, so nothing is enforced
+├─ rbac.effective.<cloud>.deleteNamespaces=no ..... apply rbac-shared.yaml + rbac-<cloud>.yaml
+│                                                    (else Dataproc/Kafka stay on mock)
+├─ dns.stale=true ................................. a CoreDNS rewrite's target is
+│                                                    dead (no ready gateway, or a
+│                                                    Service with no ready
+│                                                    endpoints): drop that suffix
+│                                                    while parked, re-add it on
+│                                                    resume
+├─ substrates ready, need external real hostnames .. mesh
+├─ need compute off but data kept ................. park / switch (then resume)
+├─ Dataproc/Kafka/Cloud Run jobs fail .............. executors (rbac + spark image)
+└─ nothing to do ................................... verify + stop
+```
+
+A missing policy is a non-optional recommendation: `deploy/deploy.sh` (any
+install/reset path) applies `deploy/k8s/rbac-admission-policy.yaml` for you, and
+refuses to run on Kubernetes < 1.30. If the server is older, the warning says so
+and the cluster cannot enforce the policy — upgrade the cluster (or run each
+substrate on its own) rather than removing the check.
+
+## Scenario 1 — new install (GCP only)
+
+```bash
+deploy/deploy.sh --check --json           # expect no store/substrate yet
+deploy/deploy.sh --gcp --plan             # review the commands (no mutation)
+JAISCLOUD_GCP_IMAGE=<image> deploy/deploy.sh --gcp --yes
+deploy/deploy.sh --check --json           # expect store.ready=true, substrates.gcp.ready=true
+```
+
+Omit `JAISCLOUD_GCP_IMAGE` to use the published image. The command creates only
+the objects the GCP substrate needs — the store (`namespace-data.yaml` +
+`postgres.yaml`), the `jaiscloud-gcp` namespace, its RBAC (`rbac-shared.yaml` +
+`rbac-gcp.yaml`), `jaiscloud_gcp` and the substrate — and never the AWS
+namespace, ServiceAccount or bindings. It also applies the namespace-isolation
+policy first, then waits for the rollout. On failure it prints the pod and its
+events.
+
+Reach it with `kubectl -n jaiscloud-gcp port-forward svc/jaiscloud-gcp 8080:8080`
+(REST) and `8081:8081` (gRPC h2c). In-cluster clients use
+`jaiscloud-gcp.jaiscloud-gcp.svc.cluster.local:8080/8081` directly.
+
+## Scenario 2 — new install (both substrates)
+
+```bash
+deploy/deploy.sh --yes
+deploy/deploy.sh --gcp --yes
+deploy/deploy.sh --check --json
+```
+
+The AWS substrate is `jaiscloud:4566` (LoadBalancer on Docker Desktop; on
+kind/k3d use the port-forward the summary prints). The GCP substrate is a
+ClusterIP: port-forward it. The two never share a database. Each install creates
+only its own namespace and RBAC (`namespace-aws.yaml` + `rbac-aws.yaml`, or
+`namespace-gcp.yaml` + `rbac-gcp.yaml`); the store and the namespace-isolation
+policy are shared.
+
+## Scenario 3 — the mesh (optional)
+
+Install order matters: substrates first, then Istio, then the dev CA, then the
+routes, then the smoke. See the `mesh` scenario in `contract.playbook` and
+[`deploy/k8s/istio/README.md`](../../../deploy/k8s/istio/README.md). Verify with
+`SMOKE_PORT_FORWARD=1 scripts/istio-smoke.sh` (4 assertions; the first is the
+authority-preservation canary).
+
+On a cluster that **already has istiod**, do not run
+`istioctl install --set profile=minimal` (it can replace that cluster's
+IOP/meshConfig and prune components). Add only the gateway with the overlay:
+`istioctl install -f deploy/k8s/istio/istiooperator-gateway-only.yaml` (or
+`istioctl manifest generate -f … | kubectl apply -f -`). `deploy.sh --check`
+warns when istiod pre-exists (`mesh.existingInstall`) and names the overlay.
+
+The mesh covers `*.amazonaws.com`, `*.googleapis.com`, `*.run.app`,
+`*.cloudfunctions.net` over HTTP(S) only. It is not a Kafka path and not an
+in-substrate path: a sidecar-injected client reaches the substrates directly over
+Service DNS with plaintext (`jaiscloud:4566`, `jaiscloud-gcp:8080` REST,
+`jaiscloud-gcp:8081` gRPC h2c) and needs no `PeerAuthentication`,
+`DestinationRule` or `ServiceEntry` — see
+[`deploy/k8s/istio/README.md`](../../../deploy/k8s/istio/README.md) ("Addressing
+the substrates" and "Clients with a sidecar").
+
+## Scenario 4 — upgrading a pre-split install
+
+Detection is in the preflight (`legacy.*`; it probes `deployment/postgres` and
+`statefulset/postgres` plus `deployment/jaiscloud-gcp` in the AWS namespace,
+`legacy.pending` is the actionable flag, `legacy.*Retained` marks a rollback copy,
+and `legacy.candidate` marks an *unmarked* same-named workload — a warning, never
+a migration recommendation). The migration is destructive towards the *old*
+store in the sense that the new store becomes authoritative, but the old workload
+and volumes are kept by default as rollback copies.
+**Confirm with the operator, then:**
+
+```bash
+SKIP_IMAGE_BUILD=1 deploy/deploy.sh --migrate-store --yes
+# verify: a known row survives in both databases; an existing GCS object reads
+# back through the new pod; deploy/deploy.sh --check --json shows no pending
+# legacy workloads (legacy.pending=false)
+kubectl -n jaiscloud delete deployment postgres service postgres postgres-external
+kubectl -n jaiscloud delete pvc postgres-pvc jaiscloud-gcp-blobs-pvc   # after verification
+```
+
+What it does and what it keeps is in `contract.playbook.scenarios.upgrade-legacy`
+and `destructive`. The source is `deployment/postgres` or `statefulset/postgres`
+(override with `LEGACY_POSTGRES_WORKLOAD=deployment|statefulset/<name>`), in
+`LEGACY_NAMESPACE` (default `jaiscloud`; any other namespace requires
+`LEGACY_CONFIRM=1`). If the old store is outside the cluster,
+`LEGACY_DSN=postgres://…` dumps it from the **new** store pod after that pod is
+up — no legacy store workload is scaled or deleted in that mode (the emulators
+still stop before the dump). `LEGACY_DSN` is an explicit source, so it needs no
+marker.
+
+**The tooling never touches a workload it cannot identify as JaisCloud's.** The
+store's objects carry `jaiscloud.io/managed-by=jaiscloud` (Deployment, PVC,
+Services, Secret); the migration accepts that marker, the conventional
+`app.kubernetes.io/managed-by=jaiscloud`, or `jaiscloud.io/substrate` on the
+legacy GCP workload — and *never* `app=postgres` alone, which any operator-run
+Postgres has. A pre-split build predates the marker, so the first migration needs
+`LEGACY_CONFIRM=1` (or `--legacy-confirm`); without it the command refuses the
+source before dumping anything. An unmarked workload of the same name is a
+`legacy.candidate`: read the preflight warning, and either confirm it with
+`LEGACY_CONFIRM=1` or ignore it.
+
+Deletion is opt-in: by default only the legacy Postgres is scaled to 0, and its
+Deployment/StatefulSet, Services and PVCs stay. `--delete-legacy` (or
+`DELETE_LEGACY=1`) removes the workload and the `postgres`/`postgres-external`
+Services only when the object carries the JaisCloud marker; a bare
+`app=postgres` object additionally needs `LEGACY_DELETE_FORCE=1`. No PVC is ever
+deleted by the migration.
+
+Object bytes move with `migrate_blobs`: the GCP claim when the legacy GCP
+emulator exists, and the AWS claim when `LEGACY_NAMESPACE` differs from the AWS
+namespace (a PVC cannot move namespaces). Override the claims with
+`LEGACY_GCP_BLOBS_PVC` / `NEW_GCP_BLOBS_PVC` / `LEGACY_AWS_BLOBS_PVC` /
+`NEW_AWS_BLOBS_PVC`. The blob copy needs a pullable `busybox`; preload it, or set
+`SKIP_BLOB_MIGRATE=1` and copy the claim yourself.
+
+If the new store already exists the command refuses — do **not** delete the new
+PVC unless you have confirmed it is disposable (`MIGRATE_FORCE=1` overrides, and
+the restore then overwrites the schema in that volume).
+
+## Scenario 5 — bring your own store
+
+`deploy.sh` normally installs a bundled PostgreSQL (`postgres.yaml`) in
+`jaiscloud-data`. To use a server you already run, point the install at it:
+
+```bash
+deploy/deploy.sh --yes --store-dsn 'postgres://user:pass@db.example.com:5432/postgres'
+deploy/deploy.sh --gcp --yes --store-dsn 'postgres://user:pass@db.example.com:5432/postgres'
+# or environment: JAISCLOUD_STORE_DSN=… (JAISCLOUD_AWS_DSN / JAISCLOUD_GCP_DSN
+# override it per substrate and are what the substrate Secrets receive)
+```
+
+In this mode `postgres.yaml` is not applied. The databases (`jaiscloud`,
+`jaiscloud_gcp`) are created through a short-lived `psql` pod in
+`jaiscloud-data` (`STORE_INIT_IMAGE`, default `postgres:16-alpine`), and the
+substrate DSN Secrets (`jaiscloud-dsn`, `jaiscloud-gcp-dsn`) are overwritten with
+the external DSN, followed by a rollout restart. The base DSN's **database
+component is replaced** with `jaiscloud` / `jaiscloud_gcp` for those Secrets (one
+database per cloud); `JAISCLOUD_AWS_DSN` / `JAISCLOUD_GCP_DSN` are used verbatim
+when you need an exact per-substrate DSN. `namespace-data.yaml` is still
+applied: it holds the install record. The install record carries
+`store=bundled|external`, and the preflight reports `store.mode`.
+
+Limits: the preflight cannot probe an external server (a read-only probe never
+creates a pod), so `store.ready=false` and `store.databases.*` are `null`
+(`store.databasesProbe=unavailable`, `store.probeReason=external`) = "not
+probeable", not "missing". `--migrate-store` into an external target is **not
+supported yet** (it refuses before doing anything); dump/restore that server
+yourself.
+
+## Scenario 6 — park / resume / switch (keep the data, stop the compute)
+
+Park is the deliberate, compute-destructive, data-retentive mode: it terminates
+the substrate and every executor workload but keeps the database, the blobs and
+state PVCs (including the instance ID), the namespaces, the CA and all resource
+records.
+
+```bash
+deploy/deploy.sh --park aws --plan        # review: no manifests re-applied
+deploy/deploy.sh --park gcp               # stop GCP compute, keep its data
+deploy/deploy.sh --resume gcp             # one rollout; keeps the parked binary
+deploy/deploy.sh --switch aws --yes       # park GCP (when installed), resume AWS
+```
+
+The park record is **per substrate**: the namespace gets
+`jaiscloud.io/<cloud>.state`, `.parked-at`, `.parked-image`, `.parked-image-id`
+and `.parked-version` (`aws` | `gcp`), alongside the per-cloud `desired` in the
+install record. Two substrates sharing a namespace therefore keep both records;
+read the one for the cloud you care about (from the preflight's
+`substrates.<cloud>` and the install record, not a shared key).
+
+Before scaling the Deployment to 0, `deploy.sh` calls the emulator's
+`POST /_jaiscloud/park`, where each engine quiesces itself: Dataproc cancels
+non-terminal jobs, Managed Kafka deletes broker Pods/Services (keeping cluster
+and topic *records*; broker topic data is lost because the broker has no PVC),
+and Cloud Run removes revision runtimes (keeping Service/Revision records).
+`Resume` runs the reverse through `POST /_jaiscloud/resume`. A 404 from either
+endpoint means the running image predates the API — rebuild and redeploy.
+
+**A resume never changes the binary silently.** Before scaling, it compares the
+Deployment image with the parked one and refuses a mismatch (naming
+`--allow-upgrade` as the only opt-in), then pins the parked `imageID` digest with
+`kubectl set image`, so a moving `:latest` tag cannot slip a new build in and run
+its store migrations. With no recorded digest it warns that it cannot pin; the
+post-rollout digest comparison remains a warning. `--allow-upgrade`
+(`ALLOW_UPGRADE=1`) is the explicit "use the new image, the store may migrate".
+
+**Managed Kafka topic loss is surfaced, not implied.** The park result carries
+`"topicDataLost": true` when a real broker was stopped, `deploy.sh --park gcp`
+warns when `JAISCLOUD_KAFKA_BROKER_MODE` is `k8s`/`docker`/`native`, and the
+preflight reports `substrates.gcp.kafkaBrokerMode` plus a warning. Cluster/topic
+metadata and the namespace survive; the topics do not (no broker PVC).
+
+The switch direction is always park-then-resume, so only one substrate's compute
+runs at a time. Images are tagged `:latest` for now; a resume pins the parked
+digest as described. `--delete [aws|gcp|both]` is the workload-only alternative:
+it removes the Deployment/Service (and DSN Secret, plus the AWS ConfigMap) but
+never the PVCs or the database; the other substrate is untouched unless you pass
+`both`.
+
+**DNS and the CA do not follow the park.** A parked substrate's names still
+resolve, its CA copy is still present, and neither is bad by itself — but each
+override needs a decision:
+
+- **CoreDNS rewrite** (cluster-wide, `deploy/k8s/istio/dns.yaml`): it survives the
+  park, so `storage.googleapis.com` and friends keep resolving to their named
+  target while the backend is scaled to 0; clients hang or get a fast 503. Remove
+  that suffix's rewrite while the owning substrate is parked and re-add it on
+  resume. `deploy.sh --check` reports `dns.rewrites` / `dns.suffixes` /
+  `dns.target(s)` / `dns.stale` and warns per stale target (a gateway rewrite
+  also considers the owning substrate's state; a `service:<ns>/<name>` target is
+  judged by its ready endpoints).
+- **Pod `hostAliases`** (one client workload): it keeps pointing at the gateway
+  ClusterIP; nothing to change for a switch (the gateway routes by host) but a
+  client that must reach the parked substrate directly needs a new address.
+- **Pinned Service `clusterIP`**: the Service keeps its address, its endpoints go
+  away with the Deployment (connection refused). Do not repoint a client at a
+  parked Service; resume it or pin the running one. `clusterIP` is immutable.
+- **CA (`jaiscloud-ca-cert`)**: park keeps it on purpose — a resumed substrate
+  and its managed workloads still trust the front door. It is stale only when
+  the issuer is gone; with no `istio-system/jaiscloud-wildcard` and no Gateway,
+  `ca.issuerPresent=false` and the preflight warns per namespace that still holds
+  a *mesh-labelled* copy (`ca.issuers.<cloud>=mesh`, written by `certs/gen.sh`).
+  An unlabelled copy is host-issued (`issuer=external`): never judged, never
+  warned about.
+
+Verify with the lifecycle gate (compute-destructive; needs both substrates
+installed from a build that has the park/resume API):
+
+```bash
+GATE_ALLOW_LIFECYCLE=1 make test-lifecycle-k8s
+```
+
+## Scenario 7 — your own build
+
+Build, deliver (push or `k3d image import`/`kind load`), then
+`JAISCLOUD_GCP_IMAGE=<image> deploy/deploy.sh --gcp --yes`. Dataproc also needs a
+Spark image with the GCS connector in `JAISCLOUD_K8S_SPARK_IMAGE`; see
+`custom-images` in the playbook.
+
+## Scenario 8 — custom namespace/ServiceAccount names
+
+```bash
+export NS_AWS=team-aws NS_GCP=team-gcp NS_DATA=team-data
+export SA_AWS=team-sa-aws SA_GCP=team-sa-gcp
+deploy/deploy.sh --render-only /tmp/jaiscloud-render   # inspect, no cluster
+deploy/deploy.sh --plan                                 # overlay + apply -k steps
+deploy/deploy.sh --yes                                  # AWS substrate
+deploy/deploy.sh --gcp --yes                            # GCP substrate
+deploy/deploy.sh --check --json                         # should report the custom names
+```
+
+Every mutating mode uses those names (install, `--reset`, `--gcp-reset`,
+`--delete`, `--park`/`--resume`/`--switch`, the store and the admission policy),
+so `--check` reports the same namespaces the install used. `--render-only DIR`
+writes the tree (`overlays/{data,data-ns,aws,gcp,isolation}`, each self-contained
+with a `base/` copy and JSON6902 patches) and exits without running kubectl;
+`kubectl kustomize DIR/overlays/<name>` and `kubectl apply -k` work on it
+directly. `make test-custom-names-render` asserts the rendered objects offline
+and that the defaults still render to the shipped names.
+
+The mesh follows the namespaces too: place the CA copies with
+`NS_AWS=… NS_GCP=… deploy/k8s/istio/certs/gen.sh` and the route FQDNs with
+`NS_AWS=… NS_GCP=… deploy/k8s/istio/render.sh --apply`. The namespace gate takes
+the identity explicitly:
+
+```bash
+AWS_USER="system:serviceaccount:$NS_AWS:$SA_AWS" \
+GCP_USER="system:serviceaccount:$NS_GCP:$SA_GCP" \
+  GATE_ALLOW_RBAC=1 make test-rbac-isolation-k8s
+```
+
+`LEGACY_NAMESPACE` (the pre-split migration source) must be one of the configured
+namespaces unless `LEGACY_CONFIRM=1`: the migration reads a store this install is
+allowed to own.
+
+## Verifying
+
+Use `contract.playbook.verification`. The cheapest full check is the preflight
+(`recommended: []` means the intended shape holds; `--strict` returns 0 only
+then, with no leak warnings); the strongest is
+`ALLOW_RESET=1 make test-dual-substrate-k8s` (destructive: it drops the AWS
+database to prove GCP survives).
+
+## When something fails
+
+1. Read the last command's stderr. `deploy.sh` prints pod state and events on a
+   failed rollout.
+2. Match the symptom in `contract.playbook.failure_taxonomy`.
+3. Re-run `deploy/deploy.sh --check --json` and act on `recommended[]`.
+4. Only then consider reading the human docs
+   ([`README-GCP.md`](../../../README-GCP.md),
+   [`DEVELOPER_GUIDE.md`](../../../DEVELOPER_GUIDE.md) Setup 3).
+
+Do not "fix" a failure by disabling a guard (for example by deleting the store,
+exposing 443, or rewriting host headers). Those guards encode the invariants.
+
+## Multi-tenant / parallel installs
+
+One namespace and one `JAISCLOUD_INSTANCE_ID` per instance. The shipped manifests
+pin single values because they describe one deployment; use a custom layout (or a
+second copy with its own instance ID) for a shared cluster, otherwise one
+instance's startup sweep can reap another's Pods (the sweep only sees its own
+IDs, but the namespace/DB pair is the real boundary). Namespaces the emulator
+creates are stamped with the instance ID and substrate, and the admission policy
+refuses a namespace request from a substrate ServiceAccount that does not carry
+its own identity.
+
+The manifests are the **default base**: the Namespace names, the `namespace:`
+fields, the DSN hostnames and the ValidatingAdmissionPolicy's
+`system:serviceaccount:<namespace>:<sa>` usernames are literal, so
+`kubectl apply -f deploy/k8s/...` installs `jaiscloud` / `jaiscloud-gcp` /
+`jaiscloud-data` with the ServiceAccounts `jaiscloud` / `jaiscloud-gcp`. For any
+other layout set `NS_AWS`, `NS_GCP`, `NS_DATA`, `SA_AWS` and `SA_GCP`:
+`deploy/deploy.sh` renders a kustomize overlay from that base (patching the
+Namespace names, the ServiceAccount and every reference to it, the identity env,
+the DSN hostnames and the admission policy's usernames) and applies it with
+`kubectl apply -k`. Do not edit the base for one install — see
+[Scenario 8](#scenario-8--custom-namespaceserviceaccount-names).
+
+`JAISCLOUD_INSTANCE_ID` is *not* derived from the namespace: two instances in
+different namespaces still need distinct IDs if they share a store.
+
+## Tooling summary
+
+| Need | Command |
+|---|---|
+| read-only state | `deploy/deploy.sh --check [--json] [--substrate aws\|gcp\|both] [--desired aws=running,gcp=parked]` (`scripts/integration-preflight.sh`) |
+| preflight predicates (offline) | `make test-integration-preflight` (`scripts/integration-preflight-test.sh`: fake kubectl, no cluster — leaks, legacy, env/envFrom, tri-state store databases, effective RBAC, VAP match, DNS/CA) |
+| install intent | preflight `intent.*`; record in ConfigMap `jaiscloud-data/jaiscloud-install` (written by `deploy.sh`) |
+| store mode | preflight `store.mode` (`bundled\|external`); install record key `store` |
+| the pack, from the binary | `jaiscloud-gcp agent-guide` / `--json` / `--emit DIR` (`--force` to overwrite) |
+| preview | `deploy/deploy.sh <mode> --plan` |
+| custom namespaces / ServiceAccounts | `NS_AWS=… NS_GCP=… NS_DATA=… SA_AWS=… SA_GCP=… deploy/deploy.sh [--yes]` (renders a kustomize overlay; `--render-only DIR` writes it without a cluster) |
+| inspect the rendered layout | `deploy/deploy.sh --render-only DIR` then `kubectl kustomize DIR/overlays/<data\|data-ns\|aws\|gcp\|isolation>`; `make test-custom-names-render` |
+| mesh for custom names | `NS_AWS=… NS_GCP=… deploy/k8s/istio/certs/gen.sh`, `NS_AWS=… NS_GCP=… deploy/k8s/istio/render.sh --apply` |
+| install AWS / GCP | `deploy/deploy.sh [--yes]` / `deploy/deploy.sh --gcp --yes` |
+| bring your own store | `deploy/deploy.sh --yes --store-dsn postgres://…` (`JAISCLOUD_STORE_DSN`, `JAISCLOUD_AWS_DSN`, `JAISCLOUD_GCP_DSN`) |
+| park / resume / switch (compute only) | `deploy/deploy.sh --park <aws\|gcp>` / `--resume <aws\|gcp>` (pins the parked digest; `--allow-upgrade` opts into a new image) / `--switch <aws\|gcp> --yes` |
+| migrate (keep the legacy workload) | `deploy/deploy.sh --migrate-store --yes` (marked source; `--legacy-confirm` for a pre-split build, `--delete-legacy` removes the workload + Services, never a PVC) |
+| delete workloads (keep data) | `deploy/deploy.sh --delete [aws\|gcp\|both]` |
+| resets (destructive, scoped) | `--reset` (AWS) / `--gcp-reset` (GCP) |
+| namespace boundary | preflight `rbac.*` (`admissionPolicy`, `policyMatchesSA`, effective `auth can-i`); `GATE_ALLOW_RBAC=1 KUBE_CONTEXT=<ctx> make test-rbac-isolation-k8s` (server-side dry runs, K8s >= 1.30) |
+| gates | `make check-deploy-images`, `make check-integration-contract`, `make test-integration-preflight`, `make test-istio-smoke`, `ALLOW_RESET=1 make test-dual-substrate-k8s`, `GATE_ALLOW_LIFECYCLE=1 make test-lifecycle-k8s`, `make gcp-ci-preflight` |
+| emulator state API | `GET /_jaiscloud/health`, `GET /_jaiscloud/doctor`, `POST /_jaiscloud/reset`, `GET /_jaiscloud/export`, `POST /_jaiscloud/import`, `POST /_jaiscloud/clock` |
+| emulator lifecycle API | `POST /_jaiscloud/park`, `POST /_jaiscloud/resume` (engine hooks; called by `deploy.sh --park`/`--resume`) |

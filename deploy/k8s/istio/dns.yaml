@@ -1,0 +1,134 @@
+# Cluster DNS for the jaiscloud front door — DOCUMENTATION ONLY.
+#
+# This file contains NO Kubernetes object on purpose: the only way to add these
+# names to the cluster's resolver is to edit the CoreDNS Corefile that the
+# cluster already owns, and a blind `kubectl apply -f` here would either clobber
+# that Corefile (a ConfigMap's `data.Corefile` is replaced, not merged) or fail
+# outright. Review the diff, then apply the patch by hand — see "Procedure"
+# below and README.md § Cluster DNS.
+#
+# Nothing in the deploy path requires this file: the clients that matter
+# (the smoke script, a shell, a Python script) work today with
+# `curl --resolve` / grpcurl `-authority`, i.e. without any cluster DNS change.
+# Do this when you want the REAL cloud hostnames resolvable from inside pods.
+#
+# ─────────────────────────────────────────────────────────────────────────────
+# What it does
+# ─────────────────────────────────────────────────────────────────────────────
+# Rewrite every name under the four cloud suffixes to the gateway Service's
+# cluster DNS name. CoreDNS answers that name with the gateway's ClusterIP via
+# the kubernetes plugin, and the rewrite plugin restores the original name in
+# the response, so callers still see the name they asked for:
+#
+#   storage.googleapis.com        -> 10.43.x.y   (istio-ingressgateway ClusterIP)
+#   sts.amazonaws.com             -> 10.43.x.y
+#   svc-abc.us-central1.run.app   -> 10.43.x.y
+#   us-central1-p.cloudfunctions.net -> 10.43.x.y
+#
+# The suffix form `rewrite name suffix` cannot be used directly: it preserves
+# the leading label (`storage.googleapis.com` -> `storage.<target>`), which does
+# not resolve. A regex rewrite collapses the whole name to the single gateway
+# name instead. One rule per suffix, `stop` so the first match wins and the
+# kubernetes plugin never sees the original name.
+#
+# ─────────────────────────────────────────────────────────────────────────────
+# Corefile fragment (insert inside the existing `.:53 { ... }` block, just
+# before the `kubernetes` plugin line)
+# ─────────────────────────────────────────────────────────────────────────────
+#
+#     rewrite stop name regex (.*\.)?amazonaws\.com\.?$ istio-ingressgateway.istio-system.svc.cluster.local.
+#     rewrite stop name regex (.*\.)?googleapis\.com\.?$ istio-ingressgateway.istio-system.svc.cluster.local.
+#     rewrite stop name regex (.*\.)?run\.app\.?$ istio-ingressgateway.istio-system.svc.cluster.local.
+#     rewrite stop name regex (.*\.)?cloudfunctions\.net\.?$ istio-ingressgateway.istio-system.svc.cluster.local.
+#
+# The gateway's HTTPS listener is on port 443 of that Service, so clients must
+# use https and the default port (no port suffix in the URL).
+#
+# ─────────────────────────────────────────────────────────────────────────────
+# Alternative: a CoreDNS template answering the pinned Service ClusterIP
+# ─────────────────────────────────────────────────────────────────────────────
+# A mesh is not required. When the suffix should resolve straight to a Service's
+# pinned `spec.clusterIP` (the layout for literal-IP clients and a host-issued
+# TLS sidecar), a `template` answers instead of a rewrite. It is cluster-wide
+# like the rewrite above, but it names a Service, not the gateway:
+#
+#     template IN A (.*\.)?googleapis\.com\.?$ {
+#         answer "{{ .Name }}" 10.43.x.y          # the Service's spec.clusterIP
+#     }
+#
+# One block per suffix, inserted in the same place as the rewrite lines. The
+# preflight resolves the `answer` address to the Service that holds it (searched
+# in the JaisCloud namespaces) and reports dns.target=service:<ns>/<name>; the
+# rewrite is stale only when that Service is missing or has no ready endpoints
+# (a parked substrate empties them). An address that matches no known Service is
+# reported as dns.target=unknown and never called stale — the probe does not
+# guess about objects it cannot see.
+#
+# Keep the address stable: if the Service is recreated with a different
+# clusterIP, update the template's answer to match.
+#
+# ─────────────────────────────────────────────────────────────────────────────
+# Procedure (review every step; this is the cluster's resolver)
+# ─────────────────────────────────────────────────────────────────────────────
+#
+#     # 0. Back up what is running.
+#     kubectl -n kube-system get cm coredns -o jsonpath='{.data.Corefile}' > Corefile.orig
+#
+#     # 1. Build a candidate with the four rules inserted before `kubernetes`.
+#     awk 'BEGIN{done=0}
+#          /^[[:space:]]*kubernetes[[:space:]]/ && !done { print FRAG; done=1 }
+#          { print }' FRAG=/dev/stdin Corefile.orig < fragment.txt > Corefile.new
+#
+#     # 2. Read the diff. It must show exactly four added lines.
+#     diff -u Corefile.orig Corefile.new
+#
+#     # 3. Apply only after the diff is clean, then restart CoreDNS.
+#     kubectl -n kube-system create cm coredns --from-file=Corefile=Corefile.new \
+#       --dry-run=client -o yaml | kubectl apply -f -
+#     kubectl -n kube-system rollout restart deploy/coredns
+#
+#     # 4. Verify from inside a pod (not from the host):
+#     kubectl -n istio-system exec deploy/istio-ingressgateway -- \
+#       getent hosts storage.googleapis.com        # expect the gateway ClusterIP
+#
+#     # Rollback:
+#     kubectl -n kube-system create cm coredns --from-file=Corefile=Corefile.orig \
+#       --dry-run=client -o yaml | kubectl apply -f -
+#
+# Caveat, deliberate: these rules hijack the four suffixes for EVERY pod in the
+# cluster, so a workload that really wants AWS or Google over the internet stops
+# being able to reach it. That is the point (both substrates are local), but do
+# not put these rules on a cluster that also serves real cloud traffic.
+#
+# ─────────────────────────────────────────────────────────────────────────────
+# Fallback for a single workload: hostAliases (no DNS change at all)
+# ─────────────────────────────────────────────────────────────────────────────
+# Add to the pod spec of the one workload that needs the names. `kubectl` merges
+# this into the pod's /etc/hosts; the wildcard suffixes cannot be expressed, so
+# every concrete host must be listed.
+#
+#   spec:
+#     hostAliases:
+#       - ip: "10.43.x.y"                     # kubectl -n istio-system get svc istio-ingressgateway -o jsonpath='{.spec.clusterIP}'
+#         hostnames:
+#           - storage.googleapis.com
+#           - firestore.googleapis.com
+#           - sts.amazonaws.com
+#           - s3.us-east-1.amazonaws.com
+#           - my-svc-abc123.us-central1.run.app
+#           - us-central1-my-project.cloudfunctions.net
+#
+# /etc/hosts cannot carry ports, so the client must still use the default HTTPS
+# port (443) of the gateway Service — which is what the names imply anyway.
+#
+# Same idea from the host (Docker Desktop / k3d workstation), no cluster change:
+#
+#   kubectl -n istio-system get svc istio-ingressgateway \
+#     -o jsonpath='{.spec.clusterIP}'
+#   # then:  sudo sh -c 'echo "10.43.x.y storage.googleapis.com" >> /etc/hosts'
+#   # or, without touching /etc/hosts:
+#   curl --resolve storage.googleapis.com:443:10.43.x.y \
+#     https://storage.googleapis.com/storage/v1/b?project=p
+#
+# That `--resolve` form is exactly what scripts/istio-smoke.sh does, which is
+# why the smoke gate needs no DNS work at all.

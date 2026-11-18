@@ -69,18 +69,24 @@ type k8sBroker struct {
 	// probe reports whether addr is accepting TCP connections. Overridable in
 	// tests; defaults to a one-second TCP dial.
 	probe func(addr string) bool
+	// ownServiceAccount resolves the ServiceAccount this emulator process runs
+	// as (name, namespace), which the per-cluster namespace's executor
+	// RoleBinding must bind. Overridable in tests; defaults to
+	// k8shelpers.ResolveOwnServiceAccount.
+	ownServiceAccount func() (string, string)
 }
 
 func newK8sBroker(client kubernetes.Interface, namespace, image string, logger *slog.Logger) *k8sBroker {
 	return &k8sBroker{
-		client:     client,
-		namespace:  namespace,
-		image:      image,
-		logger:     logger,
-		endpoints:  make(map[ClusterKey]string),
-		namespaces: make(map[ClusterKey]string),
-		admins:     newAdminPool(nil),
-		probe:      tcpProbe,
+		client:            client,
+		namespace:         namespace,
+		image:             image,
+		logger:            logger,
+		endpoints:         make(map[ClusterKey]string),
+		namespaces:        make(map[ClusterKey]string),
+		admins:            newAdminPool(nil),
+		probe:             tcpProbe,
+		ownServiceAccount: k8shelpers.ResolveOwnServiceAccount,
 	}
 }
 
@@ -224,8 +230,13 @@ func (b *k8sBroker) provisionNamespace(ctx context.Context, key ClusterKey) (str
 		return b.namespace, false
 	}
 	// The emulator's own ServiceAccount creates the broker Pod/Service in the new
-	// namespace, so the executor ClusterRole must be bound to it there.
-	if rbacErr := k8shelpers.EnsureNamespaceRBAC(ctx, b.client, ns, "", ""); rbacErr != nil {
+	// namespace, so the executor ClusterRole must be bound to it there. Resolve
+	// the running process's identity rather than binding the historical
+	// `jaiscloud/jaiscloud` constant: a GCP substrate pod runs as e.g.
+	// `jaiscloud-gcp` in namespace `jaiscloud-gcp`, and the API server accepts a
+	// RoleBinding for any subject while the later Pod create is what fails.
+	saName, saNamespace := b.ownServiceAccount()
+	if rbacErr := k8shelpers.EnsureNamespaceRBAC(ctx, b.client, ns, saName, saNamespace); rbacErr != nil {
 		b.logger.Warn("managedkafka broker: cannot bootstrap executor RBAC in per-cluster namespace; falling back",
 			"cluster", key.String(), "namespace", ns, "fallback", b.namespace, "err", rbacErr)
 		if created {
@@ -280,6 +291,50 @@ func (b *k8sBroker) StopCluster(ctx context.Context, project, location, cluster 
 
 	// Always drop the endpoint and its pooled admin, even if a delete failed:
 	// keeping a dead address advertised is worse than retrying a delete.
+	b.mu.Lock()
+	ep := b.endpoints[key]
+	delete(b.endpoints, key)
+	delete(b.namespaces, key)
+	b.mu.Unlock()
+	if ep != "" {
+		b.admins.close(ep)
+	}
+	if reapErr != nil {
+		return fmt.Errorf("managedkafka broker: %w", reapErr)
+	}
+	return nil
+}
+
+// ParkCluster terminates a cluster's broker Pod and Service but keeps the
+// cluster metadata and its per-cluster namespace: a park is compute-destructive
+// and data-retentive, so Resume (ensureBroker) can recreate the broker in place
+// without a store migration. Unlike StopCluster it never deletes an owned
+// namespace.
+func (b *k8sBroker) ParkCluster(ctx context.Context, project, location, cluster string) error {
+	key := ClusterKey{Project: project, Location: location, Cluster: cluster}
+	name := brokerResourceName(key)
+
+	b.mu.Lock()
+	ns, tracked := b.namespaces[key]
+	b.mu.Unlock()
+	if !tracked {
+		// Untracked (a reaped/absent cluster): best-effort against the derived
+		// namespace. Deleting an absent workload is a no-op.
+		ns = ClusterNamespace(project, location, cluster)
+	}
+
+	reapErr := k8shelpers.DeleteWorkload(ctx, b.client, ns, name)
+	if !tracked && ns != b.namespace {
+		// A previous process may have started this broker in the process-wide
+		// fallback namespace; reap it too (the resource name is deterministic).
+		if perr := k8shelpers.DeleteWorkload(ctx, b.client, b.namespace, name); perr != nil && reapErr == nil {
+			reapErr = perr
+		}
+	}
+
+	// Drop the endpoint and its pooled admin: a parked cluster has no live
+	// broker, so a later data-plane call must not use a dead address (Resume
+	// restarts one).
 	b.mu.Lock()
 	ep := b.endpoints[key]
 	delete(b.endpoints, key)

@@ -1,0 +1,133 @@
+# VirtualServices — host -> substrate routing for the jaiscloud Gateway.
+#
+# One VirtualService per host group. All of them live in istio-system, are
+# attached to Gateway istio-system/jaiscloud, and name their destination with a
+# fully-qualified Service name plus an explicit port.number. A short name like
+# "jaiscloud-gcp" would resolve inside istio-system (where no such Service
+# exists) instead of the substrate namespace, so the FQDN is mandatory.
+#
+# HARD RULE: there is deliberately no `rewrite.authority` / `host_rewrite` in
+# this file, and none may be added. The emulator routes on the request
+# authority: GKE vs Managed Kafka share /v1/projects/{p}/locations/{l}/clusters,
+# Cloud Run owns *.run.app, Cloud Functions owns {location}-{project}.
+# cloudfunctions.net, S3 virtual-hosted style addresses bucket.s3.<...>, and API
+# Gateway execute-api addresses {api}.execute-api.{region}.amazonaws.com.
+# Envoy forwards :authority unchanged unless it is told to rewrite it, which is
+# exactly what we need: the mesh is a TLS terminator + router, not a translator.
+---
+# *.googleapis.com — one origin, two ports: REST on 8080, gRPC on 8081.
+#
+# The split is by content-type, which every gRPC client sets to
+# "application/grpc" (optionally "+proto"/"+json"). That is the only reliable
+# discriminator at L7: the two protocols share host and path.
+apiVersion: networking.istio.io/v1
+kind: VirtualService
+metadata:
+  name: gcp-googleapis
+  namespace: istio-system
+  labels:
+    app.kubernetes.io/part-of: jaiscloud
+    jaiscloud.io/role: front-door
+    jaiscloud.io/substrate: gcp
+spec:
+  hosts:
+    - "*.googleapis.com"
+  gateways:
+    - jaiscloud
+  http:
+    # gRPC first: it is the narrower match and must win over the default route.
+    #
+    # h2c on the upstream hop: 8081 is the emulator's plaintext HTTP/2 (h2c)
+    # port. Istio picks the upstream protocol from the Service port, so the
+    # jaiscloud-gcp Service must declare port 8081 as grpc/http2 — either
+    # `name: grpc` (what the manifest already ships; Istio's port-name protocol
+    # selection maps a "grpc" name to GRPC) or `appProtocol: http2`. Without
+    # that, Envoy treats the port as raw TCP and this route cannot work.
+    # See destinationrule.yaml for the h2 connection-pool settings.
+    - name: grpc
+      match:
+        - headers:
+            content-type:
+              prefix: application/grpc
+      route:
+        - destination:
+            host: jaiscloud-gcp.jaiscloud-gcp.svc.cluster.local
+            port:
+              number: 8081
+      # No `timeout` field on purpose: an unset route timeout is *disabled*
+      # (Istio's documented default). Do not "disable" it with `timeout: 0s` —
+      # the istiod validator rejects anything not greater than 1ms.
+      # No hidden retries: a retried emulator write is a duplicate write.
+      retries:
+        attempts: 0
+    - name: rest
+      route:
+        - destination:
+            host: jaiscloud-gcp.jaiscloud-gcp.svc.cluster.local
+            port:
+              number: 8080
+      # Long-poll LROs and 15-minute uploads are normal here, so no timeout.
+      retries:
+        attempts: 0
+---
+# *.run.app and *.cloudfunctions.net — data planes that are HTTP on 8080.
+#
+# Both are addressed by synthesized authorities: "{id}-{token}.{location}.run.app"
+# (Cloud Run revision URLs) and "{location}-{project}.cloudfunctions.net" (the
+# function trigger host). Envoy suffix-matches those deep names against the
+# wildcards below; because both are served by the same REST port they share one
+# VirtualService.
+apiVersion: networking.istio.io/v1
+kind: VirtualService
+metadata:
+  name: gcp-serverless
+  namespace: istio-system
+  labels:
+    app.kubernetes.io/part-of: jaiscloud
+    jaiscloud.io/role: front-door
+    jaiscloud.io/substrate: gcp
+spec:
+  hosts:
+    - "*.run.app"
+    - "*.cloudfunctions.net"
+  gateways:
+    - jaiscloud
+  http:
+    - name: rest
+      route:
+        - destination:
+            host: jaiscloud-gcp.jaiscloud-gcp.svc.cluster.local
+            port:
+              number: 8080
+      # A function trigger can stream a response for as long as it likes, so no
+      # timeout.
+      retries:
+        attempts: 0
+---
+# *.amazonaws.com — the AWS substrate serves every service on one port (4566),
+# so there is no split: S3, STS, SQS, DynamoDB, Lambda, execute-api, ... all
+# take this route.
+apiVersion: networking.istio.io/v1
+kind: VirtualService
+metadata:
+  name: aws-amazonaws
+  namespace: istio-system
+  labels:
+    app.kubernetes.io/part-of: jaiscloud
+    jaiscloud.io/role: front-door
+    jaiscloud.io/substrate: aws
+spec:
+  hosts:
+    - "*.amazonaws.com"
+  gateways:
+    - jaiscloud
+  http:
+    - name: amazonaws
+      route:
+        - destination:
+            host: jaiscloud.jaiscloud.svc.cluster.local
+            port:
+              number: 4566
+      # S3 multipart uploads and long polls: no timeout.
+      retries:
+        attempts: 0

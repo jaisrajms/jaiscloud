@@ -1,0 +1,69 @@
+---
+# Execution identity and permissions of the AWS substrate (namespace `jaiscloud`).
+# Requires namespace-aws.yaml and rbac-shared.yaml; the GCP identity lives in
+# rbac-gcp.yaml and is never created by an AWS-only install.
+---
+# Execution identity of the AWS substrate (namespace `jaiscloud`).
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: jaiscloud
+  namespace: jaiscloud
+automountServiceAccountToken: true
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: jaiscloud-executor
+  namespace: jaiscloud
+rules:
+  - apiGroups: ["batch"]
+    resources: ["jobs"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete", "deletecollection"]
+  - apiGroups: [""]
+    resources: ["pods", "pods/log", "pods/exec"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete", "deletecollection"]
+  - apiGroups: [""]
+    resources: ["configmaps", "services"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete", "deletecollection"]
+  - apiGroups: [""]
+    resources: ["serviceaccounts"]
+    verbs: ["get", "list", "watch", "create", "delete", "deletecollection"]
+  - apiGroups: [""]
+    resources: ["persistentvolumeclaims"]
+    verbs: ["get", "list", "watch", "create", "delete", "deletecollection"]
+  # The ECR pull-through registry runs as a Deployment in this namespace; without
+  # it the emulator logs a warning and falls back to memory mode.
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: jaiscloud-executor
+  namespace: jaiscloud
+subjects:
+  - kind: ServiceAccount
+    name: jaiscloud
+    namespace: jaiscloud
+roleRef:
+  kind: Role
+  name: jaiscloud-executor
+  apiGroup: rbac.authorization.k8s.io
+---
+# Cluster-wide namespace lifecycle for the AWS substrate only. Dataproc and
+# Managed Kafka run in the GCP substrate and bind jaiscloud-namespace-admin-gcp
+# (rbac-gcp.yaml) instead, so neither substrate's install grants the other.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: jaiscloud-namespace-admin-aws
+subjects:
+  - kind: ServiceAccount
+    name: jaiscloud
+    namespace: jaiscloud
+roleRef:
+  kind: ClusterRole
+  name: jaiscloud-namespace-admin
+  apiGroup: rbac.authorization.k8s.io

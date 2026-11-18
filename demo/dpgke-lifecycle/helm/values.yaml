@@ -66,11 +66,11 @@ machineType: e2-small
 # (k3d), host.docker.internal (Docker Desktop), or a port-forwarded address.
 endpoints:
   # Base URL of the REST surface (the Java Storage client is HTTP/JSON).
-  rest: http://jaiscloud-gcp.jaiscloud.svc.cluster.local:8080
+  rest: http://jaiscloud-gcp.jaiscloud-gcp.svc.cluster.local:8080
   # gRPC host only: the Dataproc and GKE clients run on gRPC and DemoConfig joins
   # this with grpcPort itself (DGD3_GRPC_ENDPOINT + DGD3_GRPC_PORT). A host:port
   # here would make the app dial host:port:port.
-  grpc: jaiscloud-gcp.jaiscloud.svc.cluster.local
+  grpc: jaiscloud-gcp.jaiscloud-gcp.svc.cluster.local
   # The emulator's documented pair is REST 8080 / gRPC 8081, so a reader who
   # port-forwards or uses the in-cluster Service rarely changes this.
   grpcPort: 8081

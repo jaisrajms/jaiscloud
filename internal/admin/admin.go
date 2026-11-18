@@ -73,7 +73,11 @@ type HandlerMeta struct {
 	Cloud      string
 	Region     string
 	AccountID  string
-	StateDir   string // used for --new-instance instance-id persistence
+	// ProjectID is the GCP project scoping park/resume hooks. The AWS binary
+	// leaves it empty, and park/resume run no hooks there.
+	ProjectID string
+	Version   string // binary version, reported by GET /_jaiscloud/doctor
+	StateDir  string // used for --new-instance instance-id persistence
 }
 
 // exportSoftLimitDefault is the default soft-warn threshold for export size (2 GiB).
@@ -91,11 +95,30 @@ type PostRestoreHook interface {
 	OnRestore(ctx context.Context) error
 }
 
+// Parker is a service hook that quiesces its compute before the emulator is
+// scaled down: jobs are cancelled, broker/revision workloads are deleted. It
+// MUST keep all data — records, PVCs, namespaces, instance identity — so a
+// later Resume restores service without a store migration.
+type Parker interface {
+	Name() string
+	Park(ctx context.Context, project string) (map[string]any, error)
+}
+
+// Resumer is the counterpart of Parker: recreate whatever Park terminated.
+// It is idempotent and must not touch persisted records.
+type Resumer interface {
+	Name() string
+	Resume(ctx context.Context, project string) error
+}
+
 // Handler serves the /_jaiscloud/* admin endpoints.
 type Handler struct {
 	mu               sync.Mutex
+	lifecycleMu      sync.Mutex // one park/resume at a time
 	meta             HandlerMeta
 	resetters        []Resetter
+	parkers          []Parker
+	resumers         []Resumer
 	snapshotters     map[string]Snapshotter
 	postRestoreHooks []PostRestoreHook
 	lambdaCode       LambdaCodeFetcher
@@ -204,6 +227,22 @@ func (h *Handler) RegisterResetter(r Resetter) {
 	h.resetters = append(h.resetters, r)
 }
 
+// RegisterParker adds an engine hook that quiesces its compute on
+// POST /_jaiscloud/park.
+func (h *Handler) RegisterParker(p Parker) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.parkers = append(h.parkers, p)
+}
+
+// RegisterResumer adds an engine hook that recreates its compute on
+// POST /_jaiscloud/resume.
+func (h *Handler) RegisterResumer(r Resumer) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.resumers = append(h.resumers, r)
+}
+
 // RegisterSnapshotter adds a named store for export/import.
 func (h *Handler) RegisterSnapshotter(name string, s Snapshotter) {
 	h.mu.Lock()
@@ -293,9 +332,17 @@ func (h *Handler) Doctor(w http.ResponseWriter, r *http.Request) {
 		kekFP = "none"
 	}
 
+	// Discovery channel for agents that only reach the HTTP API: every binary
+	// embeds the integration guide behind `agent-guide`.
+	agentGuide := "jaiscloud-<cloud> agent-guide"
+	if meta.Cloud != "" {
+		agentGuide = "jaiscloud-" + meta.Cloud + " agent-guide"
+	}
 	resp := map[string]any{
-		"status": "ok",
-		"cloud":  meta.Cloud,
+		"status":      "ok",
+		"cloud":       meta.Cloud,
+		"version":     meta.Version,
+		"agent_guide": agentGuide,
 	}
 
 	if r.URL.Query().Get("verbose") == "true" {
@@ -374,6 +421,83 @@ func (h *Handler) Reset(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(map[string]string{"status": "reset"}); err != nil {
 		slog.Warn("admin: reset encode failed", "err", err)
+	}
+}
+
+// Park handles POST /_jaiscloud/park — runs every registered engine hook so a
+// deliberate scale-down begins from an honest control plane (jobs cancelled,
+// broker/revision workloads terminated). Data, PVCs, namespaces and records are
+// kept. It is idempotent: a second call parks an already-parked engine.
+func (h *Handler) Park(w http.ResponseWriter, r *http.Request) {
+	// One lifecycle transition at a time; a client disconnect must not cancel a
+	// teardown halfway, so the hooks run on a detached, bounded context.
+	h.lifecycleMu.Lock()
+	defer h.lifecycleMu.Unlock()
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), 5*time.Minute)
+	defer cancel()
+
+	h.mu.Lock()
+	parkers := append([]Parker(nil), h.parkers...)
+	meta := h.meta
+	h.mu.Unlock()
+
+	parked := make(map[string]any, len(parkers))
+	errs := make(map[string]string)
+	for _, p := range parkers {
+		res, err := p.Park(ctx, meta.ProjectID)
+		if err != nil {
+			errs[p.Name()] = err.Error()
+			continue
+		}
+		if res == nil {
+			res = map[string]any{}
+		}
+		parked[p.Name()] = res
+	}
+	h.writeHookResult(w, "parked", parked, errs)
+}
+
+// Resume handles POST /_jaiscloud/resume — runs every registered engine hook to
+// recreate the compute Park terminated. It is idempotent.
+func (h *Handler) Resume(w http.ResponseWriter, r *http.Request) {
+	h.lifecycleMu.Lock()
+	defer h.lifecycleMu.Unlock()
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), 5*time.Minute)
+	defer cancel()
+
+	h.mu.Lock()
+	resumers := append([]Resumer(nil), h.resumers...)
+	meta := h.meta
+	h.mu.Unlock()
+
+	resumed := make(map[string]any, len(resumers))
+	errs := make(map[string]string)
+	for _, rs := range resumers {
+		if err := rs.Resume(ctx, meta.ProjectID); err != nil {
+			errs[rs.Name()] = err.Error()
+			continue
+		}
+		resumed[rs.Name()] = "ok"
+	}
+	// Resume reports the same shape as Park (a map of hook -> string), so the
+	// caller can read one field name across both endpoints.
+	h.writeHookResult(w, "resumed", resumed, errs)
+}
+
+// writeHookResult renders the park/resume envelope. A failed hook is a 500 that
+// still reports every hook that succeeded, so an operator sees exactly what
+// quiesced before fixing and retrying.
+func (h *Handler) writeHookResult(w http.ResponseWriter, key string, results map[string]any, errs map[string]string) {
+	resp := map[string]any{key: results}
+	if len(errs) > 0 {
+		resp["errors"] = errs
+	}
+	w.Header().Set("Content-Type", "application/json")
+	if len(errs) > 0 {
+		w.WriteHeader(http.StatusInternalServerError)
+	}
+	if err := json.NewEncoder(w).Encode(resp); err != nil {
+		slog.Warn("admin: "+key+" encode failed", "err", err)
 	}
 }
 

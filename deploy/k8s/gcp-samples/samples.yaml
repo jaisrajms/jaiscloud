@@ -1,6 +1,7 @@
 ---
 # Official Spring Cloud GCP sample applications, pointed at the in-cluster
-# jaiscloud-gcp emulator. These are the "high-confidence" emulator-supported
+# jaiscloud-gcp emulator and deployed into the GCP substrate namespace
+# (jaiscloud-gcp, never the AWS `jaiscloud` one). These are the "high-confidence" emulator-supported
 # starters: Pub/Sub, Firestore (Native) and Datastore — each auto-configuration
 # switches to NoCredentials when an emulator host/port is supplied, so no
 # credentials are needed and no sample source is modified.
@@ -8,16 +9,20 @@
 # Images are built from the pinned upstream tag by deploy/docker/gcp-samples:
 #   make docker-gcp-samples
 #
+# LAB/E2E ONLY: the sample images live on the lab registry (GCP_REGISTRY, default
+# 10.0.100.21:5050) and this file is a test fixture — it is not part of a
+# substrate install and deploy/deploy.sh never applies it.
+#
 # Emulator endpoints (see deploy/k8s/jaiscloud-gcp.yaml):
-#   REST  : http://jaiscloud-gcp.jaiscloud.svc.cluster.local:8080
-#   gRPC  : jaiscloud-gcp.jaiscloud.svc.cluster.local:8081
+#   REST  : http://jaiscloud-gcp.jaiscloud-gcp.svc.cluster.local:8080
+#   gRPC  : jaiscloud-gcp.jaiscloud-gcp.svc.cluster.local:8081
 #
 # Project IDs are arbitrary here — the emulator maps project -> account.
 apiVersion: v1
 kind: ConfigMap
 metadata:
   name: gcp-samples-env
-  namespace: jaiscloud
+  namespace: jaiscloud-gcp
   labels:
     app.kubernetes.io/part-of: gcp-samples
 data:
@@ -42,7 +47,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: gcp-sample-pubsub
-  namespace: jaiscloud
+  namespace: jaiscloud-gcp
   labels:
     app: gcp-sample-pubsub
     app.kubernetes.io/part-of: gcp-samples
@@ -68,7 +73,7 @@ spec:
                 name: gcp-samples-env
           env:
             - name: SPRING_CLOUD_GCP_PUBSUB_EMULATOR_HOST
-              value: jaiscloud-gcp.jaiscloud.svc.cluster.local:8081
+              value: jaiscloud-gcp.jaiscloud-gcp.svc.cluster.local:8081
           readinessProbe:
             httpGet:
               path: /
@@ -88,7 +93,7 @@ apiVersion: v1
 kind: Service
 metadata:
   name: gcp-sample-pubsub
-  namespace: jaiscloud
+  namespace: jaiscloud-gcp
   labels:
     app: gcp-sample-pubsub
 spec:
@@ -110,7 +115,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: gcp-sample-firestore
-  namespace: jaiscloud
+  namespace: jaiscloud-gcp
   labels:
     app: gcp-sample-firestore
     app.kubernetes.io/part-of: gcp-samples
@@ -140,7 +145,7 @@ spec:
             - name: SPRING_CLOUD_GCP_FIRESTORE_EMULATOR_ENABLED
               value: "true"
             - name: SPRING_CLOUD_GCP_FIRESTORE_HOST_PORT
-              value: jaiscloud-gcp.jaiscloud.svc.cluster.local:8081
+              value: jaiscloud-gcp.jaiscloud-gcp.svc.cluster.local:8081
             # The Firestore EMULATOR auto-configuration ignores the shared
             # spring.cloud.gcp.project-id and defaults to the literal "unused"
             # when the firestore-specific project is unset
@@ -167,7 +172,7 @@ apiVersion: v1
 kind: Service
 metadata:
   name: gcp-sample-firestore
-  namespace: jaiscloud
+  namespace: jaiscloud-gcp
   labels:
     app: gcp-sample-firestore
 spec:
@@ -190,7 +195,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: gcp-sample-datastore
-  namespace: jaiscloud
+  namespace: jaiscloud-gcp
   labels:
     app: gcp-sample-datastore
     app.kubernetes.io/part-of: gcp-samples
@@ -218,7 +223,7 @@ spec:
             # Setting host (not emulator.enabled) selects the manually started
             # emulator and the autoconfiguration uses NoCredentials.
             - name: SPRING_CLOUD_GCP_DATASTORE_HOST
-              value: jaiscloud-gcp.jaiscloud.svc.cluster.local:8081
+              value: jaiscloud-gcp.jaiscloud-gcp.svc.cluster.local:8081
             # The sample's application.properties hardcodes
             # spring.cloud.gcp.datastore.namespace=spring-demo. The emulator
             # rejects namespaced keys (INVALID_ARGUMENT: namespaced keys are
@@ -245,7 +250,7 @@ apiVersion: v1
 kind: Service
 metadata:
   name: gcp-sample-datastore
-  namespace: jaiscloud
+  namespace: jaiscloud-gcp
   labels:
     app: gcp-sample-datastore
 spec:

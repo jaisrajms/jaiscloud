@@ -398,7 +398,7 @@ jobs:
         run: make test-gcp-coverage
 
       - name: Run GCP dev-tool tests
-        run: go test -race -count=1 ./tools/gcpstatus/... ./tools/lint/... ./tools/vulnallow/... ./tools/tfcapture/... ./tools/providerschema/... ./tools/tfdifferential/...
+        run: go test -race -count=1 . ./tools/gcpstatus/... ./tools/lint/... ./tools/vulnallow/... ./tools/tfcapture/... ./tools/providerschema/... ./tools/integrationcontract/... ./tools/tfdifferential/...
 
       - name: Behavioral-coverage gate (every `ga` service has a suite or reasoned exemption)
         run: make gcp-status-behavioral-gate
@@ -408,6 +408,17 @@ jobs:
 
       - name: Run GCP convention lint
         run: go run ./tools/lint/gcplint ./internal/gcp/... ./cmd/jaiscloud-gcp
+
+      # The deploy kit's offline gates. They need no cluster (a fake kubectl
+      # answers read-only probes) and the preflight harness runs its no-GNU-
+      # timeout path, so a macOS-style host (bash watchdog, no coreutils) is
+      # covered on Linux too.
+      - name: Run deploy kit offline gates
+        run: |
+          make test-integration-preflight
+          make test-custom-names-render
+          make check-integration-contract
+          make check-deploy-images
 
   # Builds and boots jaiscloud-gcp on both REST (8080) and gRPC (8081) ports,
   # then runs the raw-HTTP and per-SDK integration suites against the emulator.

@@ -20,9 +20,10 @@
 //	make test-dataproc-namespace-k8s
 //
 // It is inert without a k3d cluster: requireK3d skips when kubectl or the
-// jaiscloud-gcp Service is absent. The target applies deploy/k8s/rbac.yaml
-// first, because cluster-scoped namespace create/delete needs the
-// jaiscloud-namespace-admin ClusterRoleBinding from that manifest.
+// jaiscloud-gcp Service is absent. The target applies deploy/k8s/rbac-shared.yaml
+// and deploy/k8s/rbac-gcp.yaml first, because cluster-scoped namespace
+// create/delete needs the jaiscloud-namespace-admin-gcp ClusterRoleBinding from
+// that manifest.
 //
 // Required env:
 //
@@ -30,7 +31,7 @@
 //
 // Optional env:
 //
-//	K8S_NAMESPACE — default jaiscloud
+//	K8S_NAMESPACE — default jaiscloud-gcp
 package dataproc_test
 
 import (
@@ -64,7 +65,7 @@ func namespace() string {
 	if v := os.Getenv("K8S_NAMESPACE"); v != "" {
 		return v
 	}
-	return "jaiscloud"
+	return "jaiscloud-gcp"
 }
 
 // kubectl runs kubectl and returns stdout (stderr folded into the error).

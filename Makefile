@@ -68,7 +68,7 @@ SPARK_E2E_ICEBERG_GCP_IMAGE ?= spark-iceberg-gcp-test
 GCP_REGISTRY   ?= 10.0.100.21:5050
 GCP_IMAGE      ?= $(GCP_REGISTRY)/jaiscloud-gcp:compat
 # k3d's registry is plain HTTP. Real Docker reaches it when the daemon lists it
-# under insecure-registries (see deploy/k8s/README or the workflow notes) and
+# under insecure-registries (see deploy/k8s/istio/README.md or the workflow notes) and
 # then needs no push flag; a podman/buildah client instead needs
 # --tls-verify=false. Override on the command line for such a client:
 #   make <target> GCP_PUSH_FLAGS=--tls-verify=false
@@ -117,7 +117,21 @@ DEMO_RECORD_DURATION ?= 20
 CLOUDRUN_JAVA_TIMEOUT ?= 2400
 
 # ─── K8s configuration ────────────────────────────────────────────────────────
+# One namespace per concern (deploy/k8s/namespace-*.yaml): the AWS substrate
+# (default, unchanged), the GCP substrate, and the shared PostgreSQL server.
+# AWS-side targets use K8S_NAMESPACE; anything that drives the jaiscloud-gcp
+# deployment/Service must use K8S_NAMESPACE_GCP and the Postgres-side rows use
+# K8S_NAMESPACE_DATA, so an AWS reset never has to touch the other two.
 K8S_NAMESPACE           ?= jaiscloud
+K8S_NAMESPACE_AWS       ?= $(K8S_NAMESPACE)
+K8S_NAMESPACE_GCP       ?= jaiscloud-gcp
+K8S_NAMESPACE_DATA      ?= jaiscloud-data
+# Per-substrate RBAC: the ClusterRoles are shared by both substrates, while each
+# substrate's ServiceAccount and bindings live in its own file, so a
+# single-substrate install creates no object for the other cloud.
+K8S_RBAC_SHARED         ?= deploy/k8s/rbac-shared.yaml
+K8S_RBAC_AWS            ?= deploy/k8s/rbac-aws.yaml
+K8S_RBAC_GCP            ?= deploy/k8s/rbac-gcp.yaml
 JAISCLOUD_K8S_APISERVER ?= $(shell kubectl config view --context docker-desktop --minify -o jsonpath='{.clusters[0].cluster.server}' 2>/dev/null)
 JAISCLOUD_K8S_CA_FILE           ?=
 JAISCLOUD_K8S_CLIENT_CERT_FILE  ?=
@@ -154,8 +168,10 @@ JAISCLOUD_IMAGE   ?= jaisraj/jaiscloud-aws:latest
 .PHONY: build-plugins build-plugins-release build-plugins-aws build-plugins-gcp plugin plugin-example sdk-tag check-sdk-tag test-sdk test-plugins lint lint-gcp lint-pagination help build build-all build-ui build-ui-gcp docker docker-all docker-gcp-samples test test-aws test-gcp test-gcp-tools test-release test-gcp-coverage test-gcp-coverage-update clean \
         server-memory server-ephemeral server-postgres server-docker server-k8s server-postgres-all \
         server-gcp server-gcp-ephemeral server-gcp-postgres \
-        server-ui server-ui-gcp stop-server up-docker down-docker up-k8s down-k8s \
-        postgres-up postgres-reset postgres-down \
+        server-ui server-ui-gcp stop-server up-docker down-docker up-k8s up-k8s-gcp down-k8s \
+        postgres-up postgres-reset postgres-down postgres-gcp-db \
+        test-dual-substrate-k8s test-rbac-isolation-k8s test-lifecycle-k8s test-istio-smoke _use-gcp-image check-deploy-images \
+        gen-integration-contract check-integration-contract integration-preflight test-integration-preflight test-custom-names-render \
         test-integration test-integration-gcp test-lro-async-gcp test-throttle-gcp test-gcp-load test-gcp-mutation test-gcp-mutation-ratchet test-gcp-mutation-update \
         test-e2e-emr-docker test-e2e-emrcontainers-k8s test-e2e-eventbridge \
         test-e2e-dpc-docker test-e2e-dpc-k8s \
@@ -232,7 +248,10 @@ help: ## Show this help  (tip: bare 'make' also works)
 	@printf "  %-30s  %s\n"  "SPARK_IMAGE"   "apache/spark:3.5.0  — Spark container image"
 	@printf "  %-30s  %s\n"  "LAMBDA_IMAGE"  "public.ecr.aws/lambda/python:3.12  — Lambda image"
 	@printf "  %-30s  %s\n"  "JAISCLOUD_DSN" "postgres://jaiscloud:jaiscloud@localhost:5432/jaiscloud"
-	@printf "  %-30s  %s\n"  "K8S_NAMESPACE" "jaiscloud  — K8s namespace for Spark and Lambda jobs"
+	@printf "  %-30s  %s\n"  "K8S_NAMESPACE" "jaiscloud  — AWS substrate ns (Spark/Lambda jobs + deploy)"
+	@printf "  %-30s  %s\n"  "K8S_NAMESPACE_AWS" "jaiscloud  — AWS substrate namespace (defaults to K8S_NAMESPACE)"
+	@printf "  %-30s  %s\n"  "K8S_NAMESPACE_GCP" "jaiscloud-gcp  — GCP substrate namespace"
+	@printf "  %-30s  %s\n"  "K8S_NAMESPACE_DATA" "jaiscloud-data  — PostgreSQL namespace"
 	@printf "  %-30s  %s\n"  "TEST_RUN"      ".  — go test -run filter (any e2e target)"
 	@printf "  %-30s  %s\n"  "PG_CONTAINER"  "jaiscloud-postgres  — docker container name"
 	@printf "  %-30s  %s\n"  "PG_VOLUME"     "jaiscloud-postgres-data  — named volume for persistence"
@@ -414,8 +433,11 @@ security-scan-go: ## govulncheck over the whole main module, gated by the cited 
 	if [ $$rc -ne 0 ] && [ $$rc -ne 3 ]; then echo "govulncheck failed (exit $$rc)"; exit $$rc; fi; \
 	go run ./tools/vulnallow -allowlist $(VULN_ALLOWLIST) < "$$tmp"
 
-security-scan-ui: ## pnpm audit against the committed ui/pnpm-lock.yaml (low and up)
-	cd ui && corepack pnpm audit --audit-level=low
+security-scan-ui: ## pnpm audit against the committed ui/pnpm-lock.yaml (every finding must be cited in docs/security/pnpm-audit-allowlist.json)
+	@audit=$$(mktemp); \
+	  (cd ui && corepack pnpm audit --audit-level=low --json > "$$audit" || true); \
+	  python3 scripts/pnpm_audit_allowlist.py "$$audit" docs/security/pnpm-audit-allowlist.json; \
+	  status=$$?; rm -f "$$audit"; exit $$status
 
 # pip-audit resolves the pins into a throwaway --target tree and audits that,
 # which needs no venv (and therefore no ensurepip) on the runner.
@@ -474,7 +496,7 @@ test-dataproc-streaming: ## Dataproc streaming/restart contract tests (schedulin
 	  ./internal/gcp/service/dataproc/ ./internal/sparkhelpers/ ./internal/gcp/transport/rest/dataproc/ ./internal/gcp/transport/grpc/dataproc/
 
 test-gcp-tools: ## Unit tests for the dev tools (gcpstatus, paginationcheck, vulnallow, terraform)
-	go test -race -count=1 ./tools/gcpstatus/... ./tools/lint/... ./tools/vulnallow/... ./tools/tfcapture/... ./tools/providerschema/... ./tools/tfdifferential/...
+	go test -race -count=1 . ./tools/gcpstatus/... ./tools/lint/... ./tools/vulnallow/... ./tools/tfcapture/... ./tools/providerschema/... ./tools/integrationcontract/... ./tools/tfdifferential/...
 
 test-release: ## Release artifact smoke tests for jaiscloud-gcp (needs a goreleaser snapshot in dist/)
 	go test -count=1 -tags release ./tests/release/...
@@ -531,15 +553,15 @@ server-docker: _check-docker-prereq docker ## Persistent mode + Spark and Lambda
 	  docker-compose up
 
 server-k8s: _check-k8s-prereq up-k8s ## Persistent mode + Spark and Lambda via K8s  (requires docker-desktop K8s)
-	kubectl port-forward -n jaiscloud svc/jaiscloud $(JAISCLOUD_PORT):4566
+	kubectl port-forward -n $(K8S_NAMESPACE_AWS) svc/jaiscloud $(JAISCLOUD_PORT):4566
 
 server-postgres-all: server-k8s ## Alias for server-k8s (postgres backend, all executors via K8s)
 
 stop-server: ## Stop background jaiscloud-aws process and clean up Lambda/Spark resources
 	@pkill -f "jaiscloud-aws start" 2>/dev/null && echo "jaiscloud-aws stopped" || echo "jaiscloud-aws was not running"
-	@kubectl delete pods -l app=jaiscloud-lambda -n jaiscloud --ignore-not-found 2>/dev/null || true
-	@kubectl delete svc -l app=jaiscloud-lambda -n jaiscloud --ignore-not-found 2>/dev/null || true
-	@kubectl delete jobs -l app=jaiscloud-spark -n jaiscloud --ignore-not-found 2>/dev/null || true
+	@kubectl delete pods -l app=jaiscloud-lambda -n $(K8S_NAMESPACE_AWS) --ignore-not-found 2>/dev/null || true
+	@kubectl delete svc -l app=jaiscloud-lambda -n $(K8S_NAMESPACE_AWS) --ignore-not-found 2>/dev/null || true
+	@kubectl delete jobs -l app=jaiscloud-spark -n $(K8S_NAMESPACE_AWS) --ignore-not-found 2>/dev/null || true
 
 ##@ Containerized server lifecycle
 
@@ -554,20 +576,54 @@ up-docker: _check-docker-prereq ## Start JaisCloud + Postgres via docker-compose
 down-docker: ## Stop and remove docker-compose services
 	docker-compose down --remove-orphans
 
-up-k8s: _check-k8s-prereq ## Deploy JaisCloud + Postgres to K8s  (docker-desktop)
-	kubectl apply -f deploy/k8s/namespace.yaml
-	kubectl apply -f deploy/k8s/rbac.yaml
+# The up-k8s* targets apply the default manifests directly: they install the
+# shipped names (jaiscloud / jaiscloud-gcp / jaiscloud-data). For a custom
+# namespace/ServiceAccount layout use deploy/deploy.sh with NS_AWS/NS_GCP/NS_DATA/
+# SA_AWS/SA_GCP — it renders a kustomize overlay from the same base.
+up-k8s: _check-k8s-prereq ## Deploy the AWS substrate (JaisCloud + Postgres) to K8s  (docker-desktop; defaults only — custom names via deploy.sh)
+	kubectl apply -f deploy/k8s/namespace-data.yaml
 	kubectl apply -f deploy/k8s/postgres.yaml
+	kubectl apply -f deploy/k8s/namespace-aws.yaml
+	kubectl apply -f $(K8S_RBAC_SHARED)
+	kubectl apply -f $(K8S_RBAC_AWS)
 	kubectl apply -f deploy/k8s/jaiscloud.yaml
-	@echo "Waiting for jaiscloud deployment..."
-	@kubectl rollout status deployment/jaiscloud -n jaiscloud --timeout=120s
+	@echo "Waiting for postgres and jaiscloud deployments..."
+	@kubectl rollout status deployment/postgres -n $(K8S_NAMESPACE_DATA) --timeout=120s
+	@kubectl rollout status deployment/jaiscloud -n $(K8S_NAMESPACE_AWS) --timeout=120s
 	$(MAKE) _wait-docker
 
-down-k8s: ## Remove JaisCloud K8s deployment and clean up Lambda/Spark resources
-	@kubectl delete -f deploy/k8s/jaiscloud.yaml --ignore-not-found 2>/dev/null || true
-	@kubectl delete pods -l app=jaiscloud-lambda -n jaiscloud --ignore-not-found 2>/dev/null || true
-	@kubectl delete svc -l app=jaiscloud-lambda -n jaiscloud --ignore-not-found 2>/dev/null || true
-	@kubectl delete jobs -l app=jaiscloud-spark -n jaiscloud --ignore-not-found 2>/dev/null || true
+up-k8s-gcp: _check-k8s-prereq ## Deploy the GCP substrate (jaiscloud-gcp) to K8s; creates jaiscloud_gcp on an existing Postgres volume (defaults only — custom names via deploy.sh)
+	kubectl apply -f deploy/k8s/namespace-data.yaml
+	kubectl apply -f deploy/k8s/postgres.yaml
+	kubectl apply -f deploy/k8s/namespace-gcp.yaml
+	kubectl apply -f $(K8S_RBAC_SHARED)
+	kubectl apply -f $(K8S_RBAC_GCP)
+	@kubectl rollout status deployment/postgres -n $(K8S_NAMESPACE_DATA) --timeout=120s
+	$(MAKE) postgres-gcp-db
+	kubectl apply -f deploy/k8s/jaiscloud-gcp.yaml
+	@echo "Waiting for jaiscloud-gcp deployment..."
+	@kubectl rollout status deployment/jaiscloud-gcp -n $(K8S_NAMESPACE_GCP) --timeout=180s
+	@echo "GCP substrate ready in namespace $(K8S_NAMESPACE_GCP)"
+	@echo "  kubectl port-forward -n $(K8S_NAMESPACE_GCP) svc/jaiscloud-gcp 8080:8080"
+
+# postgres.yaml creates the `jaiscloud` database via POSTGRES_DB on a FRESH
+# volume; `jaiscloud_gcp` is not created by the manifest at all (no initdb
+# script), so it must be created explicitly before the GCP pod starts. This
+# idempotent target does that (up-k8s-gcp and deploy.sh --gcp run it).
+postgres-gcp-db: ## Create the jaiscloud_gcp database on the shared store (postgres.yaml only creates `jaiscloud`)
+	@kubectl -n $(K8S_NAMESPACE_DATA) exec deploy/postgres -- \
+	  psql -U jaiscloud -d postgres -tAc "SELECT 1 FROM pg_database WHERE datname='jaiscloud_gcp'" | grep -q 1 || \
+	  kubectl -n $(K8S_NAMESPACE_DATA) exec deploy/postgres -- \
+	    psql -U jaiscloud -d postgres -c 'CREATE DATABASE jaiscloud_gcp OWNER jaiscloud'
+
+down-k8s: ## Remove the AWS substrate workloads (keeps every PVC) and clean up its Lambda/Spark resources
+	@kubectl -n $(K8S_NAMESPACE_AWS) delete deployment jaiscloud --ignore-not-found 2>/dev/null || true
+	@kubectl -n $(K8S_NAMESPACE_AWS) delete service jaiscloud --ignore-not-found 2>/dev/null || true
+	@kubectl -n $(K8S_NAMESPACE_AWS) delete configmap jaiscloud-config --ignore-not-found 2>/dev/null || true
+	@kubectl -n $(K8S_NAMESPACE_AWS) delete secret jaiscloud-dsn --ignore-not-found 2>/dev/null || true
+	@kubectl delete pods -l app=jaiscloud-lambda -n $(K8S_NAMESPACE_AWS) --ignore-not-found 2>/dev/null || true
+	@kubectl delete svc -l app=jaiscloud-lambda -n $(K8S_NAMESPACE_AWS) --ignore-not-found 2>/dev/null || true
+	@kubectl delete jobs -l app=jaiscloud-spark -n $(K8S_NAMESPACE_AWS) --ignore-not-found 2>/dev/null || true
 
 ##@ Local Postgres  (standalone container, independent of docker-compose)
 
@@ -851,12 +907,12 @@ test-e2e-functions-k8s: _check-gcp-samples-prereq ## Cloud Functions source exec
 	@echo "Rebuilding $(GCP_IMAGE) from $$(git rev-parse --short HEAD) ..."
 	docker build --build-arg CLOUD=gcp -t $(GCP_IMAGE) -f Dockerfile .
 	docker push $(GCP_PUSH_FLAGS) $(GCP_IMAGE)
-	@kubectl -n $(K8S_NAMESPACE) set env deployment/jaiscloud-gcp \
+	@kubectl -n $(K8S_NAMESPACE_GCP) set env deployment/jaiscloud-gcp \
 	  JAISCLOUD_FUNCTIONS_EXECUTOR_MODE=k8s \
 	  JAISCLOUD_FUNCTIONS_EXECUTOR=lambda \
-	  JAISCLOUD_FUNCTIONS_CODE_URL=http://jaiscloud-gcp.jaiscloud.svc.cluster.local:8080/_jaiscloud
-	@kubectl -n $(K8S_NAMESPACE) rollout status deployment/jaiscloud-gcp --timeout=180s
-	JAISCLOUD_HOST=$(JAISCLOUD_HOST) FUNCTIONS_E2E_K8S=1 \
+	  JAISCLOUD_FUNCTIONS_CODE_URL=http://jaiscloud-gcp.$(K8S_NAMESPACE_GCP).svc.cluster.local:8080/_jaiscloud
+	@kubectl -n $(K8S_NAMESPACE_GCP) rollout status deployment/jaiscloud-gcp --timeout=180s
+	K8S_NAMESPACE=$(K8S_NAMESPACE_GCP) JAISCLOUD_HOST=$(JAISCLOUD_HOST) FUNCTIONS_E2E_K8S=1 \
 	  go test -v -tags functions_e2e -timeout 15m -run TestFunctionSourceCodeMountK8s ./tests/persistent_mode/gcp/functions/
 
 test-e2e-functions-framework-docker: _check-docker-prereq build-gcp ## Cloud Functions native Functions-Framework execution under Docker — tests/persistent_mode/gcp/functions/ (tag: functions_e2e)
@@ -882,20 +938,20 @@ test-e2e-functions-framework-k8s: _check-gcp-samples-prereq ## Cloud Functions n
 	@echo "Rebuilding $(GCP_IMAGE) from $$(git rev-parse --short HEAD) ..."
 	docker build --build-arg CLOUD=gcp -t $(GCP_IMAGE) -f Dockerfile .
 	docker push $(GCP_PUSH_FLAGS) $(GCP_IMAGE)
-	@kubectl -n $(K8S_NAMESPACE) set env deployment/jaiscloud-gcp \
+	@kubectl -n $(K8S_NAMESPACE_GCP) set env deployment/jaiscloud-gcp \
 	  JAISCLOUD_FUNCTIONS_EXECUTOR_MODE=k8s \
 	  JAISCLOUD_FUNCTIONS_EXECUTOR=functions-framework \
-	  JAISCLOUD_FUNCTIONS_CODE_URL=http://jaiscloud-gcp.jaiscloud.svc.cluster.local:8080/_jaiscloud \
+	  JAISCLOUD_FUNCTIONS_CODE_URL=http://jaiscloud-gcp.$(K8S_NAMESPACE_GCP).svc.cluster.local:8080/_jaiscloud \
 	  JAISCLOUD_FUNCTIONS_IMAGE=$(FUNCTIONS_FF_IMAGE_K8S)
-	@kubectl -n $(K8S_NAMESPACE) rollout status deployment/jaiscloud-gcp --timeout=180s
+	@kubectl -n $(K8S_NAMESPACE_GCP) rollout status deployment/jaiscloud-gcp --timeout=180s
 	@set -e; \
-	  kubectl -n $(K8S_NAMESPACE) port-forward deployment/jaiscloud-gcp $(JAISCLOUD_PORT):8080 > /tmp/jaiscloud-gcp-ff-port-forward.log 2>&1 & \
+	  kubectl -n $(K8S_NAMESPACE_GCP) port-forward deployment/jaiscloud-gcp $(JAISCLOUD_PORT):8080 > /tmp/jaiscloud-gcp-ff-port-forward.log 2>&1 & \
 	  pf=$$!; \
 	  trap 'kill $$pf 2>/dev/null || true' EXIT INT TERM; \
 	  n=0; until curl -sf $(JAISCLOUD_HOST)/_jaiscloud/health >/dev/null 2>&1; do \
 	    n=$$((n+1)); if [ $$n -ge 30 ]; then echo "ERROR: port-forward not ready"; cat /tmp/jaiscloud-gcp-ff-port-forward.log; exit 1; fi; sleep 1; \
 	  done; \
-	  JAISCLOUD_HOST=$(JAISCLOUD_HOST) FUNCTIONS_E2E_FF_IMAGE=$(FUNCTIONS_FF_IMAGE_K8S) \
+	  K8S_NAMESPACE=$(K8S_NAMESPACE_GCP) JAISCLOUD_HOST=$(JAISCLOUD_HOST) FUNCTIONS_E2E_FF_IMAGE=$(FUNCTIONS_FF_IMAGE_K8S) \
 	    go test -v -tags functions_e2e -timeout 15m -run TestFunctionsFramework ./tests/persistent_mode/gcp/functions/
 
 ##@ GCP integration tests
@@ -2309,11 +2365,12 @@ test-gcp-lifecycle: ## FC5 lifecycle + ownership harness (both transports, in-pr
 	go test -race -count=1 ./tests/gcplifecycle/...
 
 gcp-ci-preflight: ## Mirror CI's offline GCP gates before pushing (unit+race, lint, coverage, ledger, fidelity)
+	$(MAKE) --no-print-directory check-deploy-images check-integration-contract test-integration-preflight test-custom-names-render
 	go test -race -count=1 ./internal/gcp/... ./internal/sparkhelpers/... ./internal/k8shelpers/... ./internal/platform/... ./internal/executor/...
 	$(MAKE) --no-print-directory test-gcp-lifecycle test-gcp-provider-capture
 	$(MAKE) --no-print-directory test-gcp-coverage
 	$(MAKE) --no-print-directory gcp-status-behavioral-gate gcp-status-depth-gate
-	go test -race -count=1 ./tools/gcpstatus/... ./tools/lint/... ./tools/vulnallow/... ./tools/tfcapture/... ./tools/providerschema/... ./tools/tfcoverage/... ./tools/tfcorpus/... ./tools/tfdifferential/...
+	go test -race -count=1 . ./tools/gcpstatus/... ./tools/lint/... ./tools/vulnallow/... ./tools/tfcapture/... ./tools/providerschema/... ./tools/tfcoverage/... ./tools/tfcorpus/... ./tools/integrationcontract/... ./tools/tfdifferential/...
 	go run ./tools/lint/gcplint ./internal/gcp/... ./cmd/jaiscloud-gcp
 	$(MAKE) --no-print-directory check-gcp-field-coverage
 	$(MAKE) --no-print-directory check-gcp-terraform-coverage
@@ -2387,7 +2444,7 @@ test-e2e-iceberg-gcp: _check-iceberg-gcp-prereq build-gcp ## Iceberg-on-Hive tes
 
 test-e2e-lakehouse-k3d: _check-lakehouse-k3d-prereq _refresh-gcp-image ## Medallion ELT pipeline e2e on k3d — rebuilds the emulator image first (tag: lakehouse_e2e)
 	go clean -testcache
-	K8S_NAMESPACE=$(K8S_NAMESPACE) LAKEHOUSE_RECORDS=$(LAKEHOUSE_RECORDS) \
+	K8S_NAMESPACE=$(K8S_NAMESPACE_GCP) LAKEHOUSE_RECORDS=$(LAKEHOUSE_RECORDS) \
 	  go test -v -tags lakehouse_e2e -timeout 20m ./tests/persistent_mode/gcp/lakehouse/
 
 # Dataproc Iceberg-on-HMS gate (SPK1): a Dataproc-submitted Spark job uses the
@@ -2398,37 +2455,38 @@ test-e2e-lakehouse-k3d: _check-lakehouse-k3d-prereq _refresh-gcp-image ## Medall
 # (SKIP_GCP_IMAGE_REBUILD=1).
 test-e2e-iceberg-k3d: _check-iceberg-k3d-prereq _refresh-gcp-image ## Dataproc Iceberg-on-HMS batch e2e on k3d — applies deploy/k8s/jaiscloud-gcp.yaml (HMS thrift port) (tag: iceberg_k3d_e2e; SKIP_GCP_IMAGE_REBUILD=1 to reuse the deployed emulator)
 	kubectl apply -f deploy/k8s/jaiscloud-gcp.yaml
-	kubectl -n $(K8S_NAMESPACE) rollout status deployment/jaiscloud-gcp --timeout=180s
+	@$(MAKE) --no-print-directory _use-gcp-image
 	go clean -testcache
-	K8S_NAMESPACE=$(K8S_NAMESPACE) \
+	K8S_NAMESPACE=$(K8S_NAMESPACE_GCP) \
 	  go test -v -tags iceberg_k3d_e2e -run '^TestDataprocIcebergK3d$$' -timeout 25m ./tests/persistent_mode/gcp/iceberg-k3d/
 
 test-e2e-iceberg-streaming-k3d: _check-iceberg-k3d-prereq _refresh-gcp-image ## Dataproc Iceberg streaming-sink e2e on k3d: Kafka source -> Iceberg table via HMS catalog (SPK2; applies deploy/k8s/jaiscloud-gcp.yaml; needs JAISCLOUD_KAFKA_BROKER_MODE=k8s; tag: iceberg_k3d_e2e; SKIP_GCP_IMAGE_REBUILD=1 to reuse the deployed emulator)
 	kubectl apply -f deploy/k8s/jaiscloud-gcp.yaml
-	kubectl -n $(K8S_NAMESPACE) rollout status deployment/jaiscloud-gcp --timeout=180s
+	@$(MAKE) --no-print-directory _use-gcp-image
 	go clean -testcache
-	K8S_NAMESPACE=$(K8S_NAMESPACE) \
+	K8S_NAMESPACE=$(K8S_NAMESPACE_GCP) \
 	  go test -v -tags iceberg_k3d_e2e -run '^TestDataprocIcebergStreamingK3d$$' -timeout 35m ./tests/persistent_mode/gcp/iceberg-k3d/
 
 test-e2e-gcp-samples-k3d: _check-gcp-samples-prereq _refresh-gcp-image ## Spring Cloud GCP sample apps e2e on k3d (tag: gcpsamples_e2e; run `make docker-gcp-samples` first; SKIP_GCP_IMAGE_REBUILD=1 to reuse the deployed emulator)
 	go clean -testcache
-	K8S_NAMESPACE=$(K8S_NAMESPACE) \
+	K8S_NAMESPACE=$(K8S_NAMESPACE_GCP) \
 	  go test -v -tags gcpsamples_e2e -timeout 15m ./tests/persistent_mode/gcp/gcpsamples/
 
 test-dataproc-streaming-k8s: _check-dataproc-streaming-k8s-prereq _refresh-gcp-image ## Real-K8s Dataproc Structured Streaming smoke on k3d (tag: dataproc_streaming_e2e; SKIP_GCP_IMAGE_REBUILD=1 to reuse the deployed emulator)
 	go clean -testcache
-	K8S_NAMESPACE=$(K8S_NAMESPACE) \
+	K8S_NAMESPACE=$(K8S_NAMESPACE_GCP) \
 	  go test -v -tags dataproc_streaming_e2e -run '^TestDataprocStreamingK3d$$' -timeout 20m ./tests/persistent_mode/gcp/dataproc-streaming/
 
 test-dataproc-streaming-kafka: _check-dataproc-streaming-k8s-prereq _refresh-gcp-image ## Real-K8s Dataproc Kafka-source streaming e2e on k3d (tag: dataproc_streaming_e2e; needs JAISCLOUD_KAFKA_BROKER_MODE=k8s; SKIP_GCP_IMAGE_REBUILD=1 to reuse the deployed emulator)
 	go clean -testcache
-	K8S_NAMESPACE=$(K8S_NAMESPACE) \
+	K8S_NAMESPACE=$(K8S_NAMESPACE_GCP) \
 	  go test -v -tags dataproc_streaming_e2e -run '^TestDataprocKafkaStreamingK3d$$' -timeout 25m ./tests/persistent_mode/gcp/dataproc-streaming/
 
-test-dataproc-namespace-k8s: _check-dataproc-namespace-k8s-prereq _refresh-gcp-image ## Real-K8s Dataproc per-cluster namespace isolation + teardown e2e on k3d (tag: dataproc_namespace_e2e; SKIP_GCP_IMAGE_REBUILD=1 to reuse the deployed emulator). Applies deploy/k8s/rbac.yaml because namespace create/delete needs the jaiscloud-namespace-admin ClusterRoleBinding.
+test-dataproc-namespace-k8s: _check-dataproc-namespace-k8s-prereq _refresh-gcp-image ## Real-K8s Dataproc per-cluster namespace isolation + teardown e2e on k3d (tag: dataproc_namespace_e2e; SKIP_GCP_IMAGE_REBUILD=1 to reuse the deployed emulator). Applies $(K8S_RBAC_SHARED) + $(K8S_RBAC_GCP) because namespace create/delete needs the jaiscloud-namespace-admin-gcp ClusterRoleBinding.
 	go clean -testcache
-	kubectl apply -f deploy/k8s/rbac.yaml
-	K8S_NAMESPACE=$(K8S_NAMESPACE) DATAPROC_NAMESPACE_E2E=1 \
+	kubectl apply -f $(K8S_RBAC_SHARED)
+	kubectl apply -f $(K8S_RBAC_GCP)
+	K8S_NAMESPACE=$(K8S_NAMESPACE_GCP) DATAPROC_NAMESPACE_E2E=1 \
 	  go test -v -tags dataproc_namespace_e2e -run '^TestDataprocNamespaceIsolationK3d$$' -timeout 30m ./tests/persistent_mode/gcp/dataproc/
 
 # The whole Dataproc-on-GKE demo as one lifecycle (DGD6): Terraform on the host
@@ -2447,7 +2505,7 @@ test-dataproc-namespace-k8s: _check-dataproc-namespace-k8s-prereq _refresh-gcp-i
 # pull from and a real Spark execution. The dispatch-only job in
 # .github/workflows/gcp-terraform.yml is where CI runs it.
 test-e2e-dpgke-demo-k3d: _check-dpgke-demo-k3d-prereq ## Full Dataproc-on-GKE demo lifecycle on k3d — Terraform → Helm → in-cluster Java submitter → assertions → uninstall/destroy (SKIP_GCP_IMAGE_REBUILD=1 to reuse the deployed emulator)
-	K8S_NAMESPACE=$(K8S_NAMESPACE) \
+	K8S_NAMESPACE=$(K8S_NAMESPACE_GCP) \
 	  GCP_REGISTRY=$(GCP_REGISTRY) \
 	  DPGKE_GCP_IMAGE=$(GCP_IMAGE) \
 	  SKIP_GCP_IMAGE_REBUILD=$(SKIP_GCP_IMAGE_REBUILD) \
@@ -2458,10 +2516,11 @@ test-e2e-dpgke-demo-k3d: _check-dpgke-demo-k3d-prereq ## Full Dataproc-on-GKE de
 	  DPGKE_SPARK_IMAGE=$(DPGKE_SPARK_IMAGE) \
 	  ./demo/dpgke-lifecycle/scripts/e2e-k3d.sh
 
-test-managedkafka-broker-k8s: _check-managedkafka-broker-k8s-prereq _refresh-gcp-image ## Real-K8s Managed Kafka broker lifecycle smoke on k3d (tag: managedkafka_broker_e2e; SKIP_GCP_IMAGE_REBUILD=1 to reuse the deployed emulator). Applies deploy/k8s/rbac.yaml because per-cluster namespace create/delete needs the jaiscloud-namespace-admin ClusterRoleBinding.
+test-managedkafka-broker-k8s: _check-managedkafka-broker-k8s-prereq _refresh-gcp-image ## Real-K8s Managed Kafka broker lifecycle smoke on k3d (tag: managedkafka_broker_e2e; SKIP_GCP_IMAGE_REBUILD=1 to reuse the deployed emulator). Applies $(K8S_RBAC_SHARED) + $(K8S_RBAC_GCP) because per-cluster namespace create/delete needs the jaiscloud-namespace-admin-gcp ClusterRoleBinding.
 	go clean -testcache
-	kubectl apply -f deploy/k8s/rbac.yaml
-	K8S_NAMESPACE=$(K8S_NAMESPACE) \
+	kubectl apply -f $(K8S_RBAC_SHARED)
+	kubectl apply -f $(K8S_RBAC_GCP)
+	K8S_NAMESPACE=$(K8S_NAMESPACE_GCP) \
 	  go test -v -tags managedkafka_broker_e2e -timeout 20m ./tests/persistent_mode/gcp/managedkafka-broker/
 
 test-managedkafka-broker-docker: _check-docker-prereq build-gcp ## Local-Docker Managed Kafka broker lifecycle + data-plane smoke — tests/persistent_mode/gcp/managedkafka-broker/ (tag: managedkafka_broker_e2e; needs the local Docker daemon and the docker group on the invoking shell)
@@ -2481,9 +2540,9 @@ test-managedkafka-broker-docker: _check-docker-prereq build-gcp ## Local-Docker 
 
 test-e2e-cloudrun-k8s: _check-gcp-samples-prereq _refresh-gcp-image ## Cloud Run k8s execution e2e on k3d — tests/persistent_mode/gcp/cloudrun/ (tag: cloudrun_e2e; SKIP_GCP_IMAGE_REBUILD=1 to reuse the deployed emulator)
 	go clean -testcache
-	@kubectl -n $(K8S_NAMESPACE) set env deployment/jaiscloud-gcp JAISCLOUD_CLOUDRUN_EXECUTOR_MODE=k8s
-	@kubectl -n $(K8S_NAMESPACE) rollout status deployment/jaiscloud-gcp --timeout=180s
-	K8S_NAMESPACE=$(K8S_NAMESPACE) CLOUDRUN_E2E_K8S=1 \
+	@kubectl -n $(K8S_NAMESPACE_GCP) set env deployment/jaiscloud-gcp JAISCLOUD_CLOUDRUN_EXECUTOR_MODE=k8s
+	@kubectl -n $(K8S_NAMESPACE_GCP) rollout status deployment/jaiscloud-gcp --timeout=180s
+	K8S_NAMESPACE=$(K8S_NAMESPACE_GCP) CLOUDRUN_E2E_K8S=1 \
 	  go test -v -tags cloudrun_e2e -timeout 20m ./tests/persistent_mode/gcp/cloudrun/
 
 test-e2e-cloudrun-docker: _check-docker-prereq build-gcp ## Cloud Run container execution under Docker — tests/persistent_mode/gcp/cloudrun/ (tag: cloudrun_e2e; needs the local Docker daemon and the docker group on the invoking shell)
@@ -2503,12 +2562,12 @@ test-e2e-cloudrun-docker: _check-docker-prereq build-gcp ## Cloud Run container 
 
 test-e2e-cloudrun-browser: _check-gcp-samples-prereq _refresh-gcp-image ## Cloud Run data-plane browser reachability on k3d (SPK4) — tests/persistent_mode/gcp/cloudrun/ (tag: cloudrun_e2e; synthesizes *.localhost authorities so a browser can reach the data plane; SKIP_GCP_IMAGE_REBUILD=1 to reuse the deployed emulator)
 	go clean -testcache
-	@kubectl -n $(K8S_NAMESPACE) set env deployment/jaiscloud-gcp \
+	@kubectl -n $(K8S_NAMESPACE_GCP) set env deployment/jaiscloud-gcp \
 	  JAISCLOUD_CLOUDRUN_EXECUTOR_MODE=k8s \
 	  JAISCLOUD_CLOUDRUN_URL_SUFFIX=$(CLOUDRUN_BROWSER_SUFFIX) \
 	  JAISCLOUD_CLOUDRUN_URL_PORT=$(CLOUDRUN_BROWSER_PORT)
-	@kubectl -n $(K8S_NAMESPACE) rollout status deployment/jaiscloud-gcp --timeout=180s
-	K8S_NAMESPACE=$(K8S_NAMESPACE) CLOUDRUN_E2E_BROWSER=1 \
+	@kubectl -n $(K8S_NAMESPACE_GCP) rollout status deployment/jaiscloud-gcp --timeout=180s
+	K8S_NAMESPACE=$(K8S_NAMESPACE_GCP) CLOUDRUN_E2E_BROWSER=1 \
 	  CLOUDRUN_BROWSER_SUFFIX=$(CLOUDRUN_BROWSER_SUFFIX) CLOUDRUN_BROWSER_PORT=$(CLOUDRUN_BROWSER_PORT) \
 	  go test -v -tags cloudrun_e2e -run TestCloudRunBrowserReachability -timeout 15m ./tests/persistent_mode/gcp/cloudrun/
 
@@ -2522,17 +2581,17 @@ test-e2e-cloudrun-browser: _check-gcp-samples-prereq _refresh-gcp-image ## Cloud
 test-e2e-cloudrun-browser-lan: _check-gcp-samples-prereq _refresh-gcp-image ## Cloud Run data-plane LAN (nip.io) browser reachability on k3d (SPK7) — tests/persistent_mode/gcp/cloudrun/ (tag: cloudrun_e2e; implements the recording take's LAN path; SKIP_GCP_IMAGE_REBUILD=1 to reuse the deployed emulator)
 	@test -n "$(CLOUDRUN_BROWSER_LAN_IP)" || (echo "ERROR: could not determine the host LAN IP; pass CLOUDRUN_BROWSER_LAN_IP=<ip>"; exit 1)
 	go clean -testcache
-	@kubectl -n $(K8S_NAMESPACE) set env deployment/jaiscloud-gcp \
+	@kubectl -n $(K8S_NAMESPACE_GCP) set env deployment/jaiscloud-gcp \
 	  JAISCLOUD_CLOUDRUN_EXECUTOR_MODE=k8s \
 	  JAISCLOUD_CLOUDRUN_URL_SUFFIX=run.$(CLOUDRUN_BROWSER_LAN_IP).nip.io \
 	  JAISCLOUD_CLOUDRUN_URL_PORT=$(CLOUDRUN_BROWSER_LAN_PORT)
-	@kubectl -n $(K8S_NAMESPACE) rollout status deployment/jaiscloud-gcp --timeout=180s
-	K8S_NAMESPACE=$(K8S_NAMESPACE) CLOUDRUN_E2E_BROWSER_LAN=1 \
+	@kubectl -n $(K8S_NAMESPACE_GCP) rollout status deployment/jaiscloud-gcp --timeout=180s
+	K8S_NAMESPACE=$(K8S_NAMESPACE_GCP) CLOUDRUN_E2E_BROWSER_LAN=1 \
 	  CLOUDRUN_BROWSER_LAN_IP=$(CLOUDRUN_BROWSER_LAN_IP) CLOUDRUN_BROWSER_LAN_PORT=$(CLOUDRUN_BROWSER_LAN_PORT) \
 	  go test -v -tags cloudrun_e2e -run TestCloudRunBrowserLANReachability -timeout 15m ./tests/persistent_mode/gcp/cloudrun/
 
 demo-browser-lan: ## Serve the Cloud Run data plane on the host LAN address for the recording browser (SPK7) — scripts/demo-browser-lan.sh (keeps the 0.0.0.0 forward up)
-	K8S_NAMESPACE=$(K8S_NAMESPACE) DEMO_LAN_PORT=$(CLOUDRUN_BROWSER_LAN_PORT) DEMO_LAN_IP=$(CLOUDRUN_BROWSER_LAN_IP) \
+	K8S_NAMESPACE=$(K8S_NAMESPACE_GCP) DEMO_LAN_PORT=$(CLOUDRUN_BROWSER_LAN_PORT) DEMO_LAN_IP=$(CLOUDRUN_BROWSER_LAN_IP) \
 	  scripts/demo-browser-lan.sh --check
 
 record-gcp-demo: ## Capture a real-browser demo take from an isolated Xvfb display (SPK7) — scripts/demo-record.sh; DEMO_RECORD_URL=<leaderboard url> and DEMO_RECORD_DURATION=<secs>
@@ -2612,14 +2671,14 @@ test-e2e-dataproc-docker: _check-docker-prereq _check-dataproc-docker-prereq bui
 
 test-e2e-eventarc-k8s: _check-gcp-samples-prereq _refresh-gcp-image ## Eventarc delivery e2e on k3d — tests/persistent_mode/gcp/eventarc/ (tag: eventarc_e2e; SKIP_GCP_IMAGE_REBUILD=1 to reuse the deployed emulator)
 	go clean -testcache
-	K8S_NAMESPACE=$(K8S_NAMESPACE) EVENTARC_E2E_K8S=1 \
+	K8S_NAMESPACE=$(K8S_NAMESPACE_GCP) EVENTARC_E2E_K8S=1 \
 	  go test -v -tags eventarc_e2e -timeout 20m ./tests/persistent_mode/gcp/eventarc/
 
 test-e2e-scheduler-k8s: _check-gcp-samples-prereq _refresh-gcp-image ## Cloud Scheduler → Dataproc submit hop e2e on k3d (SPK3) — tests/persistent_mode/gcp/scheduler/ (tag: scheduler_e2e; sets the Spark executor to mock so the gate is about the hop, not a Spark run; SKIP_GCP_IMAGE_REBUILD=1 to reuse the deployed emulator)
 	go clean -testcache
-	@kubectl -n $(K8S_NAMESPACE) set env deployment/jaiscloud-gcp JAISCLOUD_SPARK_EXECUTOR_MODE=mock
-	@kubectl -n $(K8S_NAMESPACE) rollout status deployment/jaiscloud-gcp --timeout=180s
-	K8S_NAMESPACE=$(K8S_NAMESPACE) SCHEDULER_E2E_K8S=1 \
+	@kubectl -n $(K8S_NAMESPACE_GCP) set env deployment/jaiscloud-gcp JAISCLOUD_SPARK_EXECUTOR_MODE=mock
+	@kubectl -n $(K8S_NAMESPACE_GCP) rollout status deployment/jaiscloud-gcp --timeout=180s
+	K8S_NAMESPACE=$(K8S_NAMESPACE_GCP) SCHEDULER_E2E_K8S=1 \
 	  go test -v -tags scheduler_e2e -timeout 15m ./tests/persistent_mode/gcp/scheduler/
 
 # SPK6 — whole-spine verification on the demo's exact combined config. Runs the
@@ -2631,21 +2690,66 @@ test-e2e-scheduler-k8s: _check-gcp-samples-prereq _refresh-gcp-image ## Cloud Sc
 # harnesses poll operations.get so both modes pass). See
 # scripts/demo-spine-verify.sh for the config and the per-suite order.
 test-e2e-demo-spine-k3d: _check-gcp-samples-prereq _refresh-gcp-image ## Whole-spine verification on the demo's combined config (SPK6) — scripts/demo-spine-verify.sh; SKIP_GCP_IMAGE_REBUILD=1 to reuse the deployed emulator
-	K8S_NAMESPACE=$(K8S_NAMESPACE) \
+	K8S_NAMESPACE=$(K8S_NAMESPACE_GCP) \
 	  CLOUDRUN_BROWSER_SUFFIX=$(CLOUDRUN_BROWSER_SUFFIX) \
 	  CLOUDRUN_BROWSER_PORT=$(CLOUDRUN_BROWSER_PORT) \
 	  scripts/demo-spine-verify.sh
 
+test-istio-smoke: ## Istio front-door gate: GKE-not-Kafka, GCS, gRPC over h2c and STS through the gateway (needs deploy/k8s/istio installed)
+	./scripts/istio-smoke.sh
+
+gen-integration-contract: ## Regenerate docs/gcp/integration/contract.yaml from the manifests + playbook
+	go run ./tools/integrationcontract
+
+check-integration-contract: ## Fail when the committed integration contract is stale
+	go run ./tools/integrationcontract -check
+
+integration-preflight: ## READ-ONLY cluster inspection for agents (PREFLIGHT_FLAGS="--json --strict")
+	scripts/integration-preflight.sh $(PREFLIGHT_FLAGS)
+
+test-integration-preflight: ## Offline preflight harness (fake kubectl: leaks, legacy, env/envFrom, store workloads + tri-state DB, effective RBAC, VAP match, DNS targets, CA issuer labels; no cluster, no GNU timeout)
+	scripts/integration-preflight-test.sh
+
+test-custom-names-render: ## Offline proof that NS_*/SA_* install a custom layout via rendered overlays, and defaults still render to the shipped names
+	scripts/custom-names-render-test.sh
+
+check-deploy-images: ## Fail if a substrate image or the Spark image points at a private/local registry
+	@if grep -nE '^[[:space:]]+image:[[:space:]]+(10\.|192\.168\.|172\.(1[6-9]|2[0-9]|3[01])\.|localhost)' \
+	    deploy/k8s/jaiscloud.yaml deploy/k8s/jaiscloud-gcp.yaml; then \
+	  echo "ERROR: a substrate image points at a private/local registry — the manifests must install from a public tag"; \
+	  exit 1; \
+	fi
+	@spark_image=$$(awk '/name: JAISCLOUD_K8S_SPARK_IMAGE/ {getline; sub(/^[[:space:]]*value:[[:space:]]*/, ""); print; exit}' deploy/k8s/jaiscloud-gcp.yaml); \
+	if printf '%s' "$$spark_image" | grep -qE '^(10\.|192\.168\.|172\.(1[6-9]|2[0-9]|3[01])\.|localhost)'; then \
+	  echo "ERROR: JAISCLOUD_K8S_SPARK_IMAGE='$$spark_image' points at a private/local registry — Dataproc driver Pods would ImagePullBackOff on a cluster that cannot reach it"; \
+	  exit 1; \
+	fi
+	@echo "ok: substrate images use public tags; JAISCLOUD_K8S_SPARK_IMAGE defaults to a public image"
+
+test-dual-substrate-k8s: ## Dual-substrate isolation gate — writes GCP state, runs `deploy.sh --reset`, asserts the GCP object, `jaiscloud_gcp` and the GCP PVCs survived (destructive: needs ALLOW_RESET=1)
+	NS_AWS=$(K8S_NAMESPACE_AWS) NS_GCP=$(K8S_NAMESPACE_GCP) NS_DATA=$(K8S_NAMESPACE_DATA) \
+	  GATE_ALLOW_RESET=$(ALLOW_RESET) \
+	  scripts/dual-substrate-gate.sh
+
+test-rbac-isolation-k8s: ## Admission gate — proves each substrate ServiceAccount can delete only its own labelled namespaces (needs ALLOW_RBAC=1, K8s >= 1.30, the policy applied)
+	GATE_ALLOW_RBAC=$(ALLOW_RBAC) \
+	  scripts/rbac-isolation-gate.sh
+
+test-lifecycle-k8s: ## Park/resume/switch gate — seeds an S3 and a GCS object, then proves park keeps data and namespaces and resume/switch keep both instances' state (compute-destructive: needs GATE_ALLOW_LIFECYCLE=1; both substrates installed from this branch)
+	GATE_ALLOW_LIFECYCLE=$(GATE_ALLOW_LIFECYCLE) \
+	  NS_AWS=$(K8S_NAMESPACE_AWS) NS_GCP=$(K8S_NAMESPACE_GCP) NS_DATA=$(K8S_NAMESPACE_DATA) \
+	  scripts/lifecycle-gate.sh
+
 test-e2e-cloudrun-java: _check-gcp-samples-prereq _refresh-gcp-image ## OPTIONAL floci-gcp Java interop smoke (not a compliance gate) against the k3d emulator with Cloud Run k8s execution, through the in-cluster portmux (asserts CloudRunTest 7/7; JAVA_HOME/mvn on PATH — see AGENTS.md)
 	@test -d $(FLOCI_COMPAT_DIR)/sdk-test-java || (echo "ERROR: $(FLOCI_COMPAT_DIR)/sdk-test-java not found — set FLOCI_COMPAT_DIR"; exit 1)
 	@command -v mvn >/dev/null 2>&1 || (echo "ERROR: mvn not on PATH — export JAVA_HOME and /tmp/opencode/toolchain/maven/bin (see AGENTS.md)"; exit 1)
-	@kubectl -n $(K8S_NAMESPACE) set env deployment/jaiscloud-gcp \
+	@kubectl -n $(K8S_NAMESPACE_GCP) set env deployment/jaiscloud-gcp \
 	  JAISCLOUD_CLOUDRUN_EXECUTOR_MODE=k8s \
 	  JAISCLOUD_CLOUDRUN_URL_SUFFIX=$(CLOUDRUN_URL_SUFFIX) \
 	  JAISCLOUD_CLOUDRUN_URL_PORT=$(CLOUDRUN_URL_PORT)
-	@kubectl -n $(K8S_NAMESPACE) rollout status deployment/jaiscloud-gcp --timeout=180s
+	@kubectl -n $(K8S_NAMESPACE_GCP) rollout status deployment/jaiscloud-gcp --timeout=180s
 	@set -e; \
-	  kubectl -n $(K8S_NAMESPACE) port-forward svc/portmux $(CLOUDRUN_URL_PORT):$(CLOUDRUN_URL_PORT) >/tmp/cloudrun-portmux.log 2>&1 & \
+	  kubectl -n $(K8S_NAMESPACE_GCP) port-forward svc/portmux $(CLOUDRUN_URL_PORT):$(CLOUDRUN_URL_PORT) >/tmp/cloudrun-portmux.log 2>&1 & \
 	  pf=$$!; \
 	  trap 'kill $$pf 2>/dev/null || true' EXIT INT TERM; \
 	  n=0; until curl -sf http://127.0.0.1:$(CLOUDRUN_URL_PORT)/_jaiscloud/health >/dev/null 2>&1; do \
@@ -2683,9 +2787,17 @@ _refresh-gcp-image:
 	  echo "Rebuilding $(GCP_IMAGE) from $$(git rev-parse --short HEAD) ..."; \
 	  docker build --build-arg CLOUD=gcp -t $(GCP_IMAGE) -f Dockerfile . && \
 	  docker push $(GCP_PUSH_FLAGS) $(GCP_IMAGE) && \
-	  kubectl -n $(K8S_NAMESPACE) rollout restart deployment/jaiscloud-gcp && \
-	  kubectl -n $(K8S_NAMESPACE) rollout status deployment/jaiscloud-gcp --timeout=180s; \
+	  $(MAKE) --no-print-directory _use-gcp-image; \
 	fi
+
+# Point the deployed emulator at the image this checkout built. Needed because
+# the manifest defaults to the published image (so first-time users can install
+# without a private registry) while the e2e targets must run the local build.
+_use-gcp-image:
+	@kubectl -n $(K8S_NAMESPACE_GCP) set image deployment/jaiscloud-gcp jaiscloud-gcp=$(GCP_IMAGE)
+	@kubectl -n $(K8S_NAMESPACE_GCP) patch deployment/jaiscloud-gcp --type=json \
+	  -p '[{"op":"replace","path":"/spec/template/spec/containers/0/imagePullPolicy","value":"IfNotPresent"}]' >/dev/null
+	@kubectl -n $(K8S_NAMESPACE_GCP) rollout status deployment/jaiscloud-gcp --timeout=180s
 
 ##@ Aggregate test targets
 
@@ -2754,8 +2866,8 @@ _check-docker-prereq:
 	  (echo "ERROR: Docker daemon is not running"; exit 1)
 
 _check-k8s-prereq:
-	@kubectl --context docker-desktop cluster-info > /dev/null 2>&1 || \
-	  (echo "ERROR: docker-desktop Kubernetes is not reachable — enable Kubernetes in Docker Desktop"; exit 1)
+	@kubectl cluster-info > /dev/null 2>&1 || \
+	  (echo "ERROR: Kubernetes is not reachable from the current kubectl context — point kubectl at your cluster (docker-desktop, k3d, kind)"; exit 1)
 
 _check-iceberg-prereq:
 	@docker image inspect $(SPARK_E2E_ICEBERG_IMAGE) > /dev/null 2>&1 || \
@@ -2774,37 +2886,37 @@ _check-dataproc-docker-prereq:
 
 _check-lakehouse-k3d-prereq:
 	@command -v kubectl > /dev/null 2>&1 || (echo "ERROR: kubectl not found — install kubectl and start a k3d cluster"; exit 1)
-	@kubectl get namespace $(K8S_NAMESPACE) > /dev/null 2>&1 || \
-	  (echo "ERROR: namespace '$(K8S_NAMESPACE)' not found — start the cluster and deploy the emulator"; exit 1)
-	@kubectl -n $(K8S_NAMESPACE) get svc jaiscloud-gcp > /dev/null 2>&1 || \
+	@kubectl get namespace $(K8S_NAMESPACE_GCP) > /dev/null 2>&1 || \
+	  (echo "ERROR: namespace '$(K8S_NAMESPACE_GCP)' not found — start the cluster and deploy the emulator"; exit 1)
+	@kubectl -n $(K8S_NAMESPACE_GCP) get svc jaiscloud-gcp > /dev/null 2>&1 || \
 	  (echo "ERROR: svc/jaiscloud-gcp not found — kubectl apply -f deploy/k8s/jaiscloud-gcp.yaml"; exit 1)
 
 _check-iceberg-k3d-prereq:
 	@command -v kubectl > /dev/null 2>&1 || (echo "ERROR: kubectl not found — install kubectl and start a k3d cluster"; exit 1)
-	@kubectl get namespace $(K8S_NAMESPACE) > /dev/null 2>&1 || \
-	  (echo "ERROR: namespace '$(K8S_NAMESPACE)' not found — start the cluster and deploy the emulator"; exit 1)
-	@kubectl -n $(K8S_NAMESPACE) get svc jaiscloud-gcp > /dev/null 2>&1 || \
+	@kubectl get namespace $(K8S_NAMESPACE_GCP) > /dev/null 2>&1 || \
+	  (echo "ERROR: namespace '$(K8S_NAMESPACE_GCP)' not found — start the cluster and deploy the emulator"; exit 1)
+	@kubectl -n $(K8S_NAMESPACE_GCP) get svc jaiscloud-gcp > /dev/null 2>&1 || \
 	  (echo "ERROR: svc/jaiscloud-gcp not found — kubectl apply -f deploy/k8s/jaiscloud-gcp.yaml"; exit 1)
 
 _check-gcp-samples-prereq:
 	@command -v kubectl > /dev/null 2>&1 || (echo "ERROR: kubectl not found — install kubectl and start a k3d cluster"; exit 1)
-	@kubectl get namespace $(K8S_NAMESPACE) > /dev/null 2>&1 || \
-	  (echo "ERROR: namespace '$(K8S_NAMESPACE)' not found — start the cluster and deploy the emulator"; exit 1)
-	@kubectl -n $(K8S_NAMESPACE) get svc jaiscloud-gcp > /dev/null 2>&1 || \
+	@kubectl get namespace $(K8S_NAMESPACE_GCP) > /dev/null 2>&1 || \
+	  (echo "ERROR: namespace '$(K8S_NAMESPACE_GCP)' not found — start the cluster and deploy the emulator"; exit 1)
+	@kubectl -n $(K8S_NAMESPACE_GCP) get svc jaiscloud-gcp > /dev/null 2>&1 || \
 	  (echo "ERROR: svc/jaiscloud-gcp not found — kubectl apply -f deploy/k8s/jaiscloud-gcp.yaml"; exit 1)
 
 _check-dataproc-streaming-k8s-prereq:
 	@command -v kubectl > /dev/null 2>&1 || (echo "ERROR: kubectl not found — install kubectl and start a k3d cluster"; exit 1)
-	@kubectl get namespace $(K8S_NAMESPACE) > /dev/null 2>&1 || \
-	  (echo "ERROR: namespace '$(K8S_NAMESPACE)' not found — start the cluster and deploy the emulator"; exit 1)
-	@kubectl -n $(K8S_NAMESPACE) get svc jaiscloud-gcp > /dev/null 2>&1 || \
+	@kubectl get namespace $(K8S_NAMESPACE_GCP) > /dev/null 2>&1 || \
+	  (echo "ERROR: namespace '$(K8S_NAMESPACE_GCP)' not found — start the cluster and deploy the emulator"; exit 1)
+	@kubectl -n $(K8S_NAMESPACE_GCP) get svc jaiscloud-gcp > /dev/null 2>&1 || \
 	  (echo "ERROR: svc/jaiscloud-gcp not found — kubectl apply -f deploy/k8s/jaiscloud-gcp.yaml"; exit 1)
 
 _check-dataproc-namespace-k8s-prereq:
 	@command -v kubectl > /dev/null 2>&1 || (echo "ERROR: kubectl not found — install kubectl and start a k3d cluster"; exit 1)
-	@kubectl get namespace $(K8S_NAMESPACE) > /dev/null 2>&1 || \
-	  (echo "ERROR: namespace '$(K8S_NAMESPACE)' not found — start the cluster and deploy the emulator"; exit 1)
-	@kubectl -n $(K8S_NAMESPACE) get svc jaiscloud-gcp > /dev/null 2>&1 || \
+	@kubectl get namespace $(K8S_NAMESPACE_GCP) > /dev/null 2>&1 || \
+	  (echo "ERROR: namespace '$(K8S_NAMESPACE_GCP)' not found — start the cluster and deploy the emulator"; exit 1)
+	@kubectl -n $(K8S_NAMESPACE_GCP) get svc jaiscloud-gcp > /dev/null 2>&1 || \
 	  (echo "ERROR: svc/jaiscloud-gcp not found — kubectl apply -f deploy/k8s/jaiscloud-gcp.yaml"; exit 1)
 
 # DGD6's prereq is deliberately soft: a missing tool or cluster is a SKIP (the
@@ -2815,15 +2927,15 @@ _check-dataproc-namespace-k8s-prereq:
 _check-dpgke-demo-k3d-prereq:
 	@if ! command -v kubectl > /dev/null 2>&1; then \
 	  echo "SKIP: kubectl not found — install kubectl and start a k3d cluster"; \
-	elif ! kubectl get namespace $(K8S_NAMESPACE) > /dev/null 2>&1; then \
-	  echo "SKIP: namespace '$(K8S_NAMESPACE)' not found — start the k3d cluster and deploy the emulator"; \
-	elif ! kubectl -n $(K8S_NAMESPACE) get svc jaiscloud-gcp > /dev/null 2>&1; then \
+	elif ! kubectl get namespace $(K8S_NAMESPACE_GCP) > /dev/null 2>&1; then \
+	  echo "SKIP: namespace '$(K8S_NAMESPACE_GCP)' not found — start the k3d cluster and deploy the emulator"; \
+	elif ! kubectl -n $(K8S_NAMESPACE_GCP) get svc jaiscloud-gcp > /dev/null 2>&1; then \
 	  echo "SKIP: svc/jaiscloud-gcp not found — kubectl apply -f deploy/k8s/jaiscloud-gcp.yaml"; \
 	fi
 
 _check-managedkafka-broker-k8s-prereq:
 	@command -v kubectl > /dev/null 2>&1 || (echo "ERROR: kubectl not found — install kubectl and start a k3d cluster"; exit 1)
-	@kubectl get namespace $(K8S_NAMESPACE) > /dev/null 2>&1 || \
-	  (echo "ERROR: namespace '$(K8S_NAMESPACE)' not found — start the cluster and deploy the emulator"; exit 1)
-	@kubectl -n $(K8S_NAMESPACE) get svc jaiscloud-gcp > /dev/null 2>&1 || \
+	@kubectl get namespace $(K8S_NAMESPACE_GCP) > /dev/null 2>&1 || \
+	  (echo "ERROR: namespace '$(K8S_NAMESPACE_GCP)' not found — start the cluster and deploy the emulator"; exit 1)
+	@kubectl -n $(K8S_NAMESPACE_GCP) get svc jaiscloud-gcp > /dev/null 2>&1 || \
 	  (echo "ERROR: svc/jaiscloud-gcp not found — kubectl apply -f deploy/k8s/jaiscloud-gcp.yaml"; exit 1)

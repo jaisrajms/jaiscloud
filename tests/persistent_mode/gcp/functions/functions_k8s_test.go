@@ -24,7 +24,7 @@
 // Optional env:
 //
 //	JAISCLOUD_HOST — default http://localhost:8080
-//	K8S_NAMESPACE  — default jaiscloud
+//	K8S_NAMESPACE  — default jaiscloud-gcp
 package functions_test
 
 import (
@@ -46,7 +46,7 @@ func TestFunctionSourceCodeMountK8s(t *testing.T) {
 	}
 	ns := os.Getenv("K8S_NAMESPACE")
 	if ns == "" {
-		ns = "jaiscloud"
+		ns = "jaiscloud-gcp"
 	}
 
 	reset(t)

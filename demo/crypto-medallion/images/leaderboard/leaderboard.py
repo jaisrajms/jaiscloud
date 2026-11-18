@@ -16,7 +16,7 @@ import urllib.parse
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-EMULATOR = os.environ.get("EMULATOR", "http://jaiscloud-gcp.jaiscloud.svc.cluster.local:8080")
+EMULATOR = os.environ.get("EMULATOR", "http://jaiscloud-gcp.jaiscloud-gcp.svc.cluster.local:8080")
 PROJECT = os.environ.get("PROJECT", "crypto-medallion")
 COLLECTION = os.environ.get("FIRESTORE_COLLECTION", "leaderboard")
 PORT = int(os.environ.get("PORT", "8080"))

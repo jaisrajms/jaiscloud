@@ -1,0 +1,21 @@
+---
+# AWS substrate namespace. One namespace per concern, so deleting a substrate
+# namespace never destroys the shared store:
+#
+#   jaiscloud       AWS substrate  (Deployment jaiscloud, blobs PVC, Service :4566)
+#   jaiscloud-gcp   GCP substrate  (Deployment jaiscloud-gcp, its own blobs PVC); see namespace-gcp.yaml
+#   jaiscloud-data  PostgreSQL     (postgres-pvc + Services :5432 / :30543); see namespace-data.yaml
+#
+# Applying this file creates only the AWS substrate namespace. A GCP-only install
+# applies namespace-gcp.yaml instead (plus namespace-data.yaml for the store).
+#
+# Labels are load-bearing: `kubectl get ns -l jaiscloud.io/role` is the
+# documented way to inspect the topology, and tooling selects on them.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: jaiscloud
+  labels:
+    app.kubernetes.io/part-of: jaiscloud
+    jaiscloud.io/role: substrate
+    jaiscloud.io/substrate: aws

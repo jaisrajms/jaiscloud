@@ -1,37 +1,69 @@
 ---
-# PersistentVolumeClaim — postgres data survives pod restarts
+# PersistentVolumeClaim — postgres data survives pod restarts, and survives
+# deletion of either substrate namespace (this manifest alone owns the PVC).
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
   name: postgres-pvc
-  namespace: jaiscloud
+  namespace: jaiscloud-data
+  # jaiscloud.io/managed-by marks every object this manifest owns as JaisCloud's,
+  # so the migration tooling can tell this store from a foreign workload that
+  # merely shares the name `postgres` (deploy.sh --migrate-store refuses an
+  # unmarked object unless LEGACY_CONFIRM=1).
+  labels:
+    app: postgres
+    jaiscloud.io/managed-by: jaiscloud
 spec:
   accessModes: [ReadWriteOnce]
   resources:
     requests:
       storage: 1Gi
 ---
-# Secret — postgres credentials
+# Secret — postgres server environment (consumed with envFrom by the Deployment,
+# so it must live in the same namespace as the pod).
+#
+# `POSTGRES_DB=jaiscloud` makes the entrypoint create the AWS database when it
+# initialises a fresh volume. The GCP database `jaiscloud_gcp` is NOT created
+# here: `deploy.sh`'s ensure_database (and the Makefile's postgres-gcp-db) creates
+# it before the GCP pod starts, on a fresh or an existing volume alike.
+#
+# `dsn` is a convenience value only (nothing here consumes it): each substrate
+# namespace owns its own DSN secret, because `env.valueFrom.secretKeyRef` cannot
+# cross namespaces. The AWS one is `jaiscloud/jaiscloud-dsn`.
 apiVersion: v1
 kind: Secret
 metadata:
   name: postgres-secret
-  namespace: jaiscloud
+  namespace: jaiscloud-data
+  labels:
+    app: postgres
+    jaiscloud.io/managed-by: jaiscloud
 type: Opaque
 stringData:
   POSTGRES_USER: jaiscloud
   POSTGRES_PASSWORD: jaiscloud
   POSTGRES_DB: jaiscloud
-  dsn: "postgresql://jaiscloud:jaiscloud@postgres.jaiscloud.svc.cluster.local:5432/jaiscloud"
+  dsn: "postgresql://jaiscloud:jaiscloud@postgres.jaiscloud-data.svc.cluster.local:5432/jaiscloud"
 ---
 # Deployment
 apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: postgres
-  namespace: jaiscloud
+  namespace: jaiscloud-data
+  # The store marker the legacy detection reads (preflight legacy.marked, and
+  # deploy.sh --migrate-store / --delete-legacy). app=postgres alone is not
+  # proof: any operator-supplied Postgres carries it.
+  labels:
+    app: postgres
+    jaiscloud.io/managed-by: jaiscloud
 spec:
   replicas: 1
+  # Single writer to a ReadWriteOnce data dir: never run two Postgres servers on
+  # one volume during a rollout (the second fails on the postmaster lock and the
+  # rollout never completes).
+  strategy:
+    type: Recreate
   selector:
     matchLabels:
       app: postgres
@@ -69,12 +101,16 @@ spec:
           persistentVolumeClaim:
             claimName: postgres-pvc
 ---
-# ClusterIP Service — reachable inside the cluster
+# ClusterIP Service — reachable inside the cluster at
+# postgres.jaiscloud-data.svc.cluster.local:5432
 apiVersion: v1
 kind: Service
 metadata:
   name: postgres
-  namespace: jaiscloud
+  namespace: jaiscloud-data
+  labels:
+    app: postgres
+    jaiscloud.io/managed-by: jaiscloud
 spec:
   selector:
     app: postgres
@@ -87,7 +123,10 @@ apiVersion: v1
 kind: Service
 metadata:
   name: postgres-external
-  namespace: jaiscloud
+  namespace: jaiscloud-data
+  labels:
+    app: postgres
+    jaiscloud.io/managed-by: jaiscloud
 spec:
   type: NodePort
   selector:
