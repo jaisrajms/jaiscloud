@@ -32,11 +32,13 @@
 #           store.databasesProbe = exec|unavailable and store.probeReason saying
 #           why. The bundled workload is resolved (STORE_WORKLOAD, then
 #           deployment/postgres, then statefulset/postgres), so a StatefulSet
-#           store is probed too. The role is read from the substrate DSN Secret
-#           (STORE_PG_USER overrides; STORE_PG_DB picks the maintenance database)
-#           and a local-socket refusal retries with the full DSN, so a
-#           host-owned role/password is probed too. A null never produces a
-#           "create the database" recommendation.
+#           store is probed too. The DSN comes from the running Deployment's
+#           effective JAISCLOUD_DSN (any Secret name, literal, valueFrom or
+#           envFrom), then the shipped Secret; STORE_PG_USER / STORE_PG_DB
+#           override the role and maintenance database, and a local-socket
+#           refusal retries with the full DSN, so a host-owned role/password is
+#           probed too. A null never produces a "create the database"
+#           recommendation.
 #
 #   rbac    effective permissions come from `kubectl auth can-i --as=<the
 #           Deployment's ServiceAccount>` (yes/no/unknown), and the isolation
@@ -990,6 +992,40 @@ expect_status "store-probe-dsn-retry" 0
 expect_json "store-probe-dsn-retry" '.store.databases.jaiscloud' true
 expect_json "store-probe-dsn-retry" '.store.probeReason' "ok"
 expect_exec "store-probe-dsn-retry" 'psql postgres://storeowner:s3cret@'
+
+# ── 20. the DSN is read from the Deployment, not a fixed Secret name ───────
+head_ "20. JAISCLOUD_DSN secretKeyRef to a host-named Secret drives the role"
+F=$(new_fixture "store-probe-env-secret")
+{
+  base_fixture | grep -v '^deployment|jaiscloud|jaiscloud|'
+  echo "deployment|jaiscloud|jaiscloud|image=jaisraj/jaiscloud-aws:1.0.0;imagePullPolicy=IfNotPresent;replicas=1;available=1;env.JAISCLOUD_DSN.from=secret:host-store-dsn:dsn"
+  echo "secret|jaiscloud|host-store-dsn|data.dsn=$dsn_b64"
+} > "$F/resources.txt"
+run_preflight "$F" --json --strict --substrate aws
+expect_status "store-probe-env-secret" 0
+expect_json "store-probe-env-secret" '.store.databases.jaiscloud' true
+expect_exec "store-probe-env-secret" 'psql -U storeowner -d postgres'
+
+head_ "20b. a literal JAISCLOUD_DSN drives the role"
+F=$(new_fixture "store-probe-env-literal")
+{
+  base_fixture | grep -v '^deployment|jaiscloud|jaiscloud|'
+  echo "deployment|jaiscloud|jaiscloud|image=jaisraj/jaiscloud-aws:1.0.0;imagePullPolicy=IfNotPresent;replicas=1;available=1;env.JAISCLOUD_DSN=postgres://lituser:pw@postgres.jaiscloud-data.svc.cluster.local:5432/jaiscloud"
+} > "$F/resources.txt"
+run_preflight "$F" --json --strict --substrate aws
+expect_json "store-probe-env-literal" '.store.databases.jaiscloud' true
+expect_exec "store-probe-env-literal" 'psql -U lituser -d postgres'
+
+head_ "20c. JAISCLOUD_DSN through envFrom drives the role"
+F=$(new_fixture "store-probe-env-envfrom")
+{
+  base_fixture | grep -v '^deployment|jaiscloud|jaiscloud|'
+  echo "deployment|jaiscloud|jaiscloud|image=jaisraj/jaiscloud-aws:1.0.0;imagePullPolicy=IfNotPresent;replicas=1;available=1;envFrom=configmap:host-dsn-cm"
+  echo "configmap|jaiscloud|host-dsn-cm|data.JAISCLOUD_DSN=postgres://cmuser:pw@postgres.jaiscloud-data.svc.cluster.local:5432/jaiscloud"
+} > "$F/resources.txt"
+run_preflight "$F" --json --strict --substrate aws
+expect_json "store-probe-env-envfrom" '.store.databases.jaiscloud' true
+expect_exec "store-probe-env-envfrom" 'psql -U cmuser -d postgres'
 
 # ── summary ─────────────────────────────────────────────────────────────────
 head_ "summary"

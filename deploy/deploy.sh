@@ -373,7 +373,8 @@ Environment:
                                   preflight probes (default: deployment/postgres,
                                   then statefulset/postgres)
   STORE_PG_USER                   With --check: the role the database probe
-                                  connects as (default: the user in the substrate
+                                  connects as (default: the user in the
+                                  Deployment's JAISCLOUD_DSN, else the substrate
                                   DSN Secret, else jaiscloud)
   STORE_PG_DB                     With --check: the maintenance database the
                                   probe connects to (default postgres)

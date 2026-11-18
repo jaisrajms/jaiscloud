@@ -87,12 +87,14 @@
 #   creates a pod (that would mutate the cluster), so an external server is
 #   reported as unprobeable (DSL9); verify it with your own psql.
 #   The probe role is not hardcoded: STORE_PG_USER when set, otherwise the user
-#   in the database's own substrate DSN Secret (jaiscloud-dsn / jaiscloud-gcp-dsn,
-#   key dsn), then the other substrate's, then the shipped `jaiscloud`. It
-#   connects over the pod's local socket (no password in argv) with
-#   STORE_PG_DB (default postgres); a non-timeout failure is retried once with
-#   the full DSN the emulator uses, for a host store that requires a password
-#   even locally.
+#   in the DSN the emulator runs with — the running Deployment's effective
+#   JAISCLOUD_DSN (literal, valueFrom or envFrom, so a host Secret under any name
+#   is followed) — then that database's other substrate DSN, then the shipped
+#   `jaiscloud`. The DSN itself is resolved the same way (Deployment env first,
+#   then the shipped Secret jaiscloud-dsn / jaiscloud-gcp-dsn). It connects over
+#   the pod's local socket (no password in argv) with STORE_PG_DB (default
+#   postgres); a non-timeout failure is retried once with the full DSN, for a
+#   host store that requires a password even locally.
 #   Recommendations only treat `false` as a missing database.
 #
 # Images / env:
@@ -594,13 +596,25 @@ dsn_user() {
   printf '%s' "$user"
 }
 
-# store_probe_dsn <aws|gcp> — the DSN the substrate uses, from its own Secret
-# (jaiscloud-dsn in NS_AWS / jaiscloud-gcp-dsn in NS_GCP, key dsn).
+# store_probe_dsn <aws|gcp> — the DSN the emulator actually uses, resolved the
+# way the image/env probes resolve their variables:
+#   1. the running Deployment's effective JAISCLOUD_DSN — a literal value, a
+#      valueFrom.configMapKeyRef/secretKeyRef (the shipped manifest uses
+#      secretKeyRef jaiscloud-dsn, but a host may use any Secret name), or an
+#      envFrom source;
+#   2. the shipped Secret (jaiscloud-dsn in NS_AWS / jaiscloud-gcp-dsn in
+#      NS_GCP, key dsn) when the Deployment is absent or does not name the
+#      variable — a parked or hand-written layout.
 store_probe_dsn() {
+  local ns dep secret dsn
   case "$1" in
-    aws) secret_key "$NS_AWS" jaiscloud-dsn dsn ;;
-    gcp) secret_key "$NS_GCP" jaiscloud-gcp-dsn dsn ;;
+    aws) ns=$NS_AWS; dep=jaiscloud;    secret=jaiscloud-dsn ;;
+    gcp) ns=$NS_GCP; dep=jaiscloud-gcp; secret=jaiscloud-gcp-dsn ;;
+    *) return 0 ;;
   esac
+  dsn=$(deployment_env_effective "$ns" "$dep" JAISCLOUD_DSN)
+  [[ -n "$dsn" ]] && { printf '%s' "$dsn"; return; }
+  secret_key "$ns" "$secret" dsn
 }
 
 # store_probe_owner <database> — the substrate whose Secret owns that database
@@ -615,9 +629,10 @@ store_probe_owner() {
 
 # store_pg_user <database> — the role the probe connects as:
 #   1. STORE_PG_USER when set (an explicit escape hatch);
-#   2. the user component of that database's substrate DSN Secret, then the
-#      other substrate's (a bundled store is one server, so both are the same
-#      role; a per-substrate override always wins for its own database);
+#   2. the user component of the DSN the emulator itself runs with — the running
+#      Deployment's effective JAISCLOUD_DSN (literal/valueFrom/envFrom), then the
+#      shipped Secret name — falling back to the other substrate's DSN for the
+#      role only (a bundled store is one server);
 #   3. the shipped role, jaiscloud.
 # The role is used over the pod's local socket, so the password never enters the
 # exec argv; db_state retries with the full DSN only when that socket refuses the
